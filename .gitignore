@@ -1,0 +1,19 @@
+# Python Environment & Build
+.venv/
+__pycache__/
+.rye/
+build/
+dist/
+*.py[cod]
+
+# Secrets
+credentials.json
+.env
+
+# Local Database & Locks
+*.duckdb*
+*.lock
+
+# Data (Ignore raw files, keep the directory)
+data/raw/*
+!data/raw/.gitkeep
