@@ -36,9 +36,15 @@ def fetch_rapid_rail_live():
 
     df = pd.DataFrame(all_vehicle_data)
     if not df.empty:
-        con = duckdb.connect('agustiar_analytics.duckdb')
-        con.execute("CREATE OR REPLACE TABLE live_buses AS SELECT * FROM df")
-        con.close()
+        try:
+            con = duckdb.connect('agustiar_analytics.duckdb')
+            # 'CREATE OR REPLACE' is good, but let's ensure it's clean
+            con.execute("DROP TABLE IF EXISTS live_buses")
+            con.execute("CREATE TABLE live_buses AS SELECT * FROM df")
+            con.close()
+            print(f"Successfully synced {len(df)} vehicles.")
+        except Exception as db_e:
+            print(f"Database Write Error: {db_e}")
 
 if __name__ == "__main__":
     fetch_rapid_rail_live()

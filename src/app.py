@@ -1,7 +1,7 @@
 import streamlit as st
 import duckdb
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
 
 st.set_page_config(page_title="Malaysia Real-Time Transit Tracker", page_icon="🚇", layout="wide")
@@ -13,6 +13,11 @@ REGIONS = [
     'Rapid Bus Kuantan',
     'Rapid Bus Penang'
 ]
+
+# Create a GMT+8 timestamp
+# This adds 8 hours to the server's UTC time
+now_kl = datetime.utcnow() + timedelta(hours=8)
+current_sync_time = now_kl.strftime('%H:%M:%S')
 
 # Initialize session state
 if 'selected_region' not in st.session_state:
@@ -38,9 +43,9 @@ with col_button:
 
 with col_status:
     if st.session_state.last_refresh:
-        st.info(f"✅ Last refreshed at: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
+        st.info(f"Last refreshed at: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
     else:
-        st.info("👆 Click 'Refresh Data' to fetch the latest bus positions")
+        st.info("Click 'Refresh Data' to fetch the latest bus positions")
 
 try:
     # Check if table exists
@@ -58,7 +63,7 @@ try:
                 utc_time = datetime.fromtimestamp(int(latest_ts), tz=timezone.utc)
                 malaysia_time = utc_time + timedelta(hours=8)
                 actual_sync_time = datetime.fromtimestamp(int(latest_ts)).strftime('%H:%M:%S')
-                st.success(f"✅ Data Last Updated at: {actual_sync_time} | Auto-refreshing every 10s")
+                st.success(f"Data Last Updated at: {actual_sync_time}")
             
             # Add formatted timestamp column to dataframe for display (Malaysia time)
             df_live['timestamp_formatted'] = pd.to_datetime(df_live['timestamp'], unit='s', utc=True).dt.tz_convert('Asia/Kuala_Lumpur').dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -94,7 +99,7 @@ try:
                     st.session_state.selected_region = st.session_state.region_selector
                 
                 selected_region = st.selectbox(
-                    "🗺️ Select Region to View", 
+                    "Select Region to View", 
                     options=available_regions,
                     index=current_index,
                     key='region_selector',
@@ -106,7 +111,7 @@ try:
                 if not df_filtered.empty:
                     st.map(df_filtered.rename(columns={'latitude': 'lat', 'longitude': 'lon'}))
                     
-                    with st.expander("🔍 View Raw GTFS-Realtime Data"):
+                    with st.expander("View Raw GTFS-Realtime Data"):
                         # Sort by timestamp (newest first) and reorder columns
                         display_df = df_filtered.sort_values('timestamp', ascending=False)
                         display_df = display_df[['region', 'latitude', 'longitude', 'timestamp_formatted', 'timestamp']]
