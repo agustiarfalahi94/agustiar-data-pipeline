@@ -7,9 +7,10 @@ import duckdb
 def fetch_rapid_rail_live():
     # List of categories you want to track
     regions = {
-        'KL MRT Feeder': 'rapid-bus-mrtfeeder',
-        'Alor Setar': 'mybas-alorsetar',
-        'Kota Bharu': 'mybas-kotabharu'
+        'Rapid Bus KL': 'rapid-bus-kl',
+        'Rapid Bus MRT Feeder': 'rapid-bus-mrtfeeder',
+        'Rapid Bus Kuantan': 'rapid-bus-kuantan',
+        'Rapid Bus Penang' : 'rapid-bus-penang'
     }
     
     all_vehicle_data = []
@@ -35,7 +36,7 @@ def fetch_rapid_rail_live():
 
     df = pd.DataFrame(all_vehicle_data)
     if not df.empty:
-        con = duckdb.connect('alenna_analytics.duckdb')
+        con = duckdb.connect('agustiar_analytics.duckdb')
         con.execute("CREATE OR REPLACE TABLE live_buses AS SELECT * FROM df")
         con.close()
 
