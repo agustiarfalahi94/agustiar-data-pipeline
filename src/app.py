@@ -33,7 +33,10 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
 
 # Renamed DB to match project identity
-con = duckdb.connect('agustiar_analytics.duckdb') 
+con = duckdb.connect('agustiar_analytics.duckdb')
+
+# FORCE DuckDB to use Malaysia Time regardless of server location
+con.execute("SET TimeZone='Asia/Kuala_Lumpur'")
 
 st.title("🚇 Malaysia Real-Time Transit Tracker")
 st.markdown("Monitoring live bus positions across Kuala Lumpur and Penang.")
