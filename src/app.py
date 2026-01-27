@@ -50,7 +50,7 @@ with col_button:
 
 with col_status:
     if st.session_state.last_refresh:
-        st.info(f"Last refreshed at: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
+        st.info(f"Last refreshed at: {current_date} {current_sync_time}")
     else:
         st.info("Click 'Refresh Data' to fetch the latest bus positions")
 
@@ -69,7 +69,7 @@ try:
                 from datetime import timezone, timedelta
                 utc_time = datetime.fromtimestamp(int(latest_ts), tz=timezone.utc)
                 malaysia_time = utc_time + timedelta(hours=8)
-                actual_sync_time = datetime.fromtimestamp(int(latest_ts)).strftime('%H:%M:%S')
+                actual_sync_time = con.execute("SELECT MAX(strftime(to_timestamp(timestamp::BIGINT), '%d-%m-%Y %H:%M:%S')) AS time_format FROM live_buses").df()
                 st.success(f"Data Last Updated at: {actual_sync_time}")
             
             # Add formatted timestamp column to dataframe for display (Malaysia time)
