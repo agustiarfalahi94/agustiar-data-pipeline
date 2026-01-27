@@ -6,7 +6,7 @@ A real-time data engineering project that ingests, processes, and visualizes GTF
 - **Engine**: Python 3.x (Managed by Rye)
 - **Ingestion**: Protocol Buffers (GTFS-R) via `data.gov.my`
 - **Storage**: DuckDB (In-process OLAP database)
-- **Dashboard**: Streamlit (Live 10s auto-refresh)
+- **Dashboard**: Streamlit (With refresh button)
 
 ## 🏗️ Architecture
 1. **Extract**: Fetch binary `.pb` files from Prasarana/API.
