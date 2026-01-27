@@ -37,15 +37,23 @@ def fetch_rapid_rail_live():
 
     df = pd.DataFrame(all_vehicle_data)
     if not df.empty:
-        # 1. Convert 'timestamp' column to numeric just in case
+        # 1. Convert timestamp, latitude and longitude column to numeric just in case
         df['timestamp'] = pd.to_numeric(df['timestamp'])
+        df['latitude'] = pd.to_numeric(df['latitude'])
+        df['longitude'] = pd.to_numeric(df['longitude'])
         
         # 2. Get CURRENT Unix timestamp
         current_unix = int(time.time())
         
         # 3. FILTER: Only keep data that is NOT in the future
         # We add a 60-second buffer just in case of slight clock drifts
-        df = df[df['timestamp'] <= (current_unix + 60)]
+        df = df[
+            (df['timestamp'] <= (current_unix + 60)) & 
+            (df['latitude'] != 0) & 
+            (df['longitude'] != 0) &
+            (df['latitude'].notna()) &
+            (df['longitude'].notna())
+        ]
 
         try:
             con = duckdb.connect('agustiar_analytics.duckdb')
