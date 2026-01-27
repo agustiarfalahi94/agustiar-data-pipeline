@@ -1,45 +1,46 @@
 import streamlit as st
 import duckdb
 import pandas as pd
+import pydeck as pdk
+import numpy as np
 from datetime import datetime, timedelta, timezone
 from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
+from config import (
+    REGIONS, DATABASE_NAME, DATABASE_TABLE, TIMEZONE, 
+    UTC_OFFSET_HOURS, DEFAULT_ZOOM, MAP_STYLE,
+    ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
+)
 
 st.set_page_config(page_title="Malaysia Real-Time Transit Tracker", page_icon="🚇", layout="wide")
 
-# HARDCODED REGIONS - matching the ingestion script exactly
-REGIONS = [
-    'Rapid Bus KL',
-    'Rapid Bus MRT Feeder',
-    'Rapid Bus Kuantan',
-    'Rapid Bus Penang'
-]
-
-# Create a GMT+8 timestamp
-# This adds 8 hours to the server's UTC time
-now_utc = datetime.now(timezone.utc)
-now_kl = now_utc + timedelta(hours=8)
-
-# Format to show both Date and Time
-current_date = now_kl.strftime('%d %b %Y') # e.g., 27 Jan 2026
-current_sync_time = now_kl.strftime('%H:%M:%S')
-
-# Display in Streamlit (Example)
-st.write(f"📅 {current_date} | 🕒 {current_sync_time} (GMT+8)")
+# Sort regions alphabetically with Rapid Bus KL first
+primary = ['Rapid Bus KL']
+others = sorted([r for r in REGIONS if r != 'Rapid Bus KL'])
+SORTED_REGIONS = primary + others
 
 # Initialize session state
 if 'selected_region' not in st.session_state:
-    st.session_state.selected_region = REGIONS[0]
+    st.session_state.selected_region = SORTED_REGIONS[0]
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
 
-# Renamed DB to match project identity
-con = duckdb.connect('agustiar_analytics.duckdb')
+# Create a GMT+8 timestamp
+now_utc = datetime.now(timezone.utc)
+now_kl = now_utc + timedelta(hours=UTC_OFFSET_HOURS)
 
-# FORCE DuckDB to use Malaysia Time regardless of server location
-con.execute("SET TimeZone='Asia/Kuala_Lumpur'")
+# Format to show both Date and Time
+current_date = now_kl.strftime('%d %b %Y')
+current_sync_time = now_kl.strftime('%H:%M:%S')
+
+# Display in Streamlit
+st.write(f"📅 {current_date} | 🕒 {current_sync_time} (GMT+8)")
+
+# Connect to database
+con = duckdb.connect(DATABASE_NAME)
+con.execute(f"SET TimeZone='{TIMEZONE}'")
 
 st.title("🚇 Malaysia Real-Time Transit Tracker")
-st.markdown("Monitoring live bus positions across Kuala Lumpur and Penang.")
+st.markdown("Monitoring live bus positions across Malaysia.")
 
 # MANUAL REFRESH BUTTON
 col_button, col_status = st.columns([1, 4], vertical_alignment="center")
@@ -57,26 +58,60 @@ with col_status:
     else:
         st.info("Click 'Refresh Data' to fetch the latest bus positions")
 
+def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
+    """
+    Create arrow path coordinates based on position and bearing
+    bearing is in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+    """
+    # Convert bearing to radians (mathematical angle: 0 = East, counterclockwise)
+    angle_rad = np.radians(90 - bearing)
+    
+    # Arrow dimensions
+    arrow_length = size * 2
+    arrow_width = size * 0.8
+    
+    # Tip of arrow
+    tip_lat = lat + arrow_length * np.sin(angle_rad)
+    tip_lon = lon + arrow_length * np.cos(angle_rad)
+    
+    # Left wing
+    left_angle = angle_rad - np.radians(150)
+    left_lat = lat + arrow_width * np.sin(left_angle)
+    left_lon = lon + arrow_width * np.cos(left_angle)
+    
+    # Right wing
+    right_angle = angle_rad + np.radians(150)
+    right_lat = lat + arrow_width * np.sin(right_angle)
+    right_lon = lon + arrow_width * np.cos(right_angle)
+    
+    # Return path coordinates
+    return [
+        [lon, lat],
+        [tip_lon, tip_lat],
+        [left_lon, left_lat],
+        [tip_lon, tip_lat],
+        [right_lon, right_lat],
+        [tip_lon, tip_lat]
+    ]
+
 try:
     # Check if table exists
-    table_check = con.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'live_buses'").fetchone()[0]
+    table_check = con.execute(f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'").fetchone()[0]
     
     if table_check > 0:
-        df_live = con.execute("SELECT * FROM live_buses").df()
+        df_live = con.execute(f"SELECT * FROM {DATABASE_TABLE}").df()
         
         if not df_live.empty:
             # Get the actual sync time from the data
-            latest_ts = con.execute("SELECT MAX(timestamp) FROM live_buses").fetchone()[0]
+            latest_ts = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
             if latest_ts:
-                # Convert timestamp to Malaysia time (UTC+8)
-                from datetime import timezone, timedelta
                 utc_time = datetime.fromtimestamp(int(latest_ts), tz=timezone.utc)
-                malaysia_time = utc_time + timedelta(hours=8)
-                actual_sync_time = con.execute("SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%d-%m-%Y %H:%M:%S') FROM live_buses").fetchone()[0]
+                malaysia_time = utc_time + timedelta(hours=UTC_OFFSET_HOURS)
+                actual_sync_time = con.execute(f"SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%-d %b %Y %H:%M:%S') FROM {DATABASE_TABLE}").fetchone()[0]
                 st.success(f"Actual data updated at: {actual_sync_time}")
             
-            # Add formatted timestamp column to dataframe for display (Malaysia time)
-            df_live['timestamp_formatted'] = pd.to_datetime(df_live['timestamp'], unit='s', utc=True).dt.tz_convert('Asia/Kuala_Lumpur').dt.strftime('%Y-%m-%d %H:%M:%S')
+            # Add formatted timestamp column
+            df_live['timestamp_formatted'] = pd.to_datetime(df_live['timestamp'], unit='s', utc=True).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
 
             # METRICS
             col1, col2, col3 = st.columns(3)
@@ -90,8 +125,8 @@ try:
                     top_region = df_live['region'].value_counts().idxmax()
                     st.metric("Busiest Region", top_region)
 
-            # REGION FILTER - Using hardcoded list
-            available_regions = [r for r in REGIONS if r in df_live['region'].unique()]
+            # REGION FILTER
+            available_regions = [r for r in SORTED_REGIONS if r in df_live['region'].unique()]
             
             if available_regions:
                 # Make sure selected region is still available
@@ -117,25 +152,89 @@ try:
                 )
                          
                 df_filtered = df_live[df_live['region'] == st.session_state.selected_region]
-                
+                df_filtered = df_filtered.fillna({'bearing': 0, 'speed': 0})
+
+                # --- MAP SECTION ---
                 if not df_filtered.empty:
-                    st.map(df_filtered.rename(columns={'latitude': 'lat', 'longitude': 'lon'}))
+                    # CLEAN DATA
+                    df_map = df_filtered.copy()
+                    df_map['latitude'] = pd.to_numeric(df_map['latitude'], errors='coerce')
+                    df_map['longitude'] = pd.to_numeric(df_map['longitude'], errors='coerce')
+                    df_map['bearing'] = pd.to_numeric(df_map['bearing'], errors='coerce').fillna(0)
+                    df_map['speed'] = pd.to_numeric(df_map['speed'], errors='coerce').fillna(0)
                     
+                    df_map = df_map.dropna(subset=['latitude', 'longitude'])
+                    df_map = df_map[(df_map['latitude'] != 0) & (df_map['longitude'] != 0)]
+
+                    if not df_map.empty:
+                        # Create arrow paths
+                        df_map['path'] = df_map.apply(
+                            lambda row: create_arrow_paths(
+                                row['latitude'], 
+                                row['longitude'], 
+                                row['bearing']
+                            ), 
+                            axis=1
+                        )
+                        
+                        # Create layers
+                        path_layer = pdk.Layer(
+                            "PathLayer",
+                            data=df_map,
+                            get_path='path',
+                            get_color=ARROW_COLOR_RGB + [ARROW_OPACITY],
+                            width_min_pixels=2,
+                            width_max_pixels=4,
+                            pickable=True,
+                        )
+                        
+                        scatter_layer = pdk.Layer(
+                            "ScatterplotLayer",
+                            data=df_map,
+                            get_position=['longitude', 'latitude'],
+                            get_color=CENTER_DOT_COLOR_RGB + [ARROW_OPACITY],
+                            get_radius=80,
+                            radius_min_pixels=3,
+                            radius_max_pixels=8,
+                            pickable=True
+                        )
+
+                        # SET VIEW
+                        view_state = pdk.ViewState(
+                            latitude=df_map['latitude'].mean(),
+                            longitude=df_map['longitude'].mean(),
+                            zoom=DEFAULT_ZOOM,
+                            pitch=0
+                        )
+
+                        # Render map
+                        st.pydeck_chart(pdk.Deck(
+                            map_style=MAP_STYLE,
+                            initial_view_state=view_state,
+                            layers=[path_layer, scatter_layer],
+                            tooltip={
+                                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed} m/s<br/><b>Bearing:</b> {bearing}°", 
+                                "style": {"backgroundColor": "steelblue", "color": "white"}
+                            }
+                        ))
+
+                        st.caption(f"Showing {len(df_map)} active vehicles in {st.session_state.selected_region}")
+                    else:
+                        st.warning(f"No valid coordinates for buses in {st.session_state.selected_region}")
+
                     with st.expander("View Raw GTFS-Realtime Data"):
-                        # Sort by timestamp (newest first) and reorder columns
                         display_df = df_filtered.sort_values('timestamp', ascending=False)
-                        display_df = display_df[['region', 'latitude', 'longitude', 'timestamp_formatted']]
-                        display_df = display_df.rename(columns={'timestamp_formatted': 'timestamp_readable'})
-                        # Reset index and hide it
+                        display_df = display_df[['region', 'latitude', 'longitude', 'bearing', 'speed', 'vehicle_id', 'timestamp_formatted']]
+                        display_df = display_df.rename(columns={'timestamp_formatted': 'timestamp_readable', 'bearing': 'Heading (Degrees)'})
                         display_df = display_df.reset_index(drop=True)
                         st.dataframe(display_df, use_container_width=True, hide_index=True)
+                
                 else:
                     st.warning(f"No active buses in {st.session_state.selected_region} at this time.")
             else:
                 st.info("No active buses detected in any region.")
                 
     else:
-        # This shows if the table hasn't been created yet by the ingestion script
         st.info("🛰️ No data found. Click 'Refresh Data' button to fetch initial data.")
         st.caption("The database table will be created on first refresh.")
 
