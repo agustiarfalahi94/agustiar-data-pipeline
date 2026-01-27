@@ -7,5 +7,7 @@ print(con.execute("SELECT *, strftime(to_timestamp(timestamp::BIGINT), '%d-%m-%Y
 # Check the max timestamp
 print(con.execute("SELECT MAX(timestamp) FROM live_buses").fetchone())
 
+# Check the region ingested
+print(con.execute("SELECT DISTINCT region FROM live_buses").df())
 
 con.close()

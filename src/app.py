@@ -39,7 +39,7 @@ st.title("🚇 Malaysia Real-Time Transit Tracker")
 st.markdown("Monitoring live bus positions across Kuala Lumpur and Penang.")
 
 # MANUAL REFRESH BUTTON
-col_button, col_status = st.columns([1, 4])
+col_button, col_status = st.columns([1, 4], vertical_alignment="center")
 
 with col_button:
     if st.button("🔄 Refresh Data", type="primary", use_container_width=True):
@@ -69,7 +69,7 @@ try:
                 from datetime import timezone, timedelta
                 utc_time = datetime.fromtimestamp(int(latest_ts), tz=timezone.utc)
                 malaysia_time = utc_time + timedelta(hours=8)
-                actual_sync_time = con.execute("SELECT MAX(strftime(to_timestamp(timestamp::BIGINT), '%d-%m-%Y %H:%M:%S')) AS time_format FROM live_buses").df()
+                actual_sync_time = con.execute("SELECT MAX(strftime(to_timestamp(timestamp::BIGINT), '%d-%m-%Y %H:%M:%S')) FROM live_buses").fetchone()[0]
                 st.success(f"Data Last Updated at: {actual_sync_time}")
             
             # Add formatted timestamp column to dataframe for display (Malaysia time)
@@ -121,8 +121,8 @@ try:
                     with st.expander("View Raw GTFS-Realtime Data"):
                         # Sort by timestamp (newest first) and reorder columns
                         display_df = df_filtered.sort_values('timestamp', ascending=False)
-                        display_df = display_df[['region', 'latitude', 'longitude', 'timestamp_formatted', 'timestamp']]
-                        display_df = display_df.rename(columns={'timestamp_formatted': 'timestamp_readable', 'timestamp': 'timestamp_unix'})
+                        display_df = display_df[['region', 'latitude', 'longitude', 'timestamp_formatted']]
+                        display_df = display_df.rename(columns={'timestamp_formatted': 'timestamp_readable'})
                         # Reset index and hide it
                         display_df = display_df.reset_index(drop=True)
                         st.dataframe(display_df, use_container_width=True, hide_index=True)
