@@ -16,7 +16,8 @@ REGIONS = [
 
 # Create a GMT+8 timestamp
 # This adds 8 hours to the server's UTC time
-now_kl = datetime.utcnow() + timedelta(hours=8)
+now_utc = datetime.utcnow()
+now_kl = now_utc + timedelta(hours=8)
 current_sync_time = now_kl.strftime('%H:%M:%S')
 
 # Initialize session state
@@ -29,7 +30,7 @@ if 'last_refresh' not in st.session_state:
 con = duckdb.connect('agustiar_analytics.duckdb') 
 
 st.title("🚇 Malaysia Real-Time Transit Tracker")
-st.markdown("Monitoring live bus positions across Klang Valley, Alor Setar, and Kota Bharu.")
+st.markdown("Monitoring live bus positions across Kuala Lumpur and Penang.")
 
 # MANUAL REFRESH BUTTON
 col_button, col_status = st.columns([1, 4])
