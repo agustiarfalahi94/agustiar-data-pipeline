@@ -1,7 +1,7 @@
 import streamlit as st
 import duckdb
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
 
 st.set_page_config(page_title="Malaysia Real-Time Transit Tracker", page_icon="🚇", layout="wide")
@@ -16,9 +16,15 @@ REGIONS = [
 
 # Create a GMT+8 timestamp
 # This adds 8 hours to the server's UTC time
-now_utc = datetime.utcnow()
+now_utc = datetime.now(timezone.utc)
 now_kl = now_utc + timedelta(hours=8)
+
+# Format to show both Date and Time
+current_date = now_kl.strftime('%d %b %Y') # e.g., 27 Jan 2026
 current_sync_time = now_kl.strftime('%H:%M:%S')
+
+# Display in Streamlit (Example)
+st.write(f"📅 {current_date} | 🕒 {current_sync_time} (GMT+8)")
 
 # Initialize session state
 if 'selected_region' not in st.session_state:

@@ -3,6 +3,7 @@ import pandas as pd
 from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
 import duckdb
+import time
 
 def fetch_rapid_rail_live():
     # List of categories you want to track
@@ -36,13 +37,23 @@ def fetch_rapid_rail_live():
 
     df = pd.DataFrame(all_vehicle_data)
     if not df.empty:
+        # 1. Convert 'timestamp' column to numeric just in case
+        df['timestamp'] = pd.to_numeric(df['timestamp'])
+        
+        # 2. Get CURRENT Unix timestamp
+        current_unix = int(time.time())
+        
+        # 3. FILTER: Only keep data that is NOT in the future
+        # We add a 60-second buffer just in case of slight clock drifts
+        df = df[df['timestamp'] <= (current_unix + 60)]
+
         try:
             con = duckdb.connect('agustiar_analytics.duckdb')
             # 'CREATE OR REPLACE' is good, but let's ensure it's clean
             con.execute("DROP TABLE IF EXISTS live_buses")
             con.execute("CREATE TABLE live_buses AS SELECT * FROM df")
             con.close()
-            print(f"Successfully synced {len(df)} vehicles.")
+            print(f"Synced {len(df)} valid records (removed future noise).")
         except Exception as db_e:
             print(f"Database Write Error: {db_e}")
 
