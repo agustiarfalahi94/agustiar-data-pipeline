@@ -5,15 +5,32 @@ import pydeck as pdk
 import numpy as np
 from datetime import datetime, timedelta, timezone
 from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
-from config import (
-    REGIONS, DATABASE_NAME, DATABASE_TABLE, TIMEZONE, 
-    UTC_OFFSET_HOURS, DEFAULT_ZOOM, MAP_STYLE,
-    ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
-)
+
+# Try to import from config.py (for local development)
+# Fall back to Streamlit Secrets (for cloud deployment)
+try:
+    from config import (
+        REGIONS, DATABASE_NAME, DATABASE_TABLE, TIMEZONE, 
+        UTC_OFFSET_HOURS, DEFAULT_ZOOM, MAP_STYLE,
+        ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
+    )
+except ImportError:
+    # Running on Streamlit Cloud - read from secrets
+    REGIONS = st.secrets["regions"]["list"]
+    DATABASE_NAME = st.secrets["database"]["name"]
+    DATABASE_TABLE = st.secrets["database"]["table"]
+    TIMEZONE = st.secrets["timezone"]["name"]
+    UTC_OFFSET_HOURS = st.secrets["timezone"]["utc_offset_hours"]
+    DEFAULT_ZOOM = st.secrets["map"]["default_zoom"]
+    MAP_STYLE = st.secrets["map"]["style"]
+    ARROW_SIZE = st.secrets["arrow"]["size"]
+    ARROW_COLOR_RGB = list(st.secrets["arrow"]["color_rgb"])
+    CENTER_DOT_COLOR_RGB = list(st.secrets["arrow"]["center_dot_color_rgb"])
+    ARROW_OPACITY = st.secrets["arrow"]["opacity"]
 
 st.set_page_config(page_title="Malaysia Real-Time Transit Tracker", page_icon="🚇", layout="wide")
 
-# Sort regions alphabetically with Rapid Bus KL first
+# Sort regions
 primary = ['Rapid Bus KL']
 others = sorted([r for r in REGIONS if r != 'Rapid Bus KL'])
 SORTED_REGIONS = primary + others
@@ -24,25 +41,22 @@ if 'selected_region' not in st.session_state:
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
 
-# Create a GMT+8 timestamp
+# Create timestamp
 now_utc = datetime.now(timezone.utc)
 now_kl = now_utc + timedelta(hours=UTC_OFFSET_HOURS)
-
-# Format to show both Date and Time
 current_date = now_kl.strftime('%d %b %Y')
 current_sync_time = now_kl.strftime('%H:%M:%S')
 
-# Display in Streamlit
 st.write(f"📅 {current_date} | 🕒 {current_sync_time} (GMT+8)")
 
-# Connect to database
+# Database connection
 con = duckdb.connect(DATABASE_NAME)
 con.execute(f"SET TimeZone='{TIMEZONE}'")
 
 st.title("🚇 Malaysia Real-Time Transit Tracker")
 st.markdown("Monitoring live bus positions across Malaysia.")
 
-# MANUAL REFRESH BUTTON
+# Refresh button
 col_button, col_status = st.columns([1, 4], vertical_alignment="center")
 
 with col_button:
@@ -54,92 +68,65 @@ with col_button:
 
 with col_status:
     if st.session_state.last_refresh:
-        st.info(f"Last refresh attempt at: {current_date} {current_sync_time}")
+        st.info(f"Last refresh: {current_date} {current_sync_time}")
     else:
         st.info("Click 'Refresh Data' to fetch the latest bus positions")
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
-    """
-    Create arrow path coordinates based on position and bearing
-    bearing is in degrees (0 = North, 90 = East, 180 = South, 270 = West)
-    """
-    # Convert bearing to radians (mathematical angle: 0 = East, counterclockwise)
+    """Create arrow path coordinates based on position and bearing"""
     angle_rad = np.radians(90 - bearing)
-    
-    # Arrow dimensions
     arrow_length = size * 2
     arrow_width = size * 0.8
     
-    # Tip of arrow
     tip_lat = lat + arrow_length * np.sin(angle_rad)
     tip_lon = lon + arrow_length * np.cos(angle_rad)
     
-    # Left wing
     left_angle = angle_rad - np.radians(150)
     left_lat = lat + arrow_width * np.sin(left_angle)
     left_lon = lon + arrow_width * np.cos(left_angle)
     
-    # Right wing
     right_angle = angle_rad + np.radians(150)
     right_lat = lat + arrow_width * np.sin(right_angle)
     right_lon = lon + arrow_width * np.cos(right_angle)
     
-    # Return path coordinates
-    return [
-        [lon, lat],
-        [tip_lon, tip_lat],
-        [left_lon, left_lat],
-        [tip_lon, tip_lat],
-        [right_lon, right_lat],
-        [tip_lon, tip_lat]
-    ]
+    return [[lon, lat], [tip_lon, tip_lat], [left_lon, left_lat], 
+            [tip_lon, tip_lat], [right_lon, right_lat], [tip_lon, tip_lat]]
 
 try:
-    # Check if table exists
     table_check = con.execute(f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'").fetchone()[0]
     
     if table_check > 0:
         df_live = con.execute(f"SELECT * FROM {DATABASE_TABLE}").df()
         
         if not df_live.empty:
-            # Get the actual sync time from the data
             latest_ts = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
             if latest_ts:
-                utc_time = datetime.fromtimestamp(int(latest_ts), tz=timezone.utc)
-                malaysia_time = utc_time + timedelta(hours=UTC_OFFSET_HOURS)
                 actual_sync_time = con.execute(f"SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%-d %b %Y %H:%M:%S') FROM {DATABASE_TABLE}").fetchone()[0]
-                st.success(f"Actual data updated at: {actual_sync_time}")
+                st.success(f"Data updated at: {actual_sync_time}")
             
-            # Add formatted timestamp column
             df_live['timestamp_formatted'] = pd.to_datetime(df_live['timestamp'], unit='s', utc=True).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
 
-            # METRICS
+            # Metrics
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Active Buses", len(df_live))
             with col2:
-                regions_count = len(df_live['region'].unique())
-                st.metric("Regions Monitored", regions_count)
+                st.metric("Regions Monitored", len(df_live['region'].unique()))
             with col3:
-                if not df_live.empty:
-                    top_region = df_live['region'].value_counts().idxmax()
-                    st.metric("Busiest Region", top_region)
+                st.metric("Busiest Region", df_live['region'].value_counts().idxmax())
 
-            # REGION FILTER
+            # Region filter
             available_regions = [r for r in SORTED_REGIONS if r in df_live['region'].unique()]
             
             if available_regions:
-                # Make sure selected region is still available
                 if st.session_state.selected_region not in available_regions:
                     st.session_state.selected_region = available_regions[0]
                 
-                # Get current index
                 try:
                     current_index = available_regions.index(st.session_state.selected_region)
                 except ValueError:
                     current_index = 0
                 
-                # Selectbox with callback
                 def update_region():
                     st.session_state.selected_region = st.session_state.region_selector
                 
@@ -154,9 +141,7 @@ try:
                 df_filtered = df_live[df_live['region'] == st.session_state.selected_region]
                 df_filtered = df_filtered.fillna({'bearing': 0, 'speed': 0})
 
-                # --- MAP SECTION ---
                 if not df_filtered.empty:
-                    # CLEAN DATA
                     df_map = df_filtered.copy()
                     df_map['latitude'] = pd.to_numeric(df_map['latitude'], errors='coerce')
                     df_map['longitude'] = pd.to_numeric(df_map['longitude'], errors='coerce')
@@ -167,17 +152,11 @@ try:
                     df_map = df_map[(df_map['latitude'] != 0) & (df_map['longitude'] != 0)]
 
                     if not df_map.empty:
-                        # Create arrow paths
                         df_map['path'] = df_map.apply(
-                            lambda row: create_arrow_paths(
-                                row['latitude'], 
-                                row['longitude'], 
-                                row['bearing']
-                            ), 
+                            lambda row: create_arrow_paths(row['latitude'], row['longitude'], row['bearing']), 
                             axis=1
                         )
                         
-                        # Create layers
                         path_layer = pdk.Layer(
                             "PathLayer",
                             data=df_map,
@@ -199,7 +178,6 @@ try:
                             pickable=True
                         )
 
-                        # SET VIEW
                         view_state = pdk.ViewState(
                             latitude=df_map['latitude'].mean(),
                             longitude=df_map['longitude'].mean(),
@@ -207,7 +185,6 @@ try:
                             pitch=0
                         )
 
-                        # Render map
                         st.pydeck_chart(pdk.Deck(
                             map_style=MAP_STYLE,
                             initial_view_state=view_state,
@@ -228,7 +205,6 @@ try:
                         display_df = display_df.rename(columns={'timestamp_formatted': 'timestamp_readable', 'bearing': 'Heading (Degrees)'})
                         display_df = display_df.reset_index(drop=True)
                         st.dataframe(display_df, use_container_width=True, hide_index=True)
-                
                 else:
                     st.warning(f"No active buses in {st.session_state.selected_region} at this time.")
             else:

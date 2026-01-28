@@ -4,11 +4,37 @@ from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
 import duckdb
 import time
-from config import (
-    API_SOURCES, API_BASE_URL, REQUEST_TIMEOUT,
-    DATABASE_NAME, DATABASE_TABLE, 
-    DATA_MAX_AGE, DATA_FUTURE_TOLERANCE
-)
+
+# API Sources - this is public information, safe to hardcode
+API_SOURCES = {
+    'Rapid Bus KL': ['prasarana?category=rapid-bus-kl'],
+    'Rapid Bus MRT Feeder': ['prasarana?category=rapid-bus-mrtfeeder'],
+    'Rapid Bus Kuantan': ['prasarana?category=rapid-bus-kuantan'],
+    'Rapid Bus Penang': ['prasarana?category=rapid-bus-penang'],
+    'KTM Berhad': ['ktmb'],
+    'myBAS Kangar': ['mybas-kangar'],
+    'myBAS Alor Setar': ['mybas-alor-setar'],
+    'myBAS Kota Bharu': ['mybas-kota-bharu'],
+    'myBAS Kuala Terengganu': ['mybas-kuala-terengganu'],
+    'myBAS Ipoh': ['mybas-ipoh'],
+    'myBAS Seremban': ['mybas-seremban-a', 'mybas-seremban-b'],
+    'myBAS Melaka': ['mybas-melaka'],
+    'myBAS Johor': ['mybas-johor'],
+    'myBAS Kuching': ['mybas-kuching']
+}
+
+API_BASE_URL = 'https://api.data.gov.my/gtfs-realtime/vehicle-position/'
+REQUEST_TIMEOUT = 10
+
+# Try to import database config, fallback to defaults
+try:
+    from config import DATABASE_NAME, DATABASE_TABLE, DATA_MAX_AGE, DATA_FUTURE_TOLERANCE
+except ImportError:
+    # Use defaults if config.py not available
+    DATABASE_NAME = 'agustiar_analytics.duckdb'
+    DATABASE_TABLE = 'live_buses'
+    DATA_MAX_AGE = 3600
+    DATA_FUTURE_TOLERANCE = 300
 
 def fetch_rapid_rail_live():
     """
