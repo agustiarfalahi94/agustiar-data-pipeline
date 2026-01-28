@@ -68,7 +68,7 @@ with col_button:
 
 with col_status:
     if st.session_state.last_refresh:
-        st.info(f"Last refresh: {current_date} {current_sync_time}")
+        st.info(f"Last data refresh attempt: {current_date} {current_sync_time}")
     else:
         st.info("Click 'Refresh Data' to fetch the latest bus positions")
 
@@ -102,7 +102,7 @@ try:
             latest_ts = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
             if latest_ts:
                 actual_sync_time = con.execute(f"SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%-d %b %Y %H:%M:%S') FROM {DATABASE_TABLE}").fetchone()[0]
-                st.success(f"Data updated at: {actual_sync_time}")
+                st.success(f"Actual data updated at: {actual_sync_time}")
             
             df_live['timestamp_formatted'] = pd.to_datetime(df_live['timestamp'], unit='s', utc=True).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
 
