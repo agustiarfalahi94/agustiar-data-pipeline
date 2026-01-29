@@ -1,0 +1,133 @@
+import streamlit as st
+import pydeck as pdk
+import numpy as np
+from utils import db, data_processor
+from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
+
+try:
+    from config import DEFAULT_ZOOM, ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
+except ImportError:
+    DEFAULT_ZOOM = st.secrets["map"]["default_zoom"]
+    ARROW_SIZE = st.secrets["arrow"]["size"]
+    ARROW_COLOR_RGB = list(st.secrets["arrow"]["color_rgb"])
+    CENTER_DOT_COLOR_RGB = list(st.secrets["arrow"]["center_dot_color_rgb"])
+    ARROW_OPACITY = st.secrets["arrow"]["opacity"]
+
+def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
+    """Optimized arrow path generation"""
+    angle_rad = np.radians(90 - bearing)
+    arrow_length, arrow_width = size * 2, size * 0.8
+    
+    sin_angle, cos_angle = np.sin(angle_rad), np.cos(angle_rad)
+    tip_lat, tip_lon = lat + arrow_length * sin_angle, lon + arrow_length * cos_angle
+    
+    left_angle = angle_rad - np.radians(150)
+    left_lat, left_lon = lat + arrow_width * np.sin(left_angle), lon + arrow_width * np.cos(left_angle)
+    
+    right_angle = angle_rad + np.radians(150)
+    right_lat, right_lon = lat + arrow_width * np.sin(right_angle), lon + arrow_width * np.cos(right_angle)
+    
+    return [[lon, lat], [tip_lon, tip_lat], [left_lon, left_lat], 
+            [tip_lon, tip_lat], [right_lon, right_lat], [tip_lon, tip_lat]]
+
+def show():
+    # Manual refresh button (only show if not auto-refresh)
+    if not st.session_state.auto_refresh:
+        if st.button("🔄 Refresh Data", type="primary", use_container_width=False):
+            with st.spinner('🛰️ Fetching...'):
+                fetch_rapid_rail_live()
+                st.session_state.last_refresh = True
+            st.rerun()
+    
+    # Get data - single optimized query
+    df_live, metrics, actual_sync_time = db.get_live_data_optimized()
+    
+    if df_live is None or df_live.empty:
+        st.info("🛰️ No data. Click 'Refresh Data' to fetch.")
+        return
+    
+    # Show sync time
+    if actual_sync_time:
+        st.success(f"Data updated: {actual_sync_time}")
+    
+    # Metrics
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Active Buses", metrics['total'])
+    col2.metric("Regions Monitored", metrics['regions'])
+    col3.metric("Busiest Region", metrics['busiest'])
+    
+    # Region filter
+    available_regions = data_processor.get_sorted_regions(df_live)
+    
+    if not available_regions:
+        st.info("No active buses.")
+        return
+    
+    # Initialize selected region
+    if 'selected_region' not in st.session_state or st.session_state.selected_region not in available_regions:
+        st.session_state.selected_region = available_regions[0]
+    
+    selected_region = st.selectbox(
+        "Select Region",
+        options=available_regions,
+        index=available_regions.index(st.session_state.selected_region),
+        key='region_selector'
+    )
+    st.session_state.selected_region = selected_region
+    
+    # Filter and process data
+    df_map = data_processor.prepare_map_data(df_live, selected_region)
+    
+    if df_map.empty:
+        st.warning(f"No valid data for {selected_region}")
+        return
+    
+    # Create arrow paths
+    df_map['path'] = df_map.apply(
+        lambda row: create_arrow_paths(row['latitude'], row['longitude'], row['bearing']), 
+        axis=1
+    )
+    
+    # Map style based on theme
+    map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
+    
+    # Layers
+    path_layer = pdk.Layer(
+        "PathLayer",
+        data=df_map,
+        get_path='path',
+        get_color=ARROW_COLOR_RGB + [ARROW_OPACITY],
+        width_min_pixels=2,
+        width_max_pixels=4,
+        pickable=True
+    )
+    
+    scatter_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=df_map,
+        get_position=['longitude', 'latitude'],
+        get_color=CENTER_DOT_COLOR_RGB + [ARROW_OPACITY],
+        get_radius=80,
+        radius_min_pixels=3,
+        radius_max_pixels=8,
+        pickable=True
+    )
+    
+    view_state = pdk.ViewState(
+        latitude=df_map['latitude'].mean(),
+        longitude=df_map['longitude'].mean(),
+        zoom=DEFAULT_ZOOM,
+        pitch=0
+    )
+    
+    st.pydeck_chart(pdk.Deck(
+        map_style=map_style,
+        initial_view_state=view_state,
+        layers=[path_layer, scatter_layer],
+        tooltip={
+            "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed} km/h<br/><b>Bearing:</b> {bearing}°",
+            "style": {"backgroundColor": "steelblue", "color": "white"}
+        }
+    ))
+    
+    st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
