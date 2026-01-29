@@ -29,7 +29,7 @@ if 'auto_refresh' not in st.session_state:
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
 if 'current_page' not in st.session_state:
-    st.session_state.current_page = "🗺️ Live Map"
+    st.session_state.current_page = "🗺️ Map"
 if 'selected_region' not in st.session_state:
     st.session_state.selected_region = None
 if 'selected_regions_table' not in st.session_state:
@@ -37,7 +37,7 @@ if 'selected_regions_table' not in st.session_state:
 
 # Auto refresh MUST be at the top before any other widgets
 if st.session_state.auto_refresh:
-    # Trigger a rerun every 10s when auto refresh is enabled
+    # Trigger a rerun every 20s when auto refresh is enabled
     st_autorefresh(interval=10_000, key="auto_refresh_counter")
 
 # Apply custom CSS for themes and frozen header
@@ -198,8 +198,8 @@ with st.sidebar:
     st.subheader("📍 Navigation")
     page = st.radio(
         "Select View",
-        ["🗺️ Live Map", "📊 Data Table", "📈 Analytics"],
-        index=["🗺️ Live Map", "📊 Data Table", "📈 Analytics"].index(st.session_state.current_page),
+        ["🗺️ Map", "📊 Data Table", "📈 Analytics"],
+        index=["🗺️ Map", "📊 Data Table", "📈 Analytics"].index(st.session_state.current_page),
         label_visibility="collapsed",
         key="page_radio"
     )
@@ -242,19 +242,19 @@ with st.sidebar:
     st.subheader("🔄 Refresh Mode")
     refresh_mode = st.radio(
         "Mode",
-        ["Manual", "Auto (10s)"],
+        ["Manual", "Auto (20s)"],
         index=1 if st.session_state.auto_refresh else 0,
         horizontal=True,
         key="refresh_radio"
     )
 
-    if (refresh_mode == "Auto (10s)") != st.session_state.auto_refresh:
-        st.session_state.auto_refresh = (refresh_mode == "Auto (10s)")
+    if (refresh_mode == "Auto (20s)") != st.session_state.auto_refresh:
+        st.session_state.auto_refresh = (refresh_mode == "Auto (20s)")
         st.rerun()
 
 
 # Route to pages
-if st.session_state.current_page == "🗺️ Live Map":
+if st.session_state.current_page == "🗺️ Map":
     from app_pages import live_map
     live_map.show()
 elif st.session_state.current_page == "📊 Data Table":

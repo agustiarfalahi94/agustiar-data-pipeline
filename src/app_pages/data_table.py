@@ -28,10 +28,14 @@ def show():
     if actual_sync_time:
         st.success(f"Data updated: {actual_sync_time}")
 
-    # Metrics (only Regions Monitored for Data Table)
-    col1 = st.columns(1)[0]
+    # Metrics (Regions Monitored and Avg Speed for Data Table)
+    col1, col2 = st.columns(2)
     with col1:
         st.metric("Regions Monitored", metrics['regions'])
+    with col2:
+        # Calculate average speed across all filtered data
+        avg_speed = df_historical['speed'].mean() * 3.6  # Convert to km/h
+        st.metric("Avg Speed", f"{avg_speed:.2f} km/h")
 
     st.divider()
 

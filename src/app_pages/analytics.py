@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from utils import db, data_processor
@@ -132,8 +133,8 @@ def show():
             plot_bgcolor='#0e1117',
             font=dict(color='#fafafa'),
         )
-        else:
-            fig3.update_layout(
+    else:
+        fig3.update_layout(
             height=500,
             template='plotly_white',
             paper_bgcolor='#f3f4f6',
