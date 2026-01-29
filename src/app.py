@@ -1,222 +1,265 @@
 import streamlit as st
-import duckdb
-import pandas as pd
-import pydeck as pdk
-import numpy as np
+from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, timezone
-from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
 
-# Try to import from config.py (for local development)
-# Fall back to Streamlit Secrets (for cloud deployment)
+# Import config
 try:
-    from config import (
-        REGIONS, DATABASE_NAME, DATABASE_TABLE, TIMEZONE, 
-        UTC_OFFSET_HOURS, DEFAULT_ZOOM, MAP_STYLE,
-        ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
-    )
+    from config import REGIONS, DATABASE_NAME, TIMEZONE, UTC_OFFSET_HOURS
 except ImportError:
-    # Running on Streamlit Cloud - read from secrets
     REGIONS = st.secrets["regions"]["list"]
     DATABASE_NAME = st.secrets["database"]["name"]
-    DATABASE_TABLE = st.secrets["database"]["table"]
     TIMEZONE = st.secrets["timezone"]["name"]
     UTC_OFFSET_HOURS = st.secrets["timezone"]["utc_offset_hours"]
-    DEFAULT_ZOOM = st.secrets["map"]["default_zoom"]
-    MAP_STYLE = st.secrets["map"]["style"]
-    ARROW_SIZE = st.secrets["arrow"]["size"]
-    ARROW_COLOR_RGB = list(st.secrets["arrow"]["color_rgb"])
-    CENTER_DOT_COLOR_RGB = list(st.secrets["arrow"]["center_dot_color_rgb"])
-    ARROW_OPACITY = st.secrets["arrow"]["opacity"]
 
-st.set_page_config(page_title="Malaysia Real-Time Transit Tracker", page_icon="🚇", layout="wide")
-
-# Sort regions
-primary = ['Rapid Bus KL']
-others = sorted([r for r in REGIONS if r != 'Rapid Bus KL'])
-SORTED_REGIONS = primary + others
+# Page config
+st.set_page_config(
+    page_title="Malaysia Transit Tracker",
+    page_icon="🚇",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Initialize session state
-if 'selected_region' not in st.session_state:
-    st.session_state.selected_region = SORTED_REGIONS[0]
+if 'theme_mode' not in st.session_state:
+    st.session_state.theme_mode = 'light'
+if 'map_theme' not in st.session_state:
+    st.session_state.map_theme = 'light'
+if 'auto_refresh' not in st.session_state:
+    st.session_state.auto_refresh = False
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "🗺️ Live Map"
+if 'selected_region' not in st.session_state:
+    st.session_state.selected_region = None
+if 'selected_regions_table' not in st.session_state:
+    st.session_state.selected_regions_table = []
 
-# Create timestamp
+# Auto refresh MUST be at the top before any other widgets
+if st.session_state.auto_refresh:
+    # Trigger a rerun every 10s when auto refresh is enabled
+    st_autorefresh(interval=10_000, key="auto_refresh_counter")
+
+# Apply custom CSS for themes and frozen header
+if st.session_state.theme_mode == 'dark':
+    # Dark theme
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background-color: #0e1117;
+            color: #fafafa !important;
+        }
+        [data-testid="stAppViewContainer"] * {
+            color: #fafafa !important;
+        }
+        [data-testid="stSidebar"] {
+            background-color: #161a23;
+        }
+        [data-testid="stHeader"], [data-testid="stToolbar"] {
+            background-color: #0e1117;
+        }
+        .main-header {
+            position: sticky;
+            top: 0;
+            z-index: 999;
+            background-color: #0e1117;
+            padding: 1rem 0;
+            border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+            margin-bottom: 1rem;
+        }
+        /* Inputs / tables / buttons in dark mode */
+        .stDataFrame, [data-testid="stDataFrame"] {
+            background-color: #0e1117;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    # Light theme (soft grey background, dark text)
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background-color: #f3f4f6;
+            color: #31333F !important;
+        }
+        [data-testid="stAppViewContainer"] * {
+            color: #31333F !important;
+        }
+        [data-testid="stSidebar"] {
+            background-color: #e5e7eb;
+        }
+        [data-testid="stHeader"], [data-testid="stToolbar"] {
+            background-color: #f3f4f6;
+        }
+        .main-header {
+            position: sticky;
+            top: 0;
+            z-index: 999;
+            background-color: #f3f4f6;
+            padding: 1rem 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.6);
+            margin-bottom: 1rem;
+        }
+        /* Inputs / selectors / tables / buttons in light mode */
+        .stSelectbox, .stMultiSelect, .stTextInput, .stNumberInput {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        /* Multi-select filter box styling in light mode */
+        [data-baseweb="select"] {
+            background-color: #f3f4f6 !important;
+        }
+        [data-baseweb="select"] > div {
+            background-color: #f3f4f6 !important;
+        }
+        /* Data table styling in light mode */
+        [data-testid="stDataFrame"] {
+            background-color: #f9fafb !important;
+        }
+        [data-testid="stDataFrame"] table {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        [data-testid="stDataFrame"] th {
+            background-color: #f3f4f6 !important;
+            color: #111827 !important;
+        }
+        [data-testid="stDataFrame"] td {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        /* CSV download button in light mode */
+        .stDownloadButton > button {
+            background-color: #f3f4f6 !important;
+            color: #111827 !important;
+            border: 1px solid #d1d5db !important;
+        }
+        .stDownloadButton > button:hover {
+            background-color: #e5e7eb !important;
+        }
+        .stButton > button {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        /* Fix selectbox dropdown styling */
+        .stSelectbox > div > div {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        .stSelectbox > div > div > div {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        /* Fix dropdown menu items */
+        [data-baseweb="select"] {
+            background-color: #ffffff !important;
+        }
+        [data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        [data-baseweb="popover"] {
+            background-color: #ffffff !important;
+        }
+        [data-baseweb="popover"] li {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        [data-baseweb="popover"] li:hover {
+            background-color: #f3f4f6 !important;
+        }
+        .stButton > button {
+            border-radius: 999px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# Current time
 now_utc = datetime.now(timezone.utc)
 now_kl = now_utc + timedelta(hours=UTC_OFFSET_HOURS)
-current_date = now_kl.strftime('%d %b %Y')
-current_sync_time = now_kl.strftime('%H:%M:%S')
+current_time = now_kl.strftime('%d %b %Y %H:%M:%S')
 
-st.write(f"📅 {current_date} | 🕒 {current_sync_time} (GMT+8)")
+# Frozen header
+st.markdown(f"""
+    <div class="main-header">
+        <h2>🚇 Malaysia Real-Time Transit Tracker</h2>
+        <p style="margin-top: -10px;">📅 {current_time} (GMT+8)</p>
+    </div>
+""", unsafe_allow_html=True)
 
-# Database connection
-con = duckdb.connect(DATABASE_NAME)
-con.execute(f"SET TimeZone='{TIMEZONE}'")
+# Sidebar controls
+with st.sidebar:
+    # Page navigation (moved to the top of the sidebar)
+    st.subheader("📍 Navigation")
+    page = st.radio(
+        "Select View",
+        ["🗺️ Live Map", "📊 Data Table", "📈 Analytics"],
+        index=["🗺️ Live Map", "📊 Data Table", "📈 Analytics"].index(st.session_state.current_page),
+        label_visibility="collapsed",
+        key="page_radio"
+    )
 
-st.title("🚇 Malaysia Real-Time Transit Tracker")
-st.markdown("Monitoring live bus positions across Malaysia.")
-
-# Refresh button
-col_button, col_status = st.columns([1, 4], vertical_alignment="center")
-
-with col_button:
-    if st.button("🔄 Refresh Data", type="primary", use_container_width=True):
-        with st.spinner('🛰️ Fetching latest positions...'):
-            fetch_rapid_rail_live()
-            st.session_state.last_refresh = datetime.now()
+    if page != st.session_state.current_page:
+        st.session_state.current_page = page
         st.rerun()
 
-with col_status:
-    if st.session_state.last_refresh:
-        st.info(f"Last data refresh attempt: {current_date} {current_sync_time}")
-    else:
-        st.info("Click 'Refresh Data' to fetch the latest bus positions")
+    st.divider()
 
-def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
-    """Create arrow path coordinates based on position and bearing"""
-    angle_rad = np.radians(90 - bearing)
-    arrow_length = size * 2
-    arrow_width = size * 0.8
-    
-    tip_lat = lat + arrow_length * np.sin(angle_rad)
-    tip_lon = lon + arrow_length * np.cos(angle_rad)
-    
-    left_angle = angle_rad - np.radians(150)
-    left_lat = lat + arrow_width * np.sin(left_angle)
-    left_lon = lon + arrow_width * np.cos(left_angle)
-    
-    right_angle = angle_rad + np.radians(150)
-    right_lat = lat + arrow_width * np.sin(right_angle)
-    right_lon = lon + arrow_width * np.cos(right_angle)
-    
-    return [[lon, lat], [tip_lon, tip_lat], [left_lon, left_lat], 
-            [tip_lon, tip_lat], [right_lon, right_lat], [tip_lon, tip_lat]]
+    st.title("⚙️ Settings")
 
-try:
-    table_check = con.execute(f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'").fetchone()[0]
-    
-    if table_check > 0:
-        df_live = con.execute(f"SELECT * FROM {DATABASE_TABLE}").df()
-        
-        if not df_live.empty:
-            latest_ts = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
-            if latest_ts:
-                actual_sync_time = con.execute(f"SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%-d %b %Y %H:%M:%S') FROM {DATABASE_TABLE}").fetchone()[0]
-                st.success(f"Actual data updated at: {actual_sync_time}")
-            
-            df_live['timestamp_formatted'] = pd.to_datetime(df_live['timestamp'], unit='s', utc=True).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+    # Theme controls
+    st.subheader("🎨 Appearance")
+    theme_col1, theme_col2 = st.columns(2)
 
-            # Metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Active Buses", len(df_live))
-            with col2:
-                st.metric("Regions Monitored", len(df_live['region'].unique()))
-            with col3:
-                st.metric("Busiest Region", df_live['region'].value_counts().idxmax())
+    with theme_col1:
+        page_theme_btn = st.button(
+            "🌙 Dark" if st.session_state.theme_mode == 'light' else "☀️ Light",
+            use_container_width=True,
+            key="page_theme_btn"
+        )
+        if page_theme_btn:
+            st.session_state.theme_mode = 'dark' if st.session_state.theme_mode == 'light' else 'light'
+            st.rerun()
 
-            # Region filter
-            available_regions = [r for r in SORTED_REGIONS if r in df_live['region'].unique()]
-            
-            if available_regions:
-                if st.session_state.selected_region not in available_regions:
-                    st.session_state.selected_region = available_regions[0]
-                
-                try:
-                    current_index = available_regions.index(st.session_state.selected_region)
-                except ValueError:
-                    current_index = 0
-                
-                def update_region():
-                    st.session_state.selected_region = st.session_state.region_selector
-                
-                selected_region = st.selectbox(
-                    "Select Region to View", 
-                    options=available_regions,
-                    index=current_index,
-                    key='region_selector',
-                    on_change=update_region
-                )
-                         
-                df_filtered = df_live[df_live['region'] == st.session_state.selected_region]
-                df_filtered = df_filtered.fillna({'bearing': 0, 'speed': 0})
+    with theme_col2:
+        map_theme_btn = st.button(
+            "🗺️ Map: D" if st.session_state.map_theme == 'light' else "🗺️ Map: L",
+            use_container_width=True,
+            key="map_theme_btn"
+        )
+        if map_theme_btn:
+            st.session_state.map_theme = 'dark' if st.session_state.map_theme == 'light' else 'light'
+            st.rerun()
 
-                if not df_filtered.empty:
-                    df_map = df_filtered.copy()
-                    df_map['latitude'] = pd.to_numeric(df_map['latitude'], errors='coerce')
-                    df_map['longitude'] = pd.to_numeric(df_map['longitude'], errors='coerce')
-                    df_map['bearing'] = pd.to_numeric(df_map['bearing'], errors='coerce').fillna(0)
-                    df_map['speed'] = pd.to_numeric(df_map['speed'], errors='coerce').fillna(0)
-                    
-                    df_map = df_map.dropna(subset=['latitude', 'longitude'])
-                    df_map = df_map[(df_map['latitude'] != 0) & (df_map['longitude'] != 0)]
+    st.divider()
 
-                    if not df_map.empty:
-                        df_map['path'] = df_map.apply(
-                            lambda row: create_arrow_paths(row['latitude'], row['longitude'], row['bearing']), 
-                            axis=1
-                        )
-                        
-                        path_layer = pdk.Layer(
-                            "PathLayer",
-                            data=df_map,
-                            get_path='path',
-                            get_color=ARROW_COLOR_RGB + [ARROW_OPACITY],
-                            width_min_pixels=2,
-                            width_max_pixels=4,
-                            pickable=True,
-                        )
-                        
-                        scatter_layer = pdk.Layer(
-                            "ScatterplotLayer",
-                            data=df_map,
-                            get_position=['longitude', 'latitude'],
-                            get_color=CENTER_DOT_COLOR_RGB + [ARROW_OPACITY],
-                            get_radius=80,
-                            radius_min_pixels=3,
-                            radius_max_pixels=8,
-                            pickable=True
-                        )
+    # Refresh controls
+    st.subheader("🔄 Refresh Mode")
+    refresh_mode = st.radio(
+        "Mode",
+        ["Manual", "Auto (10s)"],
+        index=1 if st.session_state.auto_refresh else 0,
+        horizontal=True,
+        key="refresh_radio"
+    )
 
-                        view_state = pdk.ViewState(
-                            latitude=df_map['latitude'].mean(),
-                            longitude=df_map['longitude'].mean(),
-                            zoom=DEFAULT_ZOOM,
-                            pitch=0
-                        )
+    if (refresh_mode == "Auto (10s)") != st.session_state.auto_refresh:
+        st.session_state.auto_refresh = (refresh_mode == "Auto (10s)")
+        st.rerun()
 
-                        st.pydeck_chart(pdk.Deck(
-                            map_style=MAP_STYLE,
-                            initial_view_state=view_state,
-                            layers=[path_layer, scatter_layer],
-                            tooltip={
-                                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed} m/s<br/><b>Bearing:</b> {bearing}°", 
-                                "style": {"backgroundColor": "steelblue", "color": "white"}
-                            }
-                        ))
 
-                        st.caption(f"Showing {len(df_map)} active vehicles in {st.session_state.selected_region}")
-                    else:
-                        st.warning(f"No valid coordinates for buses in {st.session_state.selected_region}")
-
-                    with st.expander("View Raw GTFS-Realtime Data"):
-                        display_df = df_filtered.sort_values('timestamp', ascending=False)
-                        display_df = display_df[['region', 'latitude', 'longitude', 'bearing', 'speed', 'vehicle_id', 'timestamp_formatted']]
-                        display_df = display_df.rename(columns={'timestamp_formatted': 'timestamp_readable', 'bearing': 'Heading (Degrees)'})
-                        display_df = display_df.reset_index(drop=True)
-                        st.dataframe(display_df, use_container_width=True, hide_index=True)
-                else:
-                    st.warning(f"No active buses in {st.session_state.selected_region} at this time.")
-            else:
-                st.info("No active buses detected in any region.")
-                
-    else:
-        st.info("🛰️ No data found. Click 'Refresh Data' button to fetch initial data.")
-        st.caption("The database table will be created on first refresh.")
-
-except Exception as e:
-    st.error(f"Pipeline Error: {e}")
-    import traceback
-    st.code(traceback.format_exc())
-
-con.close()
+# Route to pages
+if st.session_state.current_page == "🗺️ Live Map":
+    from app_pages import live_map
+    live_map.show()
+elif st.session_state.current_page == "📊 Data Table":
+    from app_pages import data_table
+    data_table.show()
+else:
+    from app_pages import analytics
+    analytics.show()

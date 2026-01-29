@@ -5,7 +5,7 @@ from google.protobuf.json_format import MessageToDict
 import duckdb
 import time
 
-# API Sources - this is public information, safe to hardcode
+# Constants
 API_SOURCES = {
     'Rapid Bus KL': ['prasarana?category=rapid-bus-kl'],
     'Rapid Bus MRT Feeder': ['prasarana?category=rapid-bus-mrtfeeder'],
@@ -26,21 +26,18 @@ API_SOURCES = {
 API_BASE_URL = 'https://api.data.gov.my/gtfs-realtime/vehicle-position/'
 REQUEST_TIMEOUT = 10
 
-# Try to import database config, fallback to defaults
 try:
     from config import DATABASE_NAME, DATABASE_TABLE, DATA_MAX_AGE, DATA_FUTURE_TOLERANCE
 except ImportError:
-    # Use defaults if config.py not available
     DATABASE_NAME = 'agustiar_analytics.duckdb'
     DATABASE_TABLE = 'live_buses'
     DATA_MAX_AGE = 3600
     DATA_FUTURE_TOLERANCE = 300
 
 def fetch_rapid_rail_live():
-    """
-    Fetch live vehicle positions from Malaysia's GTFS Realtime API
-    """
+    """Optimized data fetching with single DB write"""
     all_vehicle_data = []
+    current_unix = int(time.time())
 
     for name, endpoints in API_SOURCES.items():
         for endpoint in endpoints:
@@ -54,12 +51,9 @@ def fetch_rapid_rail_live():
                     for entity in feed.entity:
                         if entity.HasField('vehicle'):
                             v = MessageToDict(entity.vehicle)
-                            
-                            # Extract details
-                            trip = v.get('trip', {})
-                            vehicle_info = v.get('vehicle', {})
                             pos = v.get('position', {})
-
+                            vehicle_info = v.get('vehicle', {})
+                            
                             all_vehicle_data.append({
                                 'region': name,
                                 'latitude': pos.get('latitude'),
@@ -69,44 +63,76 @@ def fetch_rapid_rail_live():
                                 'vehicle_id': vehicle_info.get('id', 'Unknown'),
                                 'timestamp': v.get('timestamp')
                             })
-                else:
-                    print(f"Skipping {endpoint}: Status {response.status_code}")
             except Exception as e:
                 print(f"Error fetching {name} ({endpoint}): {e}")
 
-    df = pd.DataFrame(all_vehicle_data)
-
-    if not df.empty:
-        # Ensure coordinates and time are numeric
-        df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
-        df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
-        df['timestamp_num'] = pd.to_numeric(df['timestamp'], errors='coerce')
-        
-        current_unix = int(time.time())
-        
-        # Filter out invalid data:
-        # 1. No 0/0 coordinates
-        # 2. No future data (> current + tolerance)
-        # 3. No extremely old data (< current - max age)
-        df = df[
-            (df['latitude'] != 0) & 
-            (df['longitude'] != 0) &
-            (df['timestamp_num'] <= (current_unix + DATA_FUTURE_TOLERANCE)) &
-            (df['timestamp_num'] >= (current_unix - DATA_MAX_AGE))
-        ].copy()
-        
-        df = df.drop(columns=['timestamp_num'])
-
-        try:
-            con = duckdb.connect(DATABASE_NAME)
-            con.execute(f"DROP TABLE IF EXISTS {DATABASE_TABLE}")
-            con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
-            con.close()
-            print(f"✓ Synced {len(df)} vehicles to database")
-        except Exception as db_e:
-            print(f"Database Write Error: {db_e}")
-    else:
+    if not all_vehicle_data:
         print("No vehicle data fetched")
+        return
+
+    # Create dataframe and filter in one pass
+    df = pd.DataFrame(all_vehicle_data)
+    
+    # Optimize: convert to numeric and filter in single operation
+    df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
+    df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
+    df['timestamp_num'] = pd.to_numeric(df['timestamp'], errors='coerce')
+    
+    # Filter all invalid data in one operation
+    df = df[
+        (df['latitude'] != 0) &
+        (df['longitude'] != 0) &
+        (df['timestamp_num'].notna()) &
+        (df['timestamp_num'] <= current_unix + DATA_FUTURE_TOLERANCE) &
+        (df['timestamp_num'] >= current_unix - DATA_MAX_AGE)
+    ].drop(columns=['timestamp_num']).copy()
+
+    if df.empty:
+        print("No valid vehicle data after filtering")
+        return
+
+    # Add insert timestamp for tracking when data was inserted
+    df['insert_timestamp'] = current_unix
+
+    # Append data instead of overwriting
+    try:
+        con = duckdb.connect(DATABASE_NAME)
+        
+        # Check if table exists
+        table_exists = con.execute(
+            f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
+        ).fetchone()[0] > 0
+        
+        if not table_exists:
+            # Create table if it doesn't exist
+            con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
+        else:
+            # Check if insert_timestamp column exists (for migration from old schema)
+            columns = con.execute(
+                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{DATABASE_TABLE}'"
+            ).df()['column_name'].tolist()
+            
+            if 'insert_timestamp' not in columns:
+                # Add insert_timestamp column to existing table
+                con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN insert_timestamp BIGINT")
+                # Set a default value for existing rows (use current timestamp)
+                con.execute(f"UPDATE {DATABASE_TABLE} SET insert_timestamp = {current_unix} WHERE insert_timestamp IS NULL")
+            
+            # Check if we already have data with this insert_timestamp to avoid duplicates
+            existing_count = con.execute(
+                f"SELECT COUNT(*) FROM {DATABASE_TABLE} WHERE insert_timestamp = {current_unix}"
+            ).fetchone()[0]
+            
+            # Only insert if we don't already have data for this timestamp
+            if existing_count == 0:
+                con.execute(f"INSERT INTO {DATABASE_TABLE} SELECT * FROM df")
+            else:
+                print(f"⚠ Data for timestamp {current_unix} already exists, skipping insert")
+        
+        con.close()
+        print(f"✓ Synced {len(df)} vehicles (appended)")
+    except Exception as e:
+        print(f"Database error: {e}")
 
 if __name__ == "__main__":
     fetch_rapid_rail_live()
