@@ -115,6 +115,10 @@ def show():
     if df_map.empty:
         st.warning(f"No valid data for {selected_region}")
         return
+    
+    # Create formatted columns for tooltip display
+    df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
+    df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
 
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
@@ -182,11 +186,10 @@ def show():
             initial_view_state=view_state,
             layers=[icon_layer, arrow_layer],
             tooltip={
-                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed:.0f} km/h<br/><b>Bearing:</b> {bearing:.0f}°",
+                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
         )
     )
 
     st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
-

@@ -20,10 +20,10 @@ def show():
                 st.session_state.last_refresh = True
             st.rerun()
 
-    # Get LATEST live data for current metrics (last 60 seconds, latest per vehicle)
+    # Get LATEST live data for current vehicle counts only
     df_live, metrics_live, actual_sync_time = db.get_live_data_optimized()
     
-    # Get ALL historical data for charts
+    # Get ALL historical data for charts AND speed statistics
     df_historical, _, _ = db.get_historical_data()
 
     if df_live is None or df_live.empty or df_historical is None or df_historical.empty:
@@ -42,12 +42,12 @@ def show():
     if actual_sync_time:
         st.success(f"Data updated: {actual_sync_time}")
 
-    # Overview metrics (from LATEST LIVE data only)
+    # Overview metrics
     col1, col2 = st.columns(2)
     col1.metric("Regions Monitored", metrics_live['regions'])
-    # Calculate avg speed from live data (moving vehicles only)
-    avg_speed_live = df_live[df_live['speed'] > 0]['speed'].mean() if len(df_live[df_live['speed'] > 0]) > 0 else 0
-    col2.metric("Avg Speed", f"{avg_speed_live:.2f} km/h")
+    # Calculate avg speed from HISTORICAL data (moving vehicles only)
+    avg_speed_historical = df_historical[df_historical['speed'] > 0]['speed'].mean() if len(df_historical[df_historical['speed'] > 0]) > 0 else 0
+    col2.metric("Avg Speed", f"{avg_speed_historical:.2f} km/h")
 
     st.divider()
 
@@ -163,11 +163,10 @@ def show():
     # Speed by region box plot (using average speed per vehicle)
     st.subheader("📈 Speed Analysis by Region")
     
-    # Calculate avg speed per vehicle with region info
+    # Calculate avg speed per vehicle with region info - INCLUDE ALL VEHICLES (even speed=0)
     vehicle_avg_speeds = df_historical.groupby(['vehicle_id', 'region'])['speed'].mean().reset_index()
     vehicle_avg_speeds.columns = ['vehicle_id', 'region', 'avg_speed']
-    # Filter moving vehicles
-    vehicle_avg_speeds = vehicle_avg_speeds[vehicle_avg_speeds['avg_speed'] > 0]
+    # DON'T filter out zero speeds - show all regions with data
 
     fig4 = px.box(
         vehicle_avg_speeds,
@@ -196,31 +195,33 @@ def show():
             font=dict(color='#111827'),
         )
         fig4.update_xaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
-        fig4.update_yaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
+        fig4.update_yaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#111827'))
     st.plotly_chart(fig4, use_container_width=True)
 
-    # Summary statistics (from LATEST LIVE data)
+    # Summary statistics
     st.subheader("📋 Summary Statistics")
 
     stats_col1, stats_col2, stats_col3 = st.columns(3)
 
     with stats_col1:
-        # Total unique vehicles from live data
-        st.metric("Total Vehicles", len(df_live))
-        # Moving vehicles from live data (speed > 0)
+        # Total unique vehicles from HISTORICAL data (distinct vehicle_id)
+        total_unique_vehicles = df_historical['vehicle_id'].nunique()
+        st.metric("Total Vehicles", total_unique_vehicles)
+        
+        # Moving vehicles from LIVE data (speed > 0, distinct vehicle_id)
         moving_count = len(df_live[df_live['speed'] > 0])
         st.metric("Moving Vehicles", moving_count)
 
     with stats_col2:
-        # Max and min from live data
-        st.metric("Max Speed", f"{df_live['speed'].max():.2f} km/h")
-        st.metric("Min Speed", f"{df_live['speed'].min():.2f} km/h")
+        # All speed stats from HISTORICAL data
+        st.metric("Max Speed", f"{df_historical['speed'].max():.2f} km/h")
+        st.metric("Min Speed", f"{df_historical['speed'].min():.2f} km/h")
 
     with stats_col3:
-        # Avg speed from live moving vehicles
-        st.metric("Avg Speed", f"{avg_speed_live:.2f} km/h")
-        # Median speed from moving vehicles only
-        moving_speeds = df_live[df_live['speed'] > 0]['speed']
-        median_speed = moving_speeds.median() if len(moving_speeds) > 0 else 0
+        # Avg speed from HISTORICAL moving vehicles
+        st.metric("Avg Speed", f"{avg_speed_historical:.2f} km/h")
+        
+        # Median speed from HISTORICAL moving vehicles only
+        moving_speeds_historical = df_historical[df_historical['speed'] > 0]['speed']
+        median_speed = moving_speeds_historical.median() if len(moving_speeds_historical) > 0 else 0
         st.metric("Median Speed", f"{median_speed:.2f} km/h")
-
