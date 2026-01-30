@@ -28,7 +28,9 @@ def table_exists():
 
 def get_live_data_optimized():
     """
-    Get only the LATEST data (most recent insert_timestamp) for live map
+    Get only the LATEST data for live map:
+    - Data from last 60 seconds based on MAX timestamp in database
+    - Most recent record per unique vehicle_id
     Returns: (dataframe, metrics_dict, sync_time_string)
     """
     if not table_exists():
@@ -37,25 +39,42 @@ def get_live_data_optimized():
     con = get_connection()
     
     try:
-        # Get the most recent insert_timestamp
-        max_insert_ts = con.execute(f"SELECT MAX(insert_timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
+        # Get the most recent timestamp from the database (not current time!)
+        max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
         
-        if max_insert_ts is None:
+        if max_timestamp_raw is None:
             con.close()
             return pd.DataFrame(), {}, None
         
-        # Get only data from the most recent insert
-        df = con.execute(
-            f"SELECT * FROM {DATABASE_TABLE} WHERE insert_timestamp = {max_insert_ts}"
-        ).df()
+        # Convert to integer (DuckDB might return as string)
+        max_timestamp = int(max_timestamp_raw)
+        
+        # Calculate 60 seconds ago from the max timestamp in database
+        sixty_seconds_ago = max_timestamp - 60
+        
+        # Get data from last 60 seconds, keeping only the most recent per vehicle
+        query = f"""
+        SELECT * FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY CAST(timestamp AS BIGINT) DESC) as rn
+            FROM {DATABASE_TABLE}
+            WHERE CAST(timestamp AS BIGINT) >= {sixty_seconds_ago}
+        ) WHERE rn = 1
+        """
+        
+        df = con.execute(query).df()
         
         if df.empty:
             con.close()
             return df, {}, None
         
-        # Get sync time (from the vehicle timestamp, not insert_timestamp)
+        # Drop the row number column
+        if 'rn' in df.columns:
+            df = df.drop(columns=['rn'])
+        
+        # Get sync time (from the max timestamp)
         sync_time_str = con.execute(
-            f"SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%-d %b %Y %H:%M:%S') FROM {DATABASE_TABLE} WHERE insert_timestamp = {max_insert_ts}"
+            f"SELECT strftime(to_timestamp({max_timestamp}::BIGINT), '%-d %b %Y %H:%M:%S')"
         ).fetchone()[0]
         
         con.close()

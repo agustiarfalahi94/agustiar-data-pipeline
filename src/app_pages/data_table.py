@@ -28,16 +28,7 @@ def show():
     if actual_sync_time:
         st.success(f"Data updated: {actual_sync_time}")
 
-    # Metrics (Regions Monitored and Avg Speed for Data Table)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Regions Monitored", metrics['regions'])
-    with col2:
-        # Calculate average speed across all filtered data
-        avg_speed = df_historical['speed'].mean() * 3.6  # Convert to km/h
-        st.metric("Avg Speed", f"{avg_speed:.2f} km/h")
-
-    st.divider()
+    # No metrics - just pure table
 
     # Hardcoded region list to prevent dropdown changes during auto-refresh
     try:
