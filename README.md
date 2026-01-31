@@ -6,7 +6,7 @@ A modern, high-performance web dashboard for tracking live bus positions across 
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-![Dashboard Preview](docs/screenshots/dashboard.png)
+![Dashboard Preview](docs/screenshots/dashboard1.png)
 
 ---
 
@@ -425,20 +425,18 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📸 Screenshots
 
 ### Live Map
-![Live Map](docs/screenshots/live_map.png)
+![Live Map](docs/screenshots/live_map1.png)
 
 ### Data Table
-![Data Table](docs/screenshots/data_table.png)
+![Data Table](docs/screenshots/data_table1.png)
 
 ### Analytics Dashboard
-![Analytics](docs/screenshots/analytics.png)
+![Analytics](docs/screenshots/analytics1.png)
 
 ---
 
 <div align="center">
 
 **[⬆ back to top](#-malaysia-real-time-transit-tracker)**
-
-Made with ❤️ in Malaysia
 
 </div>
