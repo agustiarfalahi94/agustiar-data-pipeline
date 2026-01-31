@@ -50,7 +50,7 @@ A modern, high-performance web dashboard for tracking live bus positions across 
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/agustiar94/agustiar-data-pipeline.git
+   git clone https://github.com/agustiarfalahi94/agustiar-data-pipeline.git
    cd agustiar-data-pipeline
    ```
 
