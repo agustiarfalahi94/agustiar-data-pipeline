@@ -252,7 +252,7 @@ API (GTFS Realtime) → Fetch → Clean → Deduplicate → Store (DuckDB)
 
 This application uses data from **Malaysia's Open Data Portal**:
 
-- **API**: [data.gov.my GTFS Realtime](https://data.gov.my)
+- **API**: [data.gov.my GTFS Realtime](https://developer.data.gov.my/realtime-api/gtfs-realtime)
 - **Format**: GTFS Realtime (Protocol Buffers)
 - **Coverage**:
   - Rapid Bus (KL, Kuantan, Penang, MRT Feeder)
@@ -404,9 +404,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Project Maintainer**: Agustiar Falahi
 
-- GitHub: [@yourusername](https://github.com/yourusername)
-- Email: your.email@example.com
-- Project Link: https://github.com/yourusername/agustiar-data-pipeline
+- GitHub: [@agustiarfalahi94](https://github.com/agustiarfalahi94)
+- Email: agustiarfalahi@gmail.com
+- Project Link: https://github.com/agustiarfalahi94/agustiar-data-pipeline
 
 ---
 
