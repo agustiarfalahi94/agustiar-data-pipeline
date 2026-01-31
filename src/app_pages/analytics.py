@@ -68,28 +68,10 @@ def show():
             orientation='h',
             color_discrete_sequence=['#3399FF']
         )
-        if st.session_state.theme_mode == 'dark':
-            fig1.update_layout(
-                height=400,
-                showlegend=False,
-                template='plotly_dark',
-                paper_bgcolor='#0e1117',
-                plot_bgcolor='#0e1117',
-                font=dict(color='#fafafa'),
-            )
-            fig1.update_xaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#fafafa'))
-            fig1.update_yaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#fafafa'))
-        else:
-            fig1.update_layout(
-                height=400,
-                showlegend=False,
-                template='plotly_white',
-                paper_bgcolor='#f3f4f6',
-                plot_bgcolor='#f3f4f6',
-                font=dict(color='#111827'),
-            )
-            fig1.update_xaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
-            fig1.update_yaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
+        fig1.update_layout(
+            height=400,
+            showlegend=False,
+        )
         st.plotly_chart(fig1, use_container_width=True)
 
     with col_chart2:
@@ -106,28 +88,10 @@ def show():
             nbins=30,
             labels={'avg_speed': 'Avg Speed per Vehicle (km/h)', 'count': 'Number of Vehicles'}
         )
-        if st.session_state.theme_mode == 'dark':
-            fig2.update_layout(
-                height=400,
-                showlegend=False,
-                template='plotly_dark',
-                paper_bgcolor='#0e1117',
-                plot_bgcolor='#0e1117',
-                font=dict(color='#fafafa'),
-            )
-            fig2.update_xaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#fafafa'))
-            fig2.update_yaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#fafafa'))
-        else:
-            fig2.update_layout(
-                height=400,
-                showlegend=False,
-                template='plotly_white',
-                paper_bgcolor='#f3f4f6',
-                plot_bgcolor='#f3f4f6',
-                font=dict(color='#111827'),
-            )
-            fig2.update_xaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
-            fig2.update_yaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
+        fig2.update_layout(
+            height=400,
+            showlegend=False,
+        )
         st.plotly_chart(fig2, use_container_width=True)
 
     # Pie chart for distribution (DISTINCT vehicle count)
@@ -139,25 +103,7 @@ def show():
         names='Region',
         hole=0.4
     )
-    if st.session_state.theme_mode == 'dark':
-        fig3.update_layout(
-            height=500,
-            template='plotly_dark',
-            paper_bgcolor='#0e1117',
-            plot_bgcolor='#0e1117',
-            font=dict(color='#fafafa'),
-        )
-    else:
-        fig3.update_layout(
-            height=500,
-            template='plotly_white',
-            paper_bgcolor='#f3f4f6',
-            plot_bgcolor='#f3f4f6',
-            font=dict(color='#111827'),
-        )
-        # Update pie chart text colors for light theme - both percentage and legend
-        fig3.update_traces(textfont=dict(color='#111827'))
-        fig3.update_layout(legend=dict(font=dict(color='#111827')))
+    fig3.update_layout(height=500)
     st.plotly_chart(fig3, use_container_width=True)
 
     # Speed by region box plot (using average speed per vehicle)
@@ -174,28 +120,10 @@ def show():
         y='avg_speed',
         labels={'region': 'Region', 'avg_speed': 'Avg Speed per Vehicle (km/h)'}
     )
-    if st.session_state.theme_mode == 'dark':
-        fig4.update_layout(
-            height=500,
-            xaxis_tickangle=-45,
-            template='plotly_dark',
-            paper_bgcolor='#0e1117',
-            plot_bgcolor='#0e1117',
-            font=dict(color='#fafafa'),
-        )
-        fig4.update_xaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#fafafa'))
-        fig4.update_yaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#fafafa'))
-    else:
-        fig4.update_layout(
-            height=500,
-            xaxis_tickangle=-45,
-            template='plotly_white',
-            paper_bgcolor='#f3f4f6',
-            plot_bgcolor='#f3f4f6',
-            font=dict(color='#111827'),
-        )
-        fig4.update_xaxes(title_font=dict(color='#111827'), tickfont=dict(color='#111827'))
-        fig4.update_yaxes(title_font=dict(color='#fafafa'), tickfont=dict(color='#111827'))
+    fig4.update_layout(
+        height=500,
+        xaxis_tickangle=-45,
+    )
     st.plotly_chart(fig4, use_container_width=True)
 
     # Summary statistics
