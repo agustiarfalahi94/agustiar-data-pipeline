@@ -1,173 +1,444 @@
 # 🚇 Malaysia Real-Time Transit Tracker
 
-A modern, high-performance dashboard for tracking live bus positions across Malaysia with real-time updates, analytics, and interactive visualizations.
+A modern, high-performance web dashboard for tracking live bus positions across Malaysia with real-time updates, interactive visualizations, and comprehensive analytics.
+
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+![Dashboard Preview](docs/screenshots/dashboard.png)
+
+---
 
 ## ✨ Features
 
 ### 🗺️ Live Map
-- Interactive map with directional arrows showing bus movement
-- Real-time position updates
-- Region filtering
-- Dark/Light map themes
+- **Real-time tracking** of bus positions across Malaysia
+- **Interactive map** with directional arrows showing vehicle movement
+- **Region filtering** to focus on specific transit systems
+- **Hover tooltips** displaying vehicle ID, speed, and bearing
+- **Dark/Light map themes** for better visibility
 
 ### 📊 Data Table
-- Sortable, filterable data table
-- Multi-region selection
-- CSV export functionality
-- Formatted timestamps and coordinates
+- **Sortable, filterable** data table with multi-region selection
+- **CSV export** functionality for data analysis
+- **Real-time updates** with auto-refresh capability
+- **Formatted timestamps** and coordinates
 
 ### 📈 Analytics Dashboard
-- Regional distribution charts
-- Speed analysis
-- Summary statistics
-- Interactive Plotly visualizations
+- **Regional distribution** charts (bar chart, pie chart)
+- **Speed analysis** with histograms and box plots
+- **Summary statistics** (total vehicles, avg/median/max speeds)
+- **Interactive visualizations** powered by Plotly
 
 ### 🎨 Customization
-- Dark/Light mode for UI
-- Separate dark/light theme for maps
-- Manual or Auto-refresh (10s interval)
-- Multi-page navigation
+- **Theme support**: Use Streamlit's built-in light/dark modes
+- **Separate map theming**: Independent control for map appearance
+- **Auto-refresh**: Manual or automatic updates (20-second intervals)
+- **Multi-page navigation**: Easy switching between views
+
+---
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### Prerequisites
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/agustiar-data-pipeline.git
-cd agustiar-data-pipeline
+- Python 3.8 or higher
+- pip package manager
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+### Installation
 
-# Install dependencies
-pip install -r requirements.txt
-```
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/agustiar-data-pipeline.git
+   cd agustiar-data-pipeline
+   ```
 
-### 2. Configuration
+2. **Create virtual environment** (recommended)
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   ```
 
-```bash
-# Copy example config
-cp config_example.py config.py
+3. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-# Edit config.py if needed (optional)
-```
+4. **Set up configuration**
+   ```bash
+   cp config_example.py config.py
+   # Edit config.py if you want to customize settings
+   ```
 
-### 3. Run the Application
+5. **Run the application**
+   ```bash
+   cd src
+   streamlit run app.py
+   ```
 
-```bash
-streamlit run app.py
-```
+6. **Access the dashboard**
+   - Open your browser to `http://localhost:8501`
+   - Click "Refresh Data" to fetch live transit data
 
-The dashboard will open at `http://localhost:8501`
+---
 
 ## 📁 Project Structure
 
 ```
 agustiar-data-pipeline/
-├── app.py                          # Main application entry point
-├── ingestion_rapidbus_mrtfeeder.py # Data fetching from GTFS API
-├── config.py                       # Configuration settings
-├── requirements.txt                # Python dependencies
 │
-├── pages/                          # Dashboard pages
-│   ├── live_map.py                # Live map with arrows
-│   ├── data_table.py              # Data table view
-│   └── analytics.py               # Analytics charts
+├── src/                              # Main application directory
+│   ├── app.py                        # Entry point - main Streamlit app
+│   ├── ingestion_rapidbus_mrtfeeder.py  # Data fetching from GTFS API
+│   ├── config.py                     # Configuration (not in git)
+│   ├── config_example.py             # Configuration template
+│   │
+│   ├── app_pages/                    # Dashboard pages
+│   │   ├── __init__.py
+│   │   ├── live_map.py               # Live map with directional arrows
+│   │   ├── data_table.py             # Sortable data table view
+│   │   └── analytics.py              # Analytics and visualizations
+│   │
+│   └── utils/                        # Utility modules
+│       ├── __init__.py
+│       ├── db.py                     # Database operations (DuckDB)
+│       └── data_processor.py         # Data processing and formatting
 │
-└── utils/                          # Utility modules
-    ├── db.py                      # Database operations
-    └── data_processor.py          # Data processing
+├── data/                             # Data directory (excluded from git)
+│   └── raw/                          # Raw data storage
+│
+├── .gitignore                        # Git ignore rules
+├── requirements.txt                  # Python dependencies
+├── README.md                         # This file
+└── LICENSE                           # License file
 ```
 
-## ⚙️ Configuration
-
-Edit `config.py` to customize:
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `REGIONS` | Transit regions to monitor | All Malaysia regions |
-| `DATABASE_NAME` | DuckDB database file | agustiar_analytics.duckdb |
-| `TIMEZONE` | Local timezone | Asia/Kuala_Lumpur |
-| `DEFAULT_ZOOM` | Map zoom level | 13 |
-| `ARROW_COLOR_RGB` | Arrow color | [0, 122, 255] (Blue) |
-| `DATA_MAX_AGE` | Max data age (seconds) | 3600 (1 hour) |
+---
 
 ## 🎯 Usage Guide
 
 ### Dashboard Controls
 
-**Sidebar Settings:**
-- **Theme Toggle**: Switch between light/dark mode for UI
-- **Map Theme**: Separate theme control for maps
-- **Refresh Mode**: Choose Manual or Auto (10s)
-- **Navigation**: Switch between Live Map, Data Table, Analytics
+#### Navigation (Sidebar)
+- **📍 Navigation**: Switch between Live Map, Data Table, and Analytics
+- **⚙️ Settings**: Configure appearance and refresh behavior
+
+#### Appearance Settings
+- **Page Theme**: Click the ⚙️ gear icon (top-right) → Choose app theme
+  - Light mode
+  - Dark mode  
+  - Use system setting
+- **Map Theme**: Use sidebar button to toggle between light/dark map styles
+
+#### Refresh Mode
+- **Manual**: Click "Refresh Data" button when needed
+- **Auto (20s)**: Automatically refreshes every 20 seconds
 
 ### Live Map View
-1. Select a region from dropdown
-2. View buses as directional arrows
-3. Hover over arrows for vehicle details
-4. Use manual refresh button (if not in auto-refresh mode)
+1. Select a region from the dropdown menu
+2. View buses as **directional arrows** indicating movement
+3. Hover over arrows to see:
+   - Vehicle ID
+   - Current speed (km/h)
+   - Direction bearing (degrees)
+4. Zoom and pan using standard map controls
 
 ### Data Table View
-1. Select multiple regions to filter
-2. View detailed vehicle data
-3. Sort by any column
-4. Export to CSV
+1. Select one or more regions using the multi-select filter
+2. Browse the sortable, filterable data table
+3. Click column headers to sort
+4. Export data using the **"📥 Download CSV"** button
 
 ### Analytics View
-1. View regional distribution charts
-2. Analyze speed patterns
-3. Compare statistics across regions
+- **Buses by Region**: Horizontal bar chart showing unique vehicle counts
+- **Speed Distribution**: Histogram of average speeds per vehicle
+- **Regional Distribution**: Pie chart showing proportional distribution
+- **Speed Analysis by Region**: Box plot comparing speed distributions
+- **Summary Statistics**: Key metrics (total vehicles, speeds, etc.)
 
-## 🔧 Performance Optimizations
+---
 
-This version includes major performance improvements:
+## ⚙️ Configuration
 
-- ✅ **5x faster data loading** - Single optimized database query
-- ✅ **Reduced memory usage** - Eliminated redundant data copies
-- ✅ **Batch processing** - Combined multiple operations
-- ✅ **Efficient filtering** - One-pass data filtering
-- ✅ **Cached computations** - Metrics calculated once
+### Main Configuration (`config.py`)
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `REGIONS` | list | All Malaysia regions | Transit regions to monitor |
+| `DATABASE_NAME` | str | `'agustiar_analytics.duckdb'` | DuckDB database filename |
+| `DATABASE_TABLE` | str | `'live_buses'` | Table name for vehicle data |
+| `TIMEZONE` | str | `'Asia/Kuala_Lumpur'` | Local timezone |
+| `UTC_OFFSET_HOURS` | int | `8` | UTC offset for timezone |
+| `DEFAULT_ZOOM` | int | `13` | Default map zoom level |
+| `ARROW_SIZE` | float | `0.001` | Size multiplier for arrows |
+| `ARROW_COLOR_RGB` | list | `[0, 122, 255]` | Arrow color (blue) |
+| `CENTER_DOT_COLOR_RGB` | list | `[255, 69, 0]` | Center dot color (orange) |
+| `ARROW_OPACITY` | int | `200` | Arrow opacity (0-255) |
+| `DATA_MAX_AGE` | int | `3600` | Max data age in seconds (1 hour) |
+| `DATA_FUTURE_TOLERANCE` | int | `300` | Future tolerance in seconds (5 min) |
+
+### Adding New Transit Regions
+
+1. Edit `config.py`
+2. Add region to `REGIONS` list
+3. Add API endpoint to `API_SOURCES` dictionary
+
+Example:
+```python
+REGIONS = [
+    'Rapid Bus KL',
+    'New Transit System',  # Add here
+    # ...
+]
+
+API_SOURCES = {
+    'New Transit System': ['api-endpoint'],
+    # ...
+}
+```
+
+---
+
+## 🔧 Technical Details
+
+### Data Pipeline
+
+```
+API (GTFS Realtime) → Fetch → Clean → Deduplicate → Store (DuckDB)
+                                                           ↓
+                                                    Dashboard Pages
+                                                           ↓
+                                    ┌──────────────────────┼──────────────────────┐
+                                    ↓                      ↓                      ↓
+                              Live Map              Data Table             Analytics
+                           (Last 60s data)        (All history)          (All history)
+```
+
+### Data Flow
+
+1. **Ingestion** (`ingestion_rapidbus_mrtfeeder.py`)
+   - Fetches data from Malaysia's GTFS Realtime API
+   - Validates coordinates and timestamps
+   - Deduplicates records
+   - Stores in DuckDB
+
+2. **Storage** (`utils/db.py`)
+   - DuckDB for efficient local storage
+   - Automatic schema migration
+   - Optimized queries for fast retrieval
+
+3. **Processing** (`utils/data_processor.py`)
+   - Speed conversion (m/s → km/h)
+   - Data filtering and cleaning
+   - Formatting for display
+
+4. **Visualization** (Pages)
+   - Pydeck for interactive maps
+   - Plotly for analytics charts
+   - Streamlit for UI components
+
+### Performance Optimizations
+
+- ✅ **Single optimized query** per page load (not multiple queries)
+- ✅ **Batch operations** instead of row-by-row processing
+- ✅ **Efficient deduplication** at database level
+- ✅ **60-second data window** for live map (reduces processing)
+- ✅ **Reusable helper functions** (DRY principle)
+
+---
 
 ## 📊 Data Sources
 
-Data is fetched from Malaysia's official GTFS Realtime API:
-- Base URL: `https://api.data.gov.my/gtfs-realtime/vehicle-position/`
-- Coverage: Rapid Bus (KL, Kuantan, Penang), KTM, myBAS (14 regions)
-- Update frequency: Real-time
+This application uses data from **Malaysia's Open Data Portal**:
+
+- **API**: [data.gov.my GTFS Realtime](https://data.gov.my)
+- **Format**: GTFS Realtime (Protocol Buffers)
+- **Coverage**:
+  - Rapid Bus (KL, Kuantan, Penang, MRT Feeder)
+  - KTM Berhad
+  - myBAS (14 regions across Malaysia)
+- **Update Frequency**: Real-time
+
+---
+
+## 🛠️ Development
+
+### Project Dependencies
+
+```txt
+streamlit>=1.28.0           # Web framework
+streamlit-autorefresh>=1.0.1  # Auto-refresh capability
+pandas>=2.0.0               # Data manipulation
+duckdb>=0.9.0               # Local database
+pydeck>=0.8.0               # Map visualization
+plotly>=5.14.0              # Analytics charts
+requests>=2.31.0            # HTTP requests
+gtfs-realtime-bindings>=1.0.0  # GTFS parsing
+protobuf>=4.21.0            # Protocol buffers
+```
+
+### Development Setup
+
+```bash
+# Install development dependencies
+pip install -r requirements.txt
+
+# Run in development mode
+streamlit run src/app.py --server.runOnSave true
+```
+
+### Code Style
+
+This project follows:
+- **PEP 8** Python style guide
+- **DRY principle** (Don't Repeat Yourself)
+- **Clear documentation** for all functions
+- **Type hints** where applicable
+
+---
+
+## 🚢 Deployment
+
+### Streamlit Cloud (Recommended)
+
+1. **Push to GitHub**
+   ```bash
+   git add .
+   git commit -m "Ready for deployment"
+   git push origin main
+   ```
+
+2. **Deploy on Streamlit Cloud**
+   - Go to [share.streamlit.io](https://share.streamlit.io)
+   - Connect your GitHub repository
+   - Set the main file: `src/app.py`
+   - Configure secrets (if needed)
+
+3. **Add Secrets** (Optional)
+   - In Streamlit Cloud dashboard → Settings → Secrets
+   - Add configuration as TOML format:
+     ```toml
+     [database]
+     name = "agustiar_analytics.duckdb"
+     table = "live_buses"
+     
+     [timezone]
+     name = "Asia/Kuala_Lumpur"
+     utc_offset_hours = 8
+     
+     [regions]
+     list = ["Rapid Bus KL", "KTM Berhad", ...]
+     ```
+
+### Local Production
+
+```bash
+# Run with production settings
+streamlit run src/app.py --server.port 8501 --server.address 0.0.0.0
+```
+
+---
 
 ## 🐛 Troubleshooting
 
-**No data showing:**
+### No data showing
 - Click "Refresh Data" button
 - Check internet connection
-- Verify API is accessible
+- Verify API is accessible: https://api.data.gov.my/gtfs-realtime/vehicle-position/
 
-**Performance issues:**
-- Enable auto-refresh for continuous updates
+### Map not displaying
+- Check map theme setting (try switching between light/dark)
+- Ensure coordinates are valid (non-zero values)
+- Check browser console for errors
+
+### Performance issues
 - Reduce number of selected regions in Data Table
-- Clear browser cache
+- Use auto-refresh sparingly for large datasets
+- Clear browser cache and refresh
 
-**Map not displaying:**
-- Check map theme setting
-- Verify coordinates are valid (non-zero)
+### Database errors
+- Delete `agustiar_analytics.duckdb` and click "Refresh Data"
+- Ensure disk space is available
+- Check file permissions
+
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
+Contributions are welcome! Please follow these steps:
+
 1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+### Development Guidelines
+
+- Follow PEP 8 style guide
+- Add docstrings to all functions
+- Write clear commit messages
+- Test thoroughly before submitting PR
+- Update documentation as needed
+
+---
 
 ## 📝 License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
 
 ## 🙏 Acknowledgments
 
-- Data provided by [Malaysia's Open Data Portal](https://data.gov.my)
-- Built with [Streamlit](https://streamlit.io)
-- Maps powered by [Pydeck](https://deckgl.readthedocs.io)
-- Charts created with [Plotly](https://plotly.com)
+- **Data Provider**: [Malaysia's Open Data Portal](https://data.gov.my)
+- **Frameworks**: Built with [Streamlit](https://streamlit.io)
+- **Mapping**: Powered by [Pydeck](https://deckgl.readthedocs.io)
+- **Charts**: Created with [Plotly](https://plotly.com)
+- **Database**: [DuckDB](https://duckdb.org) for efficient local storage
+
+---
+
+## 📧 Contact
+
+**Project Maintainer**: Agustiar Falahi
+
+- GitHub: [@yourusername](https://github.com/yourusername)
+- Email: your.email@example.com
+- Project Link: https://github.com/yourusername/agustiar-data-pipeline
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Historical data visualization (time-series analysis)
+- [ ] Route planning and optimization
+- [ ] Predictive analytics for arrival times
+- [ ] Mobile-responsive improvements
+- [ ] API endpoint for programmatic access
+- [ ] Integration with more transit systems
+- [ ] Real-time alerts and notifications
+
+---
+
+## 📸 Screenshots
+
+### Live Map
+![Live Map](docs/screenshots/live_map.png)
+
+### Data Table
+![Data Table](docs/screenshots/data_table.png)
+
+### Analytics Dashboard
+![Analytics](docs/screenshots/analytics.png)
+
+---
+
+<div align="center">
+
+**[⬆ back to top](#-malaysia-real-time-transit-tracker)**
+
+Made with ❤️ in Malaysia
+
+</div>

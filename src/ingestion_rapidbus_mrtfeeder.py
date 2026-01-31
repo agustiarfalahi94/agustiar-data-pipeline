@@ -35,10 +35,16 @@ except ImportError:
     DATA_FUTURE_TOLERANCE = 300
 
 def fetch_rapid_rail_live():
-    """Optimized data fetching with single DB write"""
+    """
+    Fetch live transit data from Malaysia GTFS API and store in DuckDB
+    - Fetches data from all configured regions
+    - Filters invalid/stale data
+    - Deduplicates before inserting
+    """
     all_vehicle_data = []
     current_unix = int(time.time())
 
+    # ===== Step 1: Fetch data from all API endpoints =====
     for name, endpoints in API_SOURCES.items():
         for endpoint in endpoints:
             url = f'{API_BASE_URL}{endpoint}'
@@ -70,15 +76,15 @@ def fetch_rapid_rail_live():
         print("No vehicle data fetched")
         return
 
-    # Create dataframe and filter in one pass
+    # ===== Step 2: Clean and filter data =====
     df = pd.DataFrame(all_vehicle_data)
     
-    # Optimize: convert to numeric and filter in single operation
+    # Convert to numeric for filtering
     df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
     df['timestamp_num'] = pd.to_numeric(df['timestamp'], errors='coerce')
     
-    # Filter all invalid data in one operation
+    # Filter invalid coordinates and timestamps
     df = df[
         (df['latitude'] != 0) &
         (df['longitude'] != 0) &
@@ -91,40 +97,30 @@ def fetch_rapid_rail_live():
         print("No valid vehicle data after filtering")
         return
 
-    # Add insert timestamp for tracking when data was inserted
     df['insert_timestamp'] = current_unix
 
-    # Append data instead of overwriting
+    # ===== Step 3: Store in database with deduplication =====
     try:
         con = duckdb.connect(DATABASE_NAME)
         
-        # Check if table exists
         table_exists = con.execute(
             f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
         ).fetchone()[0] > 0
         
         if not table_exists:
-            # Create table if it doesn't exist
             con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
             print(f"✓ Created table and synced {len(df)} vehicles")
         else:
-            # Check if insert_timestamp column exists (for migration from old schema)
+            # Ensure insert_timestamp column exists (for migration)
             columns = con.execute(
                 f"SELECT column_name FROM information_schema.columns WHERE table_name = '{DATABASE_TABLE}'"
             ).df()['column_name'].tolist()
             
             if 'insert_timestamp' not in columns:
-                # Add insert_timestamp column to existing table
                 con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN insert_timestamp BIGINT")
-                # Set a default value for existing rows (use current timestamp)
                 con.execute(f"UPDATE {DATABASE_TABLE} SET insert_timestamp = {current_unix} WHERE insert_timestamp IS NULL")
             
-            # Insert new data, but use INSERT OR IGNORE to skip duplicates
-            # First, create a unique constraint on relevant columns if it doesn't exist
-            # Note: DuckDB doesn't support ALTER TABLE ADD CONSTRAINT on existing tables easily,
-            # so we'll use INSERT with WHERE NOT EXISTS pattern instead
-            
-            # Insert only records that don't already exist (based on all key fields)
+            # Insert only non-duplicate records
             con.execute(f"""
                 INSERT INTO {DATABASE_TABLE}
                 SELECT df.* FROM df
@@ -140,7 +136,6 @@ def fetch_rapid_rail_live():
                 )
             """)
             
-            # Get count of inserted rows
             inserted_count = con.execute("SELECT changes()").fetchone()[0]
             
             if inserted_count > 0:

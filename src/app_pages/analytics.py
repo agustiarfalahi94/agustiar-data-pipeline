@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from utils import db, data_processor
 from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
 
@@ -20,23 +19,19 @@ def show():
                 st.session_state.last_refresh = True
             st.rerun()
 
-    # Get LATEST live data for current vehicle counts only
+    # Get LATEST live data for current vehicle counts
     df_live, metrics_live, actual_sync_time = db.get_live_data_optimized()
     
-    # Get ALL historical data for charts AND speed statistics
+    # Get ALL historical data for charts and speed statistics
     df_historical, _, _ = db.get_historical_data()
 
     if df_live is None or df_live.empty or df_historical is None or df_historical.empty:
         st.info("🛰️ No data available. Please refresh.")
         return
 
-    # Convert speed from m/s to km/h for live data
-    df_live['speed'] = pd.to_numeric(df_live['speed'], errors='coerce').fillna(0) * 3.6
-    df_live['speed'] = df_live['speed'].round(0).clip(upper=120)
-    
-    # Convert speed from m/s to km/h for historical data
-    df_historical['speed'] = pd.to_numeric(df_historical['speed'], errors='coerce').fillna(0) * 3.6
-    df_historical['speed'] = df_historical['speed'].round(0).clip(upper=120)
+    # Convert speed using helper function
+    df_live = data_processor.convert_speed_to_kmh(df_live.copy())
+    df_historical = data_processor.convert_speed_to_kmh(df_historical.copy())
 
     # Show sync time
     if actual_sync_time:

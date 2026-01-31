@@ -4,65 +4,70 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.pyc
 
-# Virtual Environment
+# Virtual Environments
+.venv/
 venv/
 ENV/
 env/
-.venv
 
-# IDEs
+# IDEs and Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
 
-# Configuration files (sensitive data)
-config.py
-.env
-.env.local
-secrets.py
-
-# Database files
+# Database Files
 *.duckdb
 *.duckdb.wal
 *.db
 *.sqlite
 *.sqlite3
 
+# Configuration (Secrets)
+config.py
+secrets.py
+.env
+.env.local
+
+# Data Directories
+data/raw/
+data/processed/
+*.csv
+*.json
+*.parquet
+
+# Backup files
+*.bak
+*.old
+*_backup/
+*_old/
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.tmp
+
 # Logs
 *.log
 logs/
 
-# Streamlit
-.streamlit/secrets.toml
+# Distribution / Packaging
+dist/
+build/
+*.egg-info/
+.eggs/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Testing
-.pytest_cache/
+# Test Coverage
 .coverage
 htmlcov/
+.pytest_cache/
 
-# OS
-Thumbs.db
-.DS_Store
-**/.DS_Store
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Documentation builds
+docs/_build/

@@ -28,10 +28,13 @@ def table_exists():
 
 def get_live_data_optimized():
     """
-    Get only the LATEST data for live map:
-    - Data from last 60 seconds based on MAX timestamp in database
-    - Most recent record per unique vehicle_id
-    Returns: (dataframe, metrics_dict, sync_time_string)
+    Get latest live data for display (last 60 seconds, deduplicated by vehicle)
+    
+    Returns:
+        tuple: (dataframe, metrics_dict, sync_time_string)
+            - dataframe: Latest position for each vehicle
+            - metrics_dict: {'total': int, 'regions': int, 'busiest': str}
+            - sync_time_string: Formatted timestamp of most recent data
     """
     if not table_exists():
         return None, {}, None
@@ -39,20 +42,17 @@ def get_live_data_optimized():
     con = get_connection()
     
     try:
-        # Get the most recent timestamp from the database (not current time!)
+        # Get the most recent timestamp from database (not system time)
         max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
         
         if max_timestamp_raw is None:
             con.close()
             return pd.DataFrame(), {}, None
         
-        # Convert to integer (DuckDB might return as string)
         max_timestamp = int(max_timestamp_raw)
-        
-        # Calculate 60 seconds ago from the max timestamp in database
         sixty_seconds_ago = max_timestamp - 60
         
-        # Get data from last 60 seconds, keeping only the most recent per vehicle
+        # Get data from last 60 seconds, keeping only latest per vehicle
         query = f"""
         SELECT * FROM (
             SELECT *,
@@ -68,7 +68,6 @@ def get_live_data_optimized():
             con.close()
             return df, {}, None
         
-        # Drop the row number column
         if 'rn' in df.columns:
             df = df.drop(columns=['rn'])
         
@@ -79,7 +78,7 @@ def get_live_data_optimized():
         
         con.close()
         
-        # Format timestamp column once - fix deprecation warning by converting to numeric first
+        # Format timestamp column
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
             df['timestamp_formatted'] = pd.to_datetime(
@@ -101,8 +100,13 @@ def get_live_data_optimized():
 
 def get_historical_data():
     """
-    Get ALL historical data (for analytics and data table pages)
-    Returns: (dataframe, metrics_dict, sync_time_string)
+    Get ALL historical data for analytics and data table
+    
+    Returns:
+        tuple: (dataframe, metrics_dict, sync_time_string)
+            - dataframe: All historical records
+            - metrics_dict: {'regions': int}
+            - sync_time_string: Formatted timestamp of most recent data
     """
     if not table_exists():
         return None, {}, None

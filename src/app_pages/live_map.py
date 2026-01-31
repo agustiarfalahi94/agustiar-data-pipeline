@@ -15,7 +15,18 @@ except ImportError:
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
-    """Optimized arrow path generation"""
+    """
+    Generate arrow path geometry for pydeck PathLayer
+    
+    Args:
+        lat: Latitude of vehicle position
+        lon: Longitude of vehicle position
+        bearing: Direction heading in degrees (0-360)
+        size: Arrow size multiplier (default from config)
+    
+    Returns:
+        list: Path coordinates [[lon, lat], ...] forming arrow shape
+    """
     angle_rad = np.radians(90 - bearing)
     arrow_length, arrow_width = size * 2, size * 0.8
 
