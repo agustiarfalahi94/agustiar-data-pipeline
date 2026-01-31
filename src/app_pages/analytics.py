@@ -2,20 +2,20 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from utils import db, data_processor
-from ingestion_rapidbus_mrtfeeder import fetch_and_store_transit_data
+from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
 
 
 def show():
     # Refresh behaviour
     if st.session_state.auto_refresh:
         with st.spinner('🛰️ Auto-refreshing...'):
-            fetch_and_store_transit_data()
+            fetch_rapid_rail_live()
             st.session_state.last_refresh = True
     else:
         # Manual refresh button
         if st.button("🔄 Refresh Data", type="primary"):
             with st.spinner('🛰️ Fetching...'):
-                fetch_and_store_transit_data()
+                fetch_rapid_rail_live()
                 st.session_state.last_refresh = True
             st.rerun()
 
@@ -125,6 +125,9 @@ def show():
     st.subheader("📋 Summary Statistics")
 
     stats_col1, stats_col2, stats_col3 = st.columns(3)
+    
+    # Filter to moving vehicles only (speed > 0) for consistent speed metrics
+    moving_vehicles_historical = df_historical[df_historical['speed'] > 0]
 
     with stats_col1:
         # Total unique vehicles from HISTORICAL data (distinct vehicle_id)
@@ -136,15 +139,19 @@ def show():
         st.metric("Moving Vehicles", moving_count)
 
     with stats_col2:
-        # All speed stats from HISTORICAL data
-        st.metric("Max Speed", f"{df_historical['speed'].max():.2f} km/h")
-        st.metric("Min Speed", f"{df_historical['speed'].min():.2f} km/h")
+        # All speed stats from HISTORICAL moving vehicles (excludes stopped buses)
+        if len(moving_vehicles_historical) > 0:
+            st.metric("Max Speed", f"{moving_vehicles_historical['speed'].max():.2f} km/h")
+            st.metric("Min Speed", f"{moving_vehicles_historical['speed'].min():.2f} km/h")
+        else:
+            st.metric("Max Speed", "0.00 km/h")
+            st.metric("Min Speed", "0.00 km/h")
 
     with stats_col3:
-        # Avg speed from HISTORICAL moving vehicles
-        st.metric("Avg Speed", f"{avg_speed_historical:.2f} km/h")
-        
-        # Median speed from HISTORICAL moving vehicles only
-        moving_speeds_historical = df_historical[df_historical['speed'] > 0]['speed']
-        median_speed = moving_speeds_historical.median() if len(moving_speeds_historical) > 0 else 0
-        st.metric("Median Speed", f"{median_speed:.2f} km/h")
+        # Avg and Median speed from HISTORICAL moving vehicles
+        if len(moving_vehicles_historical) > 0:
+            st.metric("Avg Speed", f"{moving_vehicles_historical['speed'].mean():.2f} km/h")
+            st.metric("Median Speed", f"{moving_vehicles_historical['speed'].median():.2f} km/h")
+        else:
+            st.metric("Avg Speed", "0.00 km/h")
+            st.metric("Median Speed", "0.00 km/h")
