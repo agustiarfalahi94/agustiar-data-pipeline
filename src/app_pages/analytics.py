@@ -2,20 +2,20 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from utils import db, data_processor
-from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
+from ingestion_rapidbus_mrtfeeder import fetch_and_store_transit_data
 
 
 def show():
     # Refresh behaviour
     if st.session_state.auto_refresh:
         with st.spinner('🛰️ Auto-refreshing...'):
-            fetch_rapid_rail_live()
+            fetch_and_store_transit_data()
             st.session_state.last_refresh = True
     else:
         # Manual refresh button
         if st.button("🔄 Refresh Data", type="primary"):
             with st.spinner('🛰️ Fetching...'):
-                fetch_rapid_rail_live()
+                fetch_and_store_transit_data()
                 st.session_state.last_refresh = True
             st.rerun()
 

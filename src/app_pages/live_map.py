@@ -2,7 +2,7 @@ import streamlit as st
 import pydeck as pdk
 import numpy as np
 from utils import db, data_processor
-from ingestion_rapidbus_mrtfeeder import fetch_rapid_rail_live
+from ingestion_rapidbus_mrtfeeder import fetch_and_store_transit_data
 
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
@@ -54,13 +54,13 @@ def show():
     if st.session_state.auto_refresh:
         # When auto-refresh is enabled, fetch data on every rerun
         with st.spinner('🛰️ Auto-refreshing...'):
-            fetch_rapid_rail_live()
+            fetch_and_store_transit_data()
             st.session_state.last_refresh = True
     else:
         # Manual refresh button (only show if not auto-refresh)
         if st.button("🔄 Refresh Data", type="primary", use_container_width=False):
             with st.spinner('🛰️ Fetching...'):
-                fetch_rapid_rail_live()
+                fetch_and_store_transit_data()
                 st.session_state.last_refresh = True
             st.rerun()
 

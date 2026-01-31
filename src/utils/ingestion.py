@@ -34,7 +34,7 @@ except ImportError:
     DATA_MAX_AGE = 3600
     DATA_FUTURE_TOLERANCE = 300
 
-def fetch_rapid_rail_live():
+def fetch_and_store_transit_data():
     """
     Fetch live transit data from Malaysia GTFS API and store in DuckDB
     - Fetches data from all configured regions
@@ -148,4 +148,4 @@ def fetch_rapid_rail_live():
         print(f"Database error: {e}")
 
 if __name__ == "__main__":
-    fetch_rapid_rail_live()
+    fetch_and_store_transit_data()
