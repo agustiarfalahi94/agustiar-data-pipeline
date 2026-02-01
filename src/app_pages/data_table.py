@@ -1,6 +1,6 @@
 import streamlit as st
 from utils import db, data_processor
-from ingestion_rapidbus_mrtfeeder import fetch_and_store_transit_data
+from utils.ingestion import fetch_and_store_transit_data
 
 
 def show():
