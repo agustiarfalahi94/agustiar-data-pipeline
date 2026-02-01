@@ -2,7 +2,7 @@ import streamlit as st
 import pydeck as pdk
 import numpy as np
 from utils import db, data_processor
-from ingestion_rapidbus_mrtfeeder import fetch_and_store_transit_data
+from utils.ingestion import fetch_and_store_transit_data
 
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
