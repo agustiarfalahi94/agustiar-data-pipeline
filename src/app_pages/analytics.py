@@ -37,15 +37,6 @@ def show():
     if actual_sync_time:
         st.success(f"Data updated: {actual_sync_time}")
 
-    # Overview metrics
-    col1, col2 = st.columns(2)
-    col1.metric("Regions Monitored", metrics_live['regions'])
-    # Calculate avg speed from HISTORICAL data (moving vehicles only)
-    avg_speed_historical = df_historical[df_historical['speed'] > 0]['speed'].mean() if len(df_historical[df_historical['speed'] > 0]) > 0 else 0
-    col2.metric("Avg Speed", f"{avg_speed_historical:.2f} km/h")
-
-    st.divider()
-
     # Charts - use DISTINCT vehicle counts from historical data
     col_chart1, col_chart2 = st.columns(2)
 

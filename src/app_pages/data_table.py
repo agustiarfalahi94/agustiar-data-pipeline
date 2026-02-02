@@ -32,7 +32,7 @@ def show():
 
     # Hardcoded region list to prevent dropdown changes during auto-refresh
     try:
-        from ingestion_rapidbus_mrtfeeder import API_SOURCES
+        from utils.ingestion import API_SOURCES
         all_regions = list(API_SOURCES.keys())
         # Sort with Rapid Bus KL first
         hardcoded_regions = ['Rapid Bus KL'] + sorted([r for r in all_regions if r != 'Rapid Bus KL'])
@@ -91,4 +91,3 @@ def show():
         file_name=f"transit_data_{actual_sync_time.replace(' ', '_').replace(':', '-')}.csv",
         mime="text/csv"
     )
-

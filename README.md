@@ -6,6 +6,8 @@ A modern, high-performance web dashboard for tracking live bus positions across 
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+**🚀 [Live Demo](https://malaysia-realtime-transit-tracker.streamlit.app/)** | **📊 [Try it now!](https://malaysia-realtime-transit-tracker.streamlit.app/)**
+
 ![Dashboard Preview](docs/screenshots/dashboard1.png)
 
 ---
@@ -90,7 +92,6 @@ agustiar-data-pipeline/
 │
 ├── src/                              # Main application directory
 │   ├── app.py                        # Entry point - main Streamlit app
-│   ├── ingestion_rapidbus_mrtfeeder.py  # Data fetching from GTFS API
 │   ├── config.py                     # Configuration (not in git)
 │   ├── config_example.py             # Configuration template
 │   │
@@ -102,6 +103,7 @@ agustiar-data-pipeline/
 │   │
 │   └── utils/                        # Utility modules
 │       ├── __init__.py
+│       ├── ingestion.py              # Data fetching from GTFS API
 │       ├── db.py                     # Database operations (DuckDB)
 │       └── data_processor.py         # Data processing and formatting
 │
@@ -217,7 +219,7 @@ API (GTFS Realtime) → Fetch → Clean → Deduplicate → Store (DuckDB)
 
 ### Data Flow
 
-1. **Ingestion** (`ingestion_rapidbus_mrtfeeder.py`)
+1. **Ingestion** (`utils/ingestion.py`)
    - Fetches data from Malaysia's GTFS Realtime API
    - Validates coordinates and timestamps
    - Deduplicates records
