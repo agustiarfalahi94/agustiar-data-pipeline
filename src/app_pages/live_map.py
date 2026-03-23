@@ -1,6 +1,8 @@
 import streamlit as st
 import pydeck as pdk
 import numpy as np
+import pandas as pd
+from streamlit_javascript import st_javascript
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
 
@@ -98,27 +100,98 @@ def show():
         st.info("No active buses.")
         return
 
-    # Initialize selected region - preserve during auto-refresh
-    if st.session_state.selected_region is None or st.session_state.selected_region not in hardcoded_regions:
-        # Try to use first available, otherwise use first hardcoded
-        st.session_state.selected_region = available_regions[0] if available_regions else hardcoded_regions[0]
+    # ===== LOCATE ME BUTTON SECTION =====
+    st.markdown("### 🗺️ Map Controls")
+    
+    col_region, col_locate = st.columns([3, 1])
+    
+    with col_region:
+        # Initialize selected region - preserve during auto-refresh
+        if st.session_state.selected_region is None or st.session_state.selected_region not in hardcoded_regions:
+            # Try to use first available, otherwise use first hardcoded
+            st.session_state.selected_region = available_regions[0] if available_regions else hardcoded_regions[0]
 
-    # Get current index safely from hardcoded list
-    try:
-        current_index = hardcoded_regions.index(st.session_state.selected_region)
-    except ValueError:
-        current_index = 0
-        st.session_state.selected_region = hardcoded_regions[0]
+        # Get current index safely from hardcoded list
+        try:
+            current_index = hardcoded_regions.index(st.session_state.selected_region)
+        except ValueError:
+            current_index = 0
+            st.session_state.selected_region = hardcoded_regions[0]
 
-    selected_region = st.selectbox(
-        "Select Region",
-        options=hardcoded_regions,  # Use hardcoded list instead of dynamic
-        index=current_index,
-        key='region_selector_live_map',
-    )
-    # Update session state only if changed
-    if selected_region != st.session_state.selected_region:
-        st.session_state.selected_region = selected_region
+        selected_region = st.selectbox(
+            "Select Region",
+            options=hardcoded_regions,  # Use hardcoded list instead of dynamic
+            index=current_index,
+            key='region_selector_live_map',
+        )
+        # Update session state only if changed
+        if selected_region != st.session_state.selected_region:
+            st.session_state.selected_region = selected_region
+    
+    with col_locate:
+        # Locate Me button
+        st.markdown("<br>", unsafe_allow_html=True)  # Vertical alignment
+        locate_clicked = st.button("📍 Locate Me", use_container_width=True, type="secondary")
+    
+    # Handle locate button click
+    if locate_clicked:
+        location = st_javascript("""
+            await new Promise((resolve, reject) => {
+                if (!navigator.geolocation) {
+                    reject(new Error('Geolocation not supported by your browser'));
+                }
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        resolve({
+                            lat: position.coords.latitude,
+                            lon: position.coords.longitude,
+                            accuracy: position.coords.accuracy
+                        });
+                    },
+                    (error) => {
+                        reject(error);
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 5000,
+                        maximumAge: 0
+                    }
+                );
+            });
+        """)
+        
+        if location and isinstance(location, dict) and 'lat' in location:
+            # Store user location in session state
+            st.session_state.user_location = {
+                'lat': location['lat'],
+                'lon': location['lon'],
+                'accuracy': location.get('accuracy', 0)
+            }
+            
+            # Update map view to center on user
+            st.session_state.map_view_state = {
+                'latitude': location['lat'],
+                'longitude': location['lon'],
+                'zoom': 15,  # Zoom in closer for user location
+                'pitch': 0,
+            }
+            
+            st.success(f"📍 Location found: {location['lat']:.4f}, {location['lon']:.4f}")
+            st.rerun()
+    
+    # Display current user location if available
+    if 'user_location' in st.session_state:
+        with st.expander("📍 Your Location", expanded=False):
+            loc = st.session_state.user_location
+            col_loc1, col_loc2 = st.columns(2)
+            with col_loc1:
+                st.write(f"**Latitude:** {loc['lat']:.6f}")
+                st.write(f"**Longitude:** {loc['lon']:.6f}")
+            with col_loc2:
+                st.write(f"**Accuracy:** ±{loc['accuracy']:.0f}m")
+                if st.button("🗑️ Clear Location", type="secondary", use_container_width=True):
+                    del st.session_state.user_location
+                    st.rerun()
 
     # Filter and process data
     df_map = data_processor.prepare_map_data(df_live, selected_region)
@@ -135,7 +208,6 @@ def show():
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
 
     # Create a professional bus/navigation icon using ScatterplotLayer with custom styling
-    # We'll use a larger, more visible marker with better styling
     icon_layer = pdk.Layer(
         "ScatterplotLayer",
         data=df_map,
@@ -191,11 +263,52 @@ def show():
         pitch=st.session_state.map_view_state['pitch'],
     )
 
+    # ===== ADD USER LOCATION MARKER TO MAP =====
+    layers = [icon_layer, arrow_layer]
+    
+    if 'user_location' in st.session_state:
+        user_loc = st.session_state.user_location
+        
+        # Create user location marker (red dot)
+        user_marker_data = pd.DataFrame([{
+            'lat': user_loc['lat'],
+            'lon': user_loc['lon']
+        }])
+        
+        user_marker = pdk.Layer(
+            "ScatterplotLayer",
+            data=user_marker_data,
+            get_position='[lon, lat]',
+            get_radius=150,
+            get_fill_color=[255, 0, 0, 255],  # Red marker
+            get_line_color=[255, 255, 255, 255],  # White border
+            line_width_min_pixels=3,
+            pickable=False,
+        )
+        
+        # Add accuracy circle (semi-transparent)
+        accuracy_circle_data = pd.DataFrame([{
+            'lat': user_loc['lat'],
+            'lon': user_loc['lon'],
+            'accuracy': user_loc['accuracy']
+        }])
+        
+        accuracy_circle = pdk.Layer(
+            "ScatterplotLayer",
+            data=accuracy_circle_data,
+            get_position='[lon, lat]',
+            get_radius='accuracy',
+            get_fill_color=[255, 0, 0, 50],  # Semi-transparent red
+            pickable=False,
+        )
+        
+        layers.extend([accuracy_circle, user_marker])
+
     st.pydeck_chart(
         pdk.Deck(
             map_style=map_style,
             initial_view_state=view_state,
-            layers=[icon_layer, arrow_layer],
+            layers=layers,
             tooltip={
                 "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
