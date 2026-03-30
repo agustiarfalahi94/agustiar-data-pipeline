@@ -2,7 +2,7 @@ import streamlit as st
 import pydeck as pdk
 import numpy as np
 import pandas as pd
-import streamlit.components.v1 as components
+from streamlit_js_eval import get_geolocation as js_get_geolocation
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
 
@@ -50,54 +50,6 @@ def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
         [tip_lon, tip_lat],
     ]
 
-
-def get_geolocation():
-    """Get user's geolocation using JavaScript"""
-    # Create a unique key for this component
-    location_html = """
-    <script>
-    function getLocation() {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                function(position) {
-                    // Send location data to Streamlit
-                    const data = {
-                        latitude: position.coords.latitude,
-                        longitude: position.coords.longitude,
-                        accuracy: position.coords.accuracy
-                    };
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        value: data
-                    }, '*');
-                },
-                function(error) {
-                    // Send error to Streamlit
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        value: {error: error.message}
-                    }, '*');
-                },
-                {
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 0
-                }
-            );
-        } else {
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
-                value: {error: 'Geolocation not supported'}
-            }, '*');
-        }
-    }
-    
-    // Auto-execute when loaded
-    getLocation();
-    </script>
-    """
-    
-    return components.html(location_html, height=0)
 
 
 def show():
@@ -187,29 +139,23 @@ def show():
     # Get location if button was clicked
     if st.session_state.get('getting_location', False):
         with st.spinner("🌍 Getting your location..."):
-            location_data = get_geolocation()
-            
+            location_data = js_get_geolocation(key="geolocation")
+
             if location_data and isinstance(location_data, dict):
-                if 'error' in location_data:
-                    st.error(f"❌ Location error: {location_data['error']}")
-                    st.session_state.getting_location = False
-                elif 'latitude' in location_data and 'longitude' in location_data:
-                    # Successfully got location!
+                coords = location_data.get('coords', {})
+                if coords and 'latitude' in coords and 'longitude' in coords:
                     st.session_state.user_location = {
-                        'lat': location_data['latitude'],
-                        'lon': location_data['longitude'],
-                        'accuracy': location_data.get('accuracy', 0)
+                        'lat': coords['latitude'],
+                        'lon': coords['longitude'],
+                        'accuracy': coords.get('accuracy', 0)
                     }
-                    
-                    # Center map on user location
                     st.session_state.map_view_state = {
-                        'latitude': location_data['latitude'],
-                        'longitude': location_data['longitude'],
+                        'latitude': coords['latitude'],
+                        'longitude': coords['longitude'],
                         'zoom': 15,
                         'pitch': 0,
                     }
-                    
-                    st.success(f"📍 Location found: {location_data['latitude']:.4f}, {location_data['longitude']:.4f}")
+                    st.success(f"📍 Location found: {coords['latitude']:.4f}, {coords['longitude']:.4f}")
                     st.session_state.getting_location = False
                     st.rerun()
     
