@@ -139,7 +139,7 @@ def show():
     # Get location if button was clicked
     if st.session_state.get('getting_location', False):
         with st.spinner("🌍 Getting your location..."):
-            location_data = js_get_geolocation(key="geolocation")
+            location_data = js_get_geolocation(component_key="geolocation")
 
             if location_data and isinstance(location_data, dict):
                 coords = location_data.get('coords', {})
