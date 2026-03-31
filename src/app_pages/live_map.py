@@ -260,13 +260,15 @@ def show():
             "ScatterplotLayer",
             data=user_marker_data,
             get_position='[lon, lat]',
-            get_radius=150,
+            get_radius=20,
+            radius_min_pixels=6,
+            radius_max_pixels=10,
             get_fill_color=[255, 0, 0, 255],  # Red marker
             get_line_color=[255, 255, 255, 255],  # White border
-            line_width_min_pixels=3,
+            line_width_min_pixels=2,
             pickable=False,
         )
-        
+
         # Add accuracy circle
         if user_loc['accuracy'] > 0:
             accuracy_circle_data = pd.DataFrame([{
@@ -274,15 +276,15 @@ def show():
                 'lon': user_loc['lon'],
                 'accuracy': user_loc['accuracy']
             }])
-            
+
             accuracy_circle = pdk.Layer(
                 "ScatterplotLayer",
                 data=accuracy_circle_data,
                 get_position='[lon, lat]',
-                get_radius=60,
-                radius_min_pixels=10,
-                radius_max_pixels=18,
-                get_fill_color=[255, 0, 0, 50],
+                get_radius=30,
+                radius_min_pixels=8,
+                radius_max_pixels=14,
+                get_fill_color=[255, 0, 0, 40],
                 pickable=False,
             )
             
