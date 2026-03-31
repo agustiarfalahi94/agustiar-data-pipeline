@@ -278,7 +278,9 @@ def show():
                 "ScatterplotLayer",
                 data=accuracy_circle_data,
                 get_position='[lon, lat]',
-                get_radius='accuracy',
+                get_radius=60,
+                radius_min_pixels=10,
+                radius_max_pixels=18,
                 get_fill_color=[255, 0, 0, 50],
                 pickable=False,
             )
