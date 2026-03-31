@@ -141,7 +141,13 @@ def get_historical_data():
             df['insert_timestamp_formatted'] = pd.to_datetime(
                 df['insert_timestamp'], unit='s', utc=True
             ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
-        
+
+        # Format created_at for display
+        if 'created_at' in df.columns:
+            df['created_at_formatted'] = pd.to_datetime(
+                df['created_at'], utc=True, errors='coerce'
+            ).dt.tz_convert(TIMEZONE).dt.strftime('%-d %b %Y, %H:%M')
+
         # Calculate metrics (only regions for historical data)
         metrics = {
             'regions': len(df['region'].unique())

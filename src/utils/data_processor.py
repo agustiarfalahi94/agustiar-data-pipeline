@@ -70,13 +70,16 @@ def format_display_dataframe(df):
     avg_speed = display_df.groupby('vehicle_id')['speed'].mean().round(0)
     display_df['avg_speed'] = display_df['vehicle_id'].map(avg_speed)
     
-    # Select and rename columns
-    display_df = display_df[[
-        'region', 'vehicle_id', 'latitude', 'longitude', 
+    # Select and rename columns (include created_at_formatted if present)
+    base_cols = [
+        'region', 'vehicle_id', 'latitude', 'longitude',
         'bearing', 'speed', 'avg_speed', 'timestamp_formatted'
-    ]]
-    
-    display_df = display_df.rename(columns={
+    ]
+    if 'created_at_formatted' in display_df.columns:
+        base_cols.append('created_at_formatted')
+    display_df = display_df[base_cols]
+
+    rename_map = {
         'region': 'Region',
         'vehicle_id': 'Vehicle ID',
         'latitude': 'Latitude',
@@ -84,8 +87,10 @@ def format_display_dataframe(df):
         'bearing': 'Heading (°)',
         'speed': 'Speed (km/h)',
         'avg_speed': 'Avg Speed (km/h)',
-        'timestamp_formatted': 'Timestamp'
-    })
+        'timestamp_formatted': 'Timestamp',
+        'created_at_formatted': 'Created At',
+    }
+    display_df = display_df.rename(columns=rename_map)
     
     # Round numeric columns
     display_df['Latitude'] = display_df['Latitude'].round(6)
