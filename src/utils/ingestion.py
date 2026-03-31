@@ -4,6 +4,7 @@ from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
 import duckdb
 import time
+from datetime import datetime
 
 # Constants
 API_SOURCES = {
@@ -98,6 +99,7 @@ def fetch_and_store_transit_data():
         return
 
     df['insert_timestamp'] = current_unix
+    df['created_at'] = datetime.utcnow()
 
     # ===== Step 3: Store in database with deduplication =====
     try:
@@ -119,6 +121,10 @@ def fetch_and_store_transit_data():
             if 'insert_timestamp' not in columns:
                 con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN insert_timestamp BIGINT")
                 con.execute(f"UPDATE {DATABASE_TABLE} SET insert_timestamp = {current_unix} WHERE insert_timestamp IS NULL")
+
+            if 'created_at' not in columns:
+                con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN created_at TIMESTAMP")
+                con.execute(f"UPDATE {DATABASE_TABLE} SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
             
             # Insert only non-duplicate records
             con.execute(f"""

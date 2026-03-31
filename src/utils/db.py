@@ -98,6 +98,62 @@ def get_live_data_optimized():
         con.close()
         raise e
 
+def get_vehicle_trail(vehicle_id, region, limit=50):
+    """
+    Get historical positions for a specific vehicle in a region, ordered by timestamp ASC.
+
+    Args:
+        vehicle_id: The vehicle ID to query
+        region: The region to filter by
+        limit: Maximum number of records to return (default 50)
+
+    Returns:
+        DataFrame with columns: vehicle_id, latitude, longitude, bearing, speed, timestamp
+    """
+    if not table_exists():
+        return pd.DataFrame()
+
+    con = get_connection()
+
+    try:
+        query = f"""
+        SELECT vehicle_id, latitude, longitude, bearing, speed, timestamp
+        FROM {DATABASE_TABLE}
+        WHERE vehicle_id = ? AND region = ?
+        ORDER BY CAST(timestamp AS BIGINT) ASC
+        LIMIT {int(limit)}
+        """
+        df = con.execute(query, [vehicle_id, region]).df()
+        con.close()
+
+        if df.empty:
+            return df
+
+        # Convert types
+        df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
+        df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
+        df['bearing'] = pd.to_numeric(df['bearing'], errors='coerce').fillna(0)
+        df['speed'] = pd.to_numeric(df['speed'], errors='coerce').fillna(0)
+        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+
+        # Format timestamp as readable datetime
+        df['timestamp'] = pd.to_datetime(
+            df['timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Drop rows with invalid coordinates
+        df = df[
+            df['latitude'].notna() & df['longitude'].notna() &
+            (df['latitude'] != 0) & (df['longitude'] != 0)
+        ]
+
+        return df
+
+    except Exception as e:
+        con.close()
+        raise e
+
+
 def get_historical_data():
     """
     Get ALL historical data for analytics and data table
@@ -141,7 +197,13 @@ def get_historical_data():
             df['insert_timestamp_formatted'] = pd.to_datetime(
                 df['insert_timestamp'], unit='s', utc=True
             ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
-        
+
+        # Format created_at for display
+        if 'created_at' in df.columns:
+            df['created_at_formatted'] = pd.to_datetime(
+                df['created_at'], utc=True, errors='coerce'
+            ).dt.tz_convert(TIMEZONE).dt.strftime('%-d %b %Y, %H:%M')
+
         # Calculate metrics (only regions for historical data)
         metrics = {
             'regions': len(df['region'].unique())
