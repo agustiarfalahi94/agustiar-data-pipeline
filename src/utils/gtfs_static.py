@@ -209,3 +209,119 @@ def get_route_name(agency_slug: str, route_id: str) -> str:
         return ''
 
     return ''
+
+
+def get_stops(agency_slug: str) -> list:
+    """
+    Return a list of stops for *agency_slug* read from stops.txt in the cached ZIP.
+
+    Each element is a dict with keys:
+        stop_id   (str)
+        stop_name (str)
+        stop_lat  (float)
+        stop_lon  (float)
+
+    Rows with missing or non-numeric lat/lon are skipped.
+    Returns an empty list on any error.
+    """
+    if not agency_slug:
+        return []
+
+    try:
+        with _load_zip(agency_slug) as zf:
+            rows = _read_csv_from_zip(zf, 'stops.txt')
+            if not rows:
+                return []
+
+            stops = []
+            for row in rows:
+                try:
+                    lat = float(row.get('stop_lat', '').strip())
+                    lon = float(row.get('stop_lon', '').strip())
+                except (ValueError, AttributeError):
+                    continue
+
+                stops.append({
+                    'stop_id':   row.get('stop_id', '').strip(),
+                    'stop_name': row.get('stop_name', '').strip(),
+                    'stop_lat':  lat,
+                    'stop_lon':  lon,
+                })
+
+            return stops
+
+    except Exception:
+        return []
+
+
+def get_routes_for_stop(agency_slug: str, stop_id: str) -> list:
+    """
+    Return a sorted, deduplicated list of route name strings that serve *stop_id*
+    within *agency_slug*.
+
+    Steps:
+      1. Scan stop_times.txt for rows matching stop_id — collect unique trip_ids.
+      2. Look up each trip_id in trips.txt to get route_id(s).
+      3. Look up each route_id in routes.txt to build a human-readable name
+         (route_short_name + route_long_name, same pattern as get_route_name).
+
+    stop_times.txt can be very large; a set is used to deduplicate trip_ids on
+    the fly and the file is streamed row-by-row to avoid loading it all into RAM.
+
+    Returns an empty list on any error.
+    """
+    if not agency_slug or not stop_id:
+        return []
+
+    try:
+        with _load_zip(agency_slug) as zf:
+            # ---- Step 1: collect trip_ids that visit this stop ----
+            trip_ids = set()
+
+            names = zf.namelist()
+            stop_times_match = next((n for n in names if n.endswith('stop_times.txt')), None)
+            if stop_times_match is None:
+                return []
+
+            with zf.open(stop_times_match) as raw:
+                content = io.TextIOWrapper(raw, encoding='utf-8-sig')
+                reader = csv.DictReader(content)
+                for row in reader:
+                    if row.get('stop_id', '').strip() == stop_id.strip():
+                        tid = row.get('trip_id', '').strip()
+                        if tid:
+                            trip_ids.add(tid)
+
+            if not trip_ids:
+                return []
+
+            # ---- Step 2: map trip_id → route_id ----
+            trips = _read_csv_from_zip(zf, 'trips.txt')
+            route_ids = set()
+            for row in trips:
+                if row.get('trip_id', '').strip() in trip_ids:
+                    rid = row.get('route_id', '').strip()
+                    if rid:
+                        route_ids.add(rid)
+
+            if not route_ids:
+                return []
+
+            # ---- Step 3: map route_id → human-readable name ----
+            routes = _read_csv_from_zip(zf, 'routes.txt')
+            route_names = set()
+            for row in routes:
+                if row.get('route_id', '').strip() in route_ids:
+                    short = row.get('route_short_name', '').strip()
+                    long_ = row.get('route_long_name', '').strip()
+                    if short and long_:
+                        name = f"{short} — {long_}"
+                    else:
+                        name = short or long_
+                    if name:
+                        route_names.add(name)
+
+            return sorted(route_names)
+
+    except Exception:
+        return []

@@ -77,8 +77,8 @@ with st.sidebar:
     st.subheader("📍 Navigation")
     page = st.radio(
         "Select View",
-        ["🗺️ Live Map", "📊 Data Table", "📈 Analytics"],
-        index=["🗺️ Live Map", "📊 Data Table", "📈 Analytics"].index(st.session_state.current_page),
+        ["🗺️ Live Map", "📊 Data Table", "📈 Analytics", "📍 Route Planner"],
+        index=["🗺️ Live Map", "📊 Data Table", "📈 Analytics", "📍 Route Planner"].index(st.session_state.current_page),
         label_visibility="collapsed",
         key="page_radio"
     )
@@ -128,6 +128,9 @@ if st.session_state.current_page == "🗺️ Live Map":
 elif st.session_state.current_page == "📊 Data Table":
     from app_pages import data_table
     data_table.show()
+elif st.session_state.current_page == "📍 Route Planner":
+    from app_pages import route_planner
+    route_planner.show()
 else:
     from app_pages import analytics
     analytics.show()
