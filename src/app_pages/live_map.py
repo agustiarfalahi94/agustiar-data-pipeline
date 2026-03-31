@@ -302,3 +302,68 @@ def show():
     )
 
     st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
+
+    # ===== ROUTE VIEWER SECTION =====
+    with st.expander("🚌 Route Viewer", expanded=False):
+        vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())
+
+        if not vehicle_options:
+            st.info("No vehicles available for the selected region.")
+        else:
+            selected_vehicle = st.selectbox(
+                "Select Vehicle",
+                options=vehicle_options,
+                key="route_viewer_vehicle_select",
+            )
+
+            if selected_vehicle:
+                trail_df = db.get_vehicle_trail(selected_vehicle, selected_region)
+
+                if trail_df is not None and len(trail_df) >= 2:
+                    # Build path as list of [lon, lat] pairs
+                    path_coords = trail_df[['longitude', 'latitude']].values.tolist()
+
+                    trail_data = pd.DataFrame([{
+                        'path': path_coords,
+                        'color': [255, 165, 0, 200],
+                    }])
+
+                    trail_layer = pdk.Layer(
+                        "PathLayer",
+                        data=trail_data,
+                        get_path='path',
+                        get_color='color',
+                        width_min_pixels=3,
+                        width_max_pixels=6,
+                        pickable=False,
+                    )
+
+                    trail_view = pdk.ViewState(
+                        latitude=trail_df['latitude'].mean(),
+                        longitude=trail_df['longitude'].mean(),
+                        zoom=DEFAULT_ZOOM,
+                        pitch=0,
+                    )
+
+                    st.pydeck_chart(
+                        pdk.Deck(
+                            map_style=map_style,
+                            initial_view_state=trail_view,
+                            layers=[trail_layer],
+                        )
+                    )
+
+                    # Display position history table
+                    display_trail = trail_df[['timestamp', 'latitude', 'longitude', 'speed', 'bearing']].copy()
+                    display_trail['speed'] = display_trail['speed'].round(1)
+                    display_trail['bearing'] = display_trail['bearing'].round(1)
+                    display_trail = display_trail.rename(columns={
+                        'timestamp': 'Timestamp',
+                        'latitude': 'Latitude',
+                        'longitude': 'Longitude',
+                        'speed': 'Speed (m/s)',
+                        'bearing': 'Bearing (°)',
+                    })
+                    st.dataframe(display_trail, use_container_width=True)
+                else:
+                    st.info("Not enough history to draw route.")
