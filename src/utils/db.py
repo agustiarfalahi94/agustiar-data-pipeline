@@ -5,11 +5,10 @@ from datetime import datetime, timedelta, timezone
 try:
     from config import DATABASE_NAME, DATABASE_TABLE, TIMEZONE, UTC_OFFSET_HOURS
 except ImportError:
-    import streamlit as st
-    DATABASE_NAME = st.secrets["database"]["name"]
-    DATABASE_TABLE = st.secrets["database"]["table"]
-    TIMEZONE = st.secrets["timezone"]["name"]
-    UTC_OFFSET_HOURS = st.secrets["timezone"]["utc_offset_hours"]
+    DATABASE_NAME = 'agustiar_analytics.duckdb'
+    DATABASE_TABLE = 'live_buses'
+    TIMEZONE = 'Asia/Kuala_Lumpur'
+    UTC_OFFSET_HOURS = 8
 
 def get_connection():
     """Get database connection with timezone set"""

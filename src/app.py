@@ -6,10 +6,15 @@ from datetime import datetime, timedelta, timezone
 try:
     from config import REGIONS, DATABASE_NAME, TIMEZONE, UTC_OFFSET_HOURS
 except ImportError:
-    REGIONS = st.secrets["regions"]["list"]
-    DATABASE_NAME = st.secrets["database"]["name"]
-    TIMEZONE = st.secrets["timezone"]["name"]
-    UTC_OFFSET_HOURS = st.secrets["timezone"]["utc_offset_hours"]
+    REGIONS = [
+        'Rapid Bus KL', 'Rapid Bus MRT Feeder', 'Rapid Bus Kuantan', 'Rapid Bus Penang',
+        'KTM Berhad', 'myBAS Kangar', 'myBAS Alor Setar', 'myBAS Kota Bharu',
+        'myBAS Kuala Terengganu', 'myBAS Ipoh', 'myBAS Seremban',
+        'myBAS Melaka', 'myBAS Johor', 'myBAS Kuching',
+    ]
+    DATABASE_NAME = 'agustiar_analytics.duckdb'
+    TIMEZONE = 'Asia/Kuala_Lumpur'
+    UTC_OFFSET_HOURS = 8
 
 # Page config
 st.set_page_config(

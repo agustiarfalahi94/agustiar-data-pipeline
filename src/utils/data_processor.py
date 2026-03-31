@@ -3,8 +3,12 @@ import pandas as pd
 try:
     from config import REGIONS
 except ImportError:
-    import streamlit as st
-    REGIONS = st.secrets["regions"]["list"]
+    REGIONS = [
+        'Rapid Bus KL', 'Rapid Bus MRT Feeder', 'Rapid Bus Kuantan', 'Rapid Bus Penang',
+        'KTM Berhad', 'myBAS Kangar', 'myBAS Alor Setar', 'myBAS Kota Bharu',
+        'myBAS Kuala Terengganu', 'myBAS Ipoh', 'myBAS Seremban',
+        'myBAS Melaka', 'myBAS Johor', 'myBAS Kuching',
+    ]
 
 def convert_speed_to_kmh(df, speed_column='speed'):
     """

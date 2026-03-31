@@ -10,8 +10,8 @@ from utils import gtfs_static
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE
 except ImportError:
-    DEFAULT_ZOOM = st.secrets["map"]["default_zoom"]
-    ARROW_SIZE = st.secrets["arrow"]["size"]
+    DEFAULT_ZOOM = 13
+    ARROW_SIZE = 0.001
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
