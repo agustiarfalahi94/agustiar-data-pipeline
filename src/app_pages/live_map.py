@@ -5,6 +5,7 @@ import pandas as pd
 from streamlit_js_eval import get_geolocation as js_get_geolocation
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
+from utils import gtfs_static
 
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
@@ -304,6 +305,9 @@ def show():
     st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
 
     # ===== ROUTE VIEWER SECTION =====
+    # Maps selected_region display names to GTFS static agency slugs
+    REGION_TO_SLUG = gtfs_static.STATIC_API_SOURCES
+
     with st.expander("🚌 Route Viewer", expanded=False):
         vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())
 
@@ -317,10 +321,73 @@ def show():
             )
 
             if selected_vehicle:
+                # ---- Resolve trip_id / route_id from live snapshot ----
+                vehicle_row = df_map[df_map['vehicle_id'] == selected_vehicle]
+                trip_id = ''
+                route_id = ''
+                if not vehicle_row.empty:
+                    trip_id = str(vehicle_row.iloc[0].get('trip_id', '') or '')
+                    route_id = str(vehicle_row.iloc[0].get('route_id', '') or '')
+
+                # ---- Determine agency slug for the selected region ----
+                agency_slug = REGION_TO_SLUG.get(selected_region, '')
+
+                # ---- Try to fetch planned route shapes from GTFS Static ----
+                planned_shapes = []
+                if agency_slug and trip_id:
+                    with st.spinner('Fetching planned route from GTFS Static...'):
+                        planned_shapes = gtfs_static.get_shapes_for_trip(agency_slug, trip_id)
+
+                # ---- Show route name caption ----
+                if agency_slug and route_id:
+                    route_name = gtfs_static.get_route_name(agency_slug, route_id)
+                    if route_name:
+                        st.caption(f"Route: {route_name}")
+
+                # ---- Fetch historical trail for fallback / table ----
                 trail_df = db.get_vehicle_trail(selected_vehicle, selected_region)
 
-                if trail_df is not None and len(trail_df) >= 2:
-                    # Build path as list of [lon, lat] pairs
+                if len(planned_shapes) >= 2:
+                    # --- PRIMARY: draw planned route from GTFS Static shapes ---
+                    planned_data = pd.DataFrame([{
+                        'path': planned_shapes,
+                        'color': [0, 200, 100, 200],
+                    }])
+
+                    planned_layer = pdk.Layer(
+                        "PathLayer",
+                        data=planned_data,
+                        get_path='path',
+                        get_color='color',
+                        width_min_pixels=3,
+                        width_max_pixels=6,
+                        pickable=False,
+                    )
+
+                    # Centre view on midpoint of planned shape
+                    mid_idx = len(planned_shapes) // 2
+                    centre_lon, centre_lat = planned_shapes[mid_idx]
+
+                    planned_view = pdk.ViewState(
+                        latitude=centre_lat,
+                        longitude=centre_lon,
+                        zoom=DEFAULT_ZOOM,
+                        pitch=0,
+                    )
+
+                    st.markdown("**Planned Route**")
+                    st.pydeck_chart(
+                        pdk.Deck(
+                            map_style=map_style,
+                            initial_view_state=planned_view,
+                            layers=[planned_layer],
+                        )
+                    )
+
+                elif trail_df is not None and len(trail_df) >= 2:
+                    # --- FALLBACK: historical breadcrumb trail ---
+                    st.info("No planned route available — showing historical trail.")
+
                     path_coords = trail_df[['longitude', 'latitude']].values.tolist()
 
                     trail_data = pd.DataFrame([{
@@ -353,7 +420,11 @@ def show():
                         )
                     )
 
-                    # Display position history table
+                else:
+                    st.info("No route data available.")
+
+                # ---- Always show historical position table if trail exists ----
+                if trail_df is not None and not trail_df.empty:
                     display_trail = trail_df[['timestamp', 'latitude', 'longitude', 'speed', 'bearing']].copy()
                     display_trail['speed'] = display_trail['speed'].round(1)
                     display_trail['bearing'] = display_trail['bearing'].round(1)
@@ -365,5 +436,3 @@ def show():
                         'bearing': 'Bearing (°)',
                     })
                     st.dataframe(display_trail, use_container_width=True)
-                else:
-                    st.info("Not enough history to draw route.")

@@ -53,6 +53,7 @@ def get_live_data_optimized():
         sixty_seconds_ago = max_timestamp - 60
         
         # Get data from last 60 seconds, keeping only latest per vehicle
+        # trip_id and route_id are included for the Route Viewer GTFS static lookup
         query = f"""
         SELECT * FROM (
             SELECT *,
@@ -85,13 +86,21 @@ def get_live_data_optimized():
                 df['timestamp'], unit='s', utc=True
             ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
         
+        # Ensure trip_id / route_id columns are present (they may be absent on older DBs
+        # before the migration runs for the first time)
+        for col in ('trip_id', 'route_id'):
+            if col not in df.columns:
+                df[col] = ''
+            else:
+                df[col] = df[col].fillna('').astype(str)
+
         # Calculate metrics
         metrics = {
             'total': len(df),
             'regions': len(df['region'].unique()),
             'busiest': df['region'].value_counts().idxmax() if len(df) > 0 else 'N/A'
         }
-        
+
         return df, metrics, sync_time_str
         
     except Exception as e:
