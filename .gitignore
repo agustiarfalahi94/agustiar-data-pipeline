@@ -18,6 +18,10 @@ env/
 *.swp
 *.swo
 *~
+*.code-workspace
+
+# Claude Code
+.claude/
 
 # Database Files
 *.duckdb

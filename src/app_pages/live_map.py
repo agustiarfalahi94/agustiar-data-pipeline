@@ -8,13 +8,10 @@ from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 
 try:
-    from config import DEFAULT_ZOOM, ARROW_SIZE, ARROW_COLOR_RGB, CENTER_DOT_COLOR_RGB, ARROW_OPACITY
+    from config import DEFAULT_ZOOM, ARROW_SIZE
 except ImportError:
     DEFAULT_ZOOM = st.secrets["map"]["default_zoom"]
     ARROW_SIZE = st.secrets["arrow"]["size"]
-    ARROW_COLOR_RGB = list(st.secrets["arrow"]["color_rgb"])
-    CENTER_DOT_COLOR_RGB = list(st.secrets["arrow"]["center_dot_color_rgb"])
-    ARROW_OPACITY = st.secrets["arrow"]["opacity"]
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):

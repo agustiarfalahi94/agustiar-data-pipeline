@@ -20,7 +20,7 @@ def show():
             st.rerun()
 
     # Get LATEST live data for current vehicle counts
-    df_live, metrics_live, actual_sync_time = db.get_live_data_optimized()
+    df_live, _, actual_sync_time = db.get_live_data_optimized()
     
     # Get ALL historical data for charts and speed statistics
     df_historical, _, _ = db.get_historical_data()
