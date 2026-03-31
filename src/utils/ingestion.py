@@ -5,6 +5,7 @@ from google.protobuf.json_format import MessageToDict
 import duckdb
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Constants
 API_SOURCES = {
@@ -35,6 +36,42 @@ except ImportError:
     DATA_MAX_AGE = 3600
     DATA_FUTURE_TOLERANCE = 300
 
+def _fetch_endpoint(name, endpoint):
+    """
+    Fetch vehicle data from a single API endpoint.
+    Returns a list of vehicle dicts, or an empty list on error.
+    """
+    url = f'{API_BASE_URL}{endpoint}'
+    try:
+        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        if response.status_code == 200:
+            feed = gtfs_realtime_pb2.FeedMessage()
+            feed.ParseFromString(response.content)
+
+            vehicles = []
+            for entity in feed.entity:
+                if entity.HasField('vehicle'):
+                    v = MessageToDict(entity.vehicle)
+                    pos = v.get('position', {})
+                    vehicle_info = v.get('vehicle', {})
+
+                    trip_info = v.get('trip', {})
+                    vehicles.append({
+                        'region': name,
+                        'latitude': pos.get('latitude'),
+                        'longitude': pos.get('longitude'),
+                        'bearing': pos.get('bearing', 0),
+                        'speed': pos.get('speed', 0),
+                        'vehicle_id': vehicle_info.get('id', 'Unknown'),
+                        'timestamp': v.get('timestamp'),
+                        'trip_id': trip_info.get('tripId', ''),
+                        'route_id': trip_info.get('routeId', ''),
+                    })
+            return vehicles
+    except Exception as e:
+        print(f"Error fetching {name} ({endpoint}): {e}")
+    return []
+
 def fetch_and_store_transit_data():
     """
     Fetch live transit data from Malaysia GTFS API and store in DuckDB
@@ -46,32 +83,19 @@ def fetch_and_store_transit_data():
     current_unix = int(time.time())
 
     # ===== Step 1: Fetch data from all API endpoints =====
-    for name, endpoints in API_SOURCES.items():
-        for endpoint in endpoints:
-            url = f'{API_BASE_URL}{endpoint}'
-            try:
-                response = requests.get(url, timeout=REQUEST_TIMEOUT)
-                if response.status_code == 200:
-                    feed = gtfs_realtime_pb2.FeedMessage()
-                    feed.ParseFromString(response.content)
-                    
-                    for entity in feed.entity:
-                        if entity.HasField('vehicle'):
-                            v = MessageToDict(entity.vehicle)
-                            pos = v.get('position', {})
-                            vehicle_info = v.get('vehicle', {})
-                            
-                            all_vehicle_data.append({
-                                'region': name,
-                                'latitude': pos.get('latitude'),
-                                'longitude': pos.get('longitude'),
-                                'bearing': pos.get('bearing', 0),
-                                'speed': pos.get('speed', 0),
-                                'vehicle_id': vehicle_info.get('id', 'Unknown'),
-                                'timestamp': v.get('timestamp')
-                            })
-            except Exception as e:
-                print(f"Error fetching {name} ({endpoint}): {e}")
+    tasks = [
+        (name, endpoint)
+        for name, endpoints in API_SOURCES.items()
+        for endpoint in endpoints
+    ]
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_task = {
+            executor.submit(_fetch_endpoint, name, endpoint): (name, endpoint)
+            for name, endpoint in tasks
+        }
+        for future in as_completed(future_to_task):
+            all_vehicle_data.extend(future.result())
 
     if not all_vehicle_data:
         print("No vehicle data fetched")
@@ -79,12 +103,12 @@ def fetch_and_store_transit_data():
 
     # ===== Step 2: Clean and filter data =====
     df = pd.DataFrame(all_vehicle_data)
-    
+
     # Convert to numeric for filtering
     df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
     df['timestamp_num'] = pd.to_numeric(df['timestamp'], errors='coerce')
-    
+
     # Filter invalid coordinates and timestamps
     df = df[
         (df['latitude'] != 0) &
@@ -104,11 +128,11 @@ def fetch_and_store_transit_data():
     # ===== Step 3: Store in database with deduplication =====
     try:
         con = duckdb.connect(DATABASE_NAME)
-        
+
         table_exists = con.execute(
             f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
         ).fetchone()[0] > 0
-        
+
         if not table_exists:
             con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
             print(f"✓ Created table and synced {len(df)} vehicles")
@@ -117,7 +141,7 @@ def fetch_and_store_transit_data():
             columns = con.execute(
                 f"SELECT column_name FROM information_schema.columns WHERE table_name = '{DATABASE_TABLE}'"
             ).df()['column_name'].tolist()
-            
+
             if 'insert_timestamp' not in columns:
                 con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN insert_timestamp BIGINT")
                 con.execute(f"UPDATE {DATABASE_TABLE} SET insert_timestamp = {current_unix} WHERE insert_timestamp IS NULL")
@@ -125,6 +149,14 @@ def fetch_and_store_transit_data():
             if 'created_at' not in columns:
                 con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN created_at TIMESTAMP")
                 con.execute(f"UPDATE {DATABASE_TABLE} SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
+
+            if 'trip_id' not in columns:
+                con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN trip_id VARCHAR")
+                con.execute(f"UPDATE {DATABASE_TABLE} SET trip_id = '' WHERE trip_id IS NULL")
+
+            if 'route_id' not in columns:
+                con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN route_id VARCHAR")
+                con.execute(f"UPDATE {DATABASE_TABLE} SET route_id = '' WHERE route_id IS NULL")
 
             # Insert only non-duplicate records
             con.execute(f"""
@@ -141,14 +173,14 @@ def fetch_and_store_transit_data():
                     AND existing.speed = df.speed
                 )
             """)
-            
+
             inserted_count = con.execute("SELECT changes()").fetchone()[0]
-            
+
             if inserted_count > 0:
                 print(f"✓ Inserted {inserted_count} new vehicles (skipped duplicates)")
             else:
                 print(f"⚠ No new data inserted (all records were duplicates)")
-        
+
         con.close()
     except Exception as e:
         print(f"Database error: {e}")
