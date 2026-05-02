@@ -74,6 +74,68 @@ def _fetch_endpoint(name, endpoint):
     return [], int((time.time() - t0) * 1000)
 
 
+def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region,
+                          lag_by_region, duration_by_region, fetch_timestamp):
+    """
+    Build one quality-log row per region from per-stage pipeline counts.
+
+    Args:
+        received_by_region:  {region: int}  raw count before filtering
+        valid_by_region:     {region: int}  count after coord/timestamp filter
+        inserted_by_region:  {region: int}  count actually written to live_buses
+        lag_by_region:       {region: {'avg': float, 'max': float}}
+        duration_by_region:  {region: int}  fetch wall-clock ms
+        fetch_timestamp:     int  unix time of this fetch cycle
+
+    Returns:
+        list of dicts, one per region
+    """
+    all_regions = set(received_by_region) | set(duration_by_region)
+    stats = []
+    for region in sorted(all_regions):
+        received = received_by_region.get(region, 0)
+        valid = valid_by_region.get(region, 0)
+        inserted = inserted_by_region.get(region, 0)
+        rejected = max(0, received - valid)
+        lag = lag_by_region.get(region, {'avg': 0.0, 'max': 0.0})
+        stats.append({
+            'fetch_timestamp': fetch_timestamp,
+            'region': region,
+            'vehicles_received': received,
+            'vehicles_rejected': rejected,
+            'vehicles_inserted': inserted,
+            'avg_data_lag_seconds': float(lag['avg']),
+            'max_data_lag_seconds': float(lag['max']),
+            'total_dropout': received == 0,
+            'fetch_duration_ms': duration_by_region.get(region, 0),
+        })
+    return stats
+
+
+def _write_quality_log(stats_list, con):
+    """Write quality stats rows to fetch_quality_log. Creates table if needed."""
+    if not stats_list:
+        return
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS fetch_quality_log (
+                fetch_timestamp BIGINT,
+                region VARCHAR,
+                vehicles_received INTEGER,
+                vehicles_rejected INTEGER,
+                vehicles_inserted INTEGER,
+                avg_data_lag_seconds DOUBLE,
+                max_data_lag_seconds DOUBLE,
+                total_dropout BOOLEAN,
+                fetch_duration_ms INTEGER
+            )
+        """)
+        quality_df = pd.DataFrame(stats_list)
+        con.execute("INSERT INTO fetch_quality_log SELECT * FROM quality_df")
+    except Exception as e:
+        print(f"Quality log write error (non-fatal): {e}")
+
+
 def fetch_and_store_transit_data():
     """
     Fetch live transit data from Malaysia GTFS API and store in DuckDB.

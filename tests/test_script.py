@@ -146,3 +146,63 @@ def test_fetch_endpoint_returns_tuple_on_non_200():
     assert isinstance(result, tuple)
     assert result[0] == []
     assert isinstance(result[1], int)
+
+
+# ── _build_quality_stats ──────────────────────────────────────────────────────
+
+from utils.ingestion import _build_quality_stats
+
+
+def test_build_quality_stats_basic():
+    received = {'Rapid Bus KL': 50, 'KTM Berhad': 30}
+    valid = {'Rapid Bus KL': 45, 'KTM Berhad': 28}
+    inserted = {'Rapid Bus KL': 40, 'KTM Berhad': 25}
+    lag = {
+        'Rapid Bus KL': {'avg': 20.0, 'max': 60.0},
+        'KTM Berhad': {'avg': 35.0, 'max': 90.0},
+    }
+    duration = {'Rapid Bus KL': 800, 'KTM Berhad': 600}
+    ts = 1000000
+
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+
+    assert len(stats) == 2
+    kl = next(s for s in stats if s['region'] == 'Rapid Bus KL')
+    assert kl['fetch_timestamp'] == ts
+    assert kl['vehicles_received'] == 50
+    assert kl['vehicles_rejected'] == 5
+    assert kl['vehicles_inserted'] == 40
+    assert kl['avg_data_lag_seconds'] == 20.0
+    assert kl['max_data_lag_seconds'] == 60.0
+    assert kl['total_dropout'] is False
+    assert kl['fetch_duration_ms'] == 800
+
+
+def test_build_quality_stats_dropout():
+    received = {'myBAS Johor': 0}
+    valid = {}
+    inserted = {}
+    lag = {}
+    duration = {'myBAS Johor': 500}
+    ts = 1000000
+
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+
+    assert len(stats) == 1
+    assert stats[0]['total_dropout'] is True
+    assert stats[0]['vehicles_received'] == 0
+    assert stats[0]['vehicles_rejected'] == 0
+    assert stats[0]['vehicles_inserted'] == 0
+
+
+def test_build_quality_stats_rejected_never_negative():
+    """Dedup may mean inserted < valid — rejected should never go below 0."""
+    received = {'Rapid Bus KL': 10}
+    valid = {'Rapid Bus KL': 10}
+    inserted = {'Rapid Bus KL': 3}
+    lag = {'Rapid Bus KL': {'avg': 5.0, 'max': 10.0}}
+    duration = {'Rapid Bus KL': 300}
+    ts = 1000000
+
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    assert stats[0]['vehicles_rejected'] == 0
