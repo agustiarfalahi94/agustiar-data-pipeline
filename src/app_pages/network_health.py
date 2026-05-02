@@ -10,6 +10,25 @@ except ImportError:
     UTC_OFFSET_HOURS = 8
 
 
+# ── Cached DB accessors (TTL 60s — avoids 14+ queries per auto-refresh rerun) ─
+
+@st.cache_data(ttl=60)
+def _get_health_summary():
+    return db.get_network_health_summary(window_hours=24)
+
+
+@st.cache_data(ttl=60)
+def _get_trend(region, window_hours):
+    return db.get_region_health_trend(region, window_hours=window_hours)
+
+
+@st.cache_data(ttl=60)
+def _get_fetch_log(region):
+    return db.get_region_fetch_log(region, limit=100)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
 def _score_color(score):
     if score >= 80:
         return '#2ecc71'
@@ -30,7 +49,7 @@ def show():
     st.markdown("## 📡 Network Health")
     st.caption("Per-region data quality tracking — how reliably each transit region reports to the API.")
 
-    health_df = db.get_network_health_summary(window_hours=24)
+    health_df = _get_health_summary()
 
     # Thin-data / no-data notice
     provisional = False
@@ -56,6 +75,7 @@ def show():
     if pd.notna(last_ts):
         dt = datetime.fromtimestamp(int(last_ts), tz=timezone.utc) + timedelta(hours=UTC_OFFSET_HOURS)
         col5.metric("Last Fetch", dt.strftime('%H:%M:%S'))
+        st.caption(f"Scores calculated over the last 24h · last fetch at {dt.strftime('%d %b %Y, %H:%M:%S')} (GMT+8)")
 
     st.divider()
 
@@ -64,9 +84,9 @@ def show():
     if provisional:
         st.caption("Provisional — fewer than 10 fetch cycles recorded.")
 
-    # Pre-load sparkline trend data for all regions
+    # Pre-load sparklines for all regions (single cached call per region)
     trend_cache = {
-        row['region']: db.get_region_health_trend(row['region'], window_hours=24)
+        row['region']: _get_trend(row['region'], 24)
         for _, row in health_df.iterrows()
     }
 
@@ -138,7 +158,7 @@ def show():
     )
     window_hours = window_map[window_label]
 
-    trend_df = db.get_region_health_trend(selected, window_hours=window_hours)
+    trend_df = _get_trend(selected, window_hours)
 
     if trend_df.empty:
         st.info("No data for this region in the selected window.")
@@ -190,7 +210,7 @@ def show():
 
     # ── Section 4: Raw Fetch Log ─────────────────────────────────────────────
     st.markdown("### 📋 Raw Fetch Log")
-    log_df = db.get_region_fetch_log(selected, limit=100)
+    log_df = _get_fetch_log(selected)
 
     if log_df.empty:
         st.info("No fetch log entries for this region.")

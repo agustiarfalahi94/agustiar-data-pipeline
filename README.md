@@ -35,6 +35,13 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Speed Analysis by Region** — box plot comparing regions
 - **Summary Statistics** — total vehicles, moving vehicles, max/min/avg/median speed
 
+### 📡 Network Health
+- **Per-region reliability scorecards** — composite score (0–100) for each of the 14 transit regions
+- **Score breakdown** — reporting rate, dropout count, average data lag
+- **24h sparklines** — at-a-glance trend per region
+- **Region drill-down** — reliability score over time, vehicles received vs. rejected per cycle, data lag trend
+- **Raw Fetch Log** — every API fetch event with full quality metadata, CSV export
+
 ### ⚙️ Settings & Controls
 - **Manual or Auto refresh** (20-second interval)
 - **Independent map theme** toggle (separate from the page theme)
@@ -54,7 +61,8 @@ agustiar-data-pipeline/
 │   ├── app_pages/
 │   │   ├── live_map.py           # Live map, Locate Me, Route Viewer
 │   │   ├── data_table.py         # Historical data table with CSV export
-│   │   └── analytics.py          # Plotly charts and summary statistics
+│   │   ├── analytics.py          # Plotly charts and summary statistics
+│   │   └── network_health.py     # Data quality scorecards, drill-down, fetch log
 │   │
 │   └── utils/
 │       ├── ingestion.py          # Parallel GTFS Realtime fetch → DuckDB
@@ -160,11 +168,11 @@ GTFS Realtime API
        │
        ▼
      DuckDB
-       │
-  ┌────┴──────────────┐──────────────────┐
-  ▼                   ▼                  ▼
-Live Map          Data Table         Analytics
-(last 60s)       (all history)      (all history)
+       │                    │
+  ┌────┴──────────┬──────────┴──────┬──────────────┐
+  ▼               ▼                 ▼               ▼
+Live Map      Data Table        Analytics     Network Health
+(last 60s)   (7-day history)  (7-day history) (fetch_quality_log)
 ```
 
 ### Key Design Decisions
@@ -178,6 +186,9 @@ Live Map          Data Table         Analytics
 | **Hardcoded region dropdown** | Prevents dropdown re-ordering during auto-refresh |
 | **GTFS Static 24h cache** | Static schedules change daily at most — avoids hammering the API |
 | **`streamlit-js-eval` for geolocation** | `components.html()` is one-way only; `streamlit-js-eval` provides the two-way JS bridge needed to return browser GPS coordinates to Python |
+| **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout. Powers the Network Health page without touching `live_buses` |
+| **Fetch guard (15s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
+| **`@st.cache_data(ttl=60)` on health queries** | Network Health loads 14+ DB queries for sparklines — caching cuts this to one round-trip per minute instead of per render |
 
 ### Route Viewer — How It Works
 
@@ -202,6 +213,22 @@ Live Map          Data Table         Analytics
 | `route_id` | VARCHAR | GTFS route ID |
 | `insert_timestamp` | BIGINT | Unix time when row was inserted |
 | `created_at` | TIMESTAMP | Datetime when row was first ingested |
+
+### Database Schema (`fetch_quality_log`)
+
+One row per region per fetch cycle. Powers the Network Health page.
+
+| Column | Type | Description |
+|---|---|---|
+| `fetch_timestamp` | BIGINT | Unix time when the fetch cycle ran |
+| `region` | VARCHAR | Transit region name |
+| `vehicles_received` | INTEGER | Raw count from API before any filtering |
+| `vehicles_rejected` | INTEGER | Filtered out (bad coords or stale timestamps) |
+| `vehicles_inserted` | INTEGER | Actually written to `live_buses` after dedup |
+| `avg_data_lag_seconds` | DOUBLE | Average of `insert_timestamp − vehicle_timestamp` |
+| `max_data_lag_seconds` | DOUBLE | Worst lag observed in this fetch |
+| `total_dropout` | BOOLEAN | True if API returned zero vehicles for this region |
+| `fetch_duration_ms` | INTEGER | Wall-clock time for this region's HTTP fetch |
 
 ---
 
@@ -256,6 +283,7 @@ protobuf>=4.21.0               # Protocol Buffers
 - [x] Locate Me (browser GPS)
 - [x] Route Viewer (GTFS Static planned routes)
 - [x] Audit timestamps (`created_at`)
+- [x] Network Health page — per-region reliability scores and fetch quality log
 - [ ] Route Planner — enter origin/destination, get transit directions
 
 ---
