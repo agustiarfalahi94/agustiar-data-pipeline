@@ -47,6 +47,129 @@ def prune_old_data():
         con.close()
 
 
+def _quality_log_exists():
+    con = get_connection()
+    try:
+        result = con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'fetch_quality_log'"
+        ).fetchone()[0]
+        return result > 0
+    finally:
+        con.close()
+
+
+def get_network_health_summary(window_hours=24):
+    """
+    Returns one row per region with reliability_score and component metrics,
+    calculated over the last window_hours of fetch_quality_log data.
+
+    Columns: region, reliability_score, reporting_rate, availability,
+             avg_data_lag_seconds, dropout_count, total_fetches, last_fetch_timestamp
+    """
+    if not _quality_log_exists():
+        return pd.DataFrame()
+
+    cutoff = int(time.time()) - int(window_hours * 3600)
+    con = get_connection()
+    try:
+        query = f"""
+        SELECT
+            region,
+            COUNT(*) AS total_fetches,
+            SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END) AS dropout_count,
+            COALESCE(AVG(CASE WHEN vehicles_received > 0
+                THEN vehicles_inserted::DOUBLE / vehicles_received
+                ELSE NULL END), 0) AS reporting_rate,
+            1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*) AS availability,
+            COALESCE(AVG(avg_data_lag_seconds), 0) AS avg_data_lag_seconds,
+            MAX(fetch_timestamp) AS last_fetch_timestamp,
+            ROUND((
+                0.4 * COALESCE(AVG(CASE WHEN vehicles_received > 0
+                    THEN vehicles_inserted::DOUBLE / vehicles_received
+                    ELSE NULL END), 0)
+                + 0.4 * (1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*))
+                + 0.2 * GREATEST(0.0, 1.0 - COALESCE(AVG(avg_data_lag_seconds), 0) / 300.0)
+            ) * 100) AS reliability_score
+        FROM fetch_quality_log
+        WHERE fetch_timestamp >= {cutoff}
+        GROUP BY region
+        ORDER BY reliability_score DESC
+        """
+        return con.execute(query).df()
+    finally:
+        con.close()
+
+
+def get_region_health_trend(region, window_hours=24):
+    """
+    Returns time-series rows from fetch_quality_log for one region,
+    oldest first, within window_hours. Includes per-row reliability_score
+    and a 'datetime' column converted to the configured timezone.
+    """
+    if not _quality_log_exists():
+        return pd.DataFrame()
+
+    cutoff = int(time.time()) - int(window_hours * 3600)
+    con = get_connection()
+    try:
+        query = f"""
+        SELECT
+            fetch_timestamp,
+            vehicles_received,
+            vehicles_rejected,
+            vehicles_inserted,
+            avg_data_lag_seconds,
+            max_data_lag_seconds,
+            total_dropout,
+            ROUND((
+                0.4 * CASE WHEN vehicles_received > 0
+                    THEN vehicles_inserted::DOUBLE / vehicles_received ELSE 0 END
+                + 0.4 * CASE WHEN total_dropout THEN 0.0 ELSE 1.0 END
+                + 0.2 * GREATEST(0.0, 1.0 - avg_data_lag_seconds / 300.0)
+            ) * 100) AS reliability_score
+        FROM fetch_quality_log
+        WHERE region = ? AND fetch_timestamp >= {cutoff}
+        ORDER BY fetch_timestamp ASC
+        """
+        df = con.execute(query, [region]).df()
+    finally:
+        con.close()
+
+    if not df.empty:
+        df['datetime'] = pd.to_datetime(
+            df['fetch_timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE)
+    return df
+
+
+def get_region_fetch_log(region, limit=100):
+    """
+    Returns the most recent raw fetch_quality_log rows for one region,
+    newest first. Adds a human-readable 'datetime' column.
+    """
+    if not _quality_log_exists():
+        return pd.DataFrame()
+
+    con = get_connection()
+    try:
+        query = f"""
+        SELECT *
+        FROM fetch_quality_log
+        WHERE region = ?
+        ORDER BY fetch_timestamp DESC
+        LIMIT {int(limit)}
+        """
+        df = con.execute(query, [region]).df()
+    finally:
+        con.close()
+
+    if not df.empty:
+        df['datetime'] = pd.to_datetime(
+            df['fetch_timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+    return df
+
+
 def get_live_data_optimized():
     """
     Get latest live data for display (last 60 seconds, deduplicated by vehicle)
