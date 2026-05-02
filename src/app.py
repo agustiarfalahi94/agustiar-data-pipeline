@@ -33,6 +33,8 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
 if 'current_page' not in st.session_state:
     st.session_state.current_page = "🗺️ Live Map"
+if 'health_selected_region' not in st.session_state:
+    st.session_state.health_selected_region = None
 if 'selected_region' not in st.session_state:
     st.session_state.selected_region = None
 if 'selected_regions_table' not in st.session_state:
@@ -75,10 +77,11 @@ st.markdown(f"""
 with st.sidebar:
     # Page navigation (moved to the top of the sidebar)
     st.subheader("📍 Navigation")
+    _pages = ["🗺️ Live Map", "📊 Data Table", "📈 Analytics", "📡 Network Health"]
     page = st.radio(
         "Select View",
-        ["🗺️ Live Map", "📊 Data Table", "📈 Analytics"],
-        index=["🗺️ Live Map", "📊 Data Table", "📈 Analytics"].index(st.session_state.current_page),
+        _pages,
+        index=_pages.index(st.session_state.current_page) if st.session_state.current_page in _pages else 0,
         label_visibility="collapsed",
         key="page_radio"
     )
@@ -128,6 +131,9 @@ if st.session_state.current_page == "🗺️ Live Map":
 elif st.session_state.current_page == "📊 Data Table":
     from app_pages import data_table
     data_table.show()
-else:
+elif st.session_state.current_page == "📈 Analytics":
     from app_pages import analytics
     analytics.show()
+else:
+    from app_pages import network_health
+    network_health.show()
