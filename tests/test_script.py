@@ -251,3 +251,70 @@ def test_fetch_guard_skips_when_recent_fetch_exists():
         assert call_count['n'] == 0, "requests.get was called despite recent fetch"
     finally:
         os.unlink(db_path)
+
+
+# ── DB health functions ───────────────────────────────────────────────────────
+
+def _make_temp_quality_db(rows):
+    """Create a temp DuckDB with fetch_quality_log populated."""
+    db_path = os.path.join(tempfile.mkdtemp(), 'test_quality.duckdb')
+    con = _duckdb.connect(db_path)
+    con.execute("""
+        CREATE TABLE fetch_quality_log (
+            fetch_timestamp BIGINT, region VARCHAR,
+            vehicles_received INTEGER, vehicles_rejected INTEGER,
+            vehicles_inserted INTEGER, avg_data_lag_seconds DOUBLE,
+            max_data_lag_seconds DOUBLE, total_dropout BOOLEAN,
+            fetch_duration_ms INTEGER
+        )
+    """)
+    for row in rows:
+        con.execute(
+            "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)",
+            [row['fetch_timestamp'], row['region'], row['vehicles_received'],
+             row['vehicles_rejected'], row['vehicles_inserted'],
+             row['avg_data_lag_seconds'], row['max_data_lag_seconds'],
+             row['total_dropout'], row['fetch_duration_ms']]
+        )
+    con.close()
+    return db_path
+
+
+def test_get_network_health_summary_returns_one_row_per_region():
+    now = int(time.time())
+    db_path = _make_temp_quality_db([
+        {'fetch_timestamp': now - 100, 'region': 'Rapid Bus KL',
+         'vehicles_received': 50, 'vehicles_rejected': 5, 'vehicles_inserted': 40,
+         'avg_data_lag_seconds': 20.0, 'max_data_lag_seconds': 60.0,
+         'total_dropout': False, 'fetch_duration_ms': 800},
+        {'fetch_timestamp': now - 100, 'region': 'KTM Berhad',
+         'vehicles_received': 30, 'vehicles_rejected': 2, 'vehicles_inserted': 25,
+         'avg_data_lag_seconds': 35.0, 'max_data_lag_seconds': 90.0,
+         'total_dropout': False, 'fetch_duration_ms': 600},
+    ])
+    try:
+        with patch('utils.db.DATABASE_NAME', db_path):
+            from utils import db as _db
+            result = _db.get_network_health_summary(window_hours=24)
+        assert len(result) == 2
+        assert set(result['region'].tolist()) == {'Rapid Bus KL', 'KTM Berhad'}
+        assert 'reliability_score' in result.columns
+        assert 'reporting_rate' in result.columns
+        assert 'dropout_count' in result.columns
+        assert 'total_fetches' in result.columns
+        assert all(result['reliability_score'].between(0, 100))
+    finally:
+        os.unlink(db_path)
+
+
+def test_get_network_health_summary_returns_empty_when_no_table():
+    db_path = os.path.join(tempfile.mkdtemp(), 'test_empty.duckdb')
+    try:
+        with patch('utils.db.DATABASE_NAME', db_path):
+            from utils import db as _db
+            result = _db.get_network_health_summary()
+        assert result.empty
+    finally:
+        # db may not exist if never opened
+        if os.path.exists(db_path):
+            os.unlink(db_path)
