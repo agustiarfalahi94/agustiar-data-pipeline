@@ -167,8 +167,49 @@ Add `"📡 Network Health"` to the page radio list. Route to `network_health.sho
 | `src/utils/db.py` | Three new read functions for health data |
 | `src/app_pages/network_health.py` | New page (4 sections) |
 | `src/app.py` | Add nav entry, session state key |
+| `CHANGELOG.md` | Add v2.1.0 entry |
+| `pyproject.toml` | Bump version to `2.1.0` |
 
 No changes to `live_map.py`, `data_table.py`, `analytics.py`, or `config.py`.
+
+---
+
+## Versioning & Changelog
+
+### Scheme
+
+`MAJOR.MINOR.PATCH` following semver:
+- **PATCH** — bug fixes, no new features (e.g. `2.0.1`)
+- **MINOR** — new feature, backward compatible (e.g. `2.1.0`)
+- **MAJOR** — breaking change or major milestone (e.g. `3.0.0`)
+
+This feature is a new backward-compatible addition → **2.1.0**.
+
+### CHANGELOG.md format
+
+Use [Keep a Changelog](https://keepachangelog.com) format. Each release block:
+
+```markdown
+## [2.1.0] - YYYY-MM-DD
+### Added
+- ...
+### Changed
+- ...
+### Fixed
+- ...
+```
+
+The `CHANGELOG.md` lives at the repo root. The implementation step creates it with two entries: `2.0.0` (retroactive, covering the code review fixes already committed) and `2.1.0` (this feature).
+
+### Git tag
+
+After the final commit of this feature, create an annotated tag:
+
+```bash
+git tag -a v2.1.0 -m "feat: Network Health page — data quality tracking per region"
+```
+
+The tag is included in the implementation plan as the final step. Pushing the tag (`git push origin v2.1.0`) is left to the owner, consistent with the push/merge policy.
 
 ---
 
