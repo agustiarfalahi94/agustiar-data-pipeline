@@ -206,3 +206,48 @@ def test_build_quality_stats_rejected_never_negative():
 
     stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
     assert stats[0]['vehicles_rejected'] == 0
+
+
+# ── fetch guard ───────────────────────────────────────────────────────────────
+
+import tempfile
+import duckdb as _duckdb
+
+
+def test_fetch_guard_skips_when_recent_fetch_exists():
+    """
+    If fetch_quality_log has a row within the last 15 seconds,
+    fetch_and_store_transit_data should return early without calling requests.get.
+    """
+    db_path = os.path.join(tempfile.mkdtemp(), 'test_guard.duckdb')
+
+    try:
+        con = _duckdb.connect(db_path)
+        con.execute("""
+            CREATE TABLE fetch_quality_log (
+                fetch_timestamp BIGINT, region VARCHAR,
+                vehicles_received INTEGER, vehicles_rejected INTEGER,
+                vehicles_inserted INTEGER, avg_data_lag_seconds DOUBLE,
+                max_data_lag_seconds DOUBLE, total_dropout BOOLEAN,
+                fetch_duration_ms INTEGER
+            )
+        """)
+        con.execute(
+            f"INSERT INTO fetch_quality_log VALUES ({int(time.time()) - 5}, 'Test', 0, 0, 0, 0, 0, false, 0)"
+        )
+        con.close()
+
+        call_count = {'n': 0}
+
+        def fake_get(*args, **kwargs):
+            call_count['n'] += 1
+            raise AssertionError("requests.get should not be called")
+
+        from utils import ingestion as _ing
+        with patch('utils.ingestion.DATABASE_NAME', db_path), \
+             patch('utils.ingestion.requests.get', side_effect=fake_get):
+            _ing.fetch_and_store_transit_data()
+
+        assert call_count['n'] == 0, "requests.get was called despite recent fetch"
+    finally:
+        os.unlink(db_path)

@@ -144,6 +144,23 @@ def fetch_and_store_transit_data():
     all_vehicle_data = []
     current_unix = int(time.time())
 
+    # Fetch guard: skip if a fetch already ran within the last 15 seconds.
+    # Prevents duplicate quality log entries and DuckDB write collisions when
+    # multiple Streamlit sessions trigger refresh simultaneously.
+    try:
+        _guard_con = duckdb.connect(DATABASE_NAME)
+        try:
+            recent = _guard_con.execute(
+                f"SELECT COUNT(*) FROM fetch_quality_log WHERE fetch_timestamp >= {current_unix - 15}"
+            ).fetchone()[0]
+            if recent > 0:
+                print("⚡ Skipping fetch — already ran within last 15 seconds")
+                return
+        finally:
+            _guard_con.close()
+    except Exception:
+        pass  # Table doesn't exist on first run — proceed normally
+
     # ===== Step 1: Fetch data from all API endpoints =====
     tasks = [
         (name, endpoint)
