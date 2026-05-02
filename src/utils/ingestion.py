@@ -130,8 +130,18 @@ def _write_quality_log(stats_list, con):
                 fetch_duration_ms INTEGER
             )
         """)
-        quality_df = pd.DataFrame(stats_list)
-        con.execute("INSERT INTO fetch_quality_log SELECT * FROM quality_df")
+        # Use parameterised inserts — avoids DuckDB's frame-based variable
+        # lookup which is unreliable when the connection crosses function boundaries.
+        rows = [
+            (s['fetch_timestamp'], s['region'], s['vehicles_received'],
+             s['vehicles_rejected'], s['vehicles_inserted'],
+             s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
+             bool(s['total_dropout']), s['fetch_duration_ms'])
+            for s in stats_list
+        ]
+        con.executemany(
+            "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)", rows
+        )
     except Exception as e:
         print(f"Quality log write error (non-fatal): {e}")
 
