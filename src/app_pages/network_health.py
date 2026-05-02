@@ -109,7 +109,8 @@ def show():
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
                     )
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False},
+                                    key=f"sparkline_{row['region']}")
 
     st.divider()
 
@@ -153,7 +154,7 @@ def show():
             yaxis=dict(range=[0, 100], title='Score (0–100)'),
             height=280, margin=dict(t=40, b=20),
         )
-        st.plotly_chart(fig_score, use_container_width=True)
+        st.plotly_chart(fig_score, use_container_width=True, key=f"drill_score_{selected}")
 
         sample_df = trend_df if len(trend_df) <= 150 else trend_df.iloc[::max(1, len(trend_df) // 150)]
         fig_bar = go.Figure()
@@ -171,7 +172,7 @@ def show():
             yaxis=dict(title='Vehicles'),
             margin=dict(t=40, b=20),
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, use_container_width=True, key=f"drill_bar_{selected}")
 
         fig_lag = go.Figure(go.Scatter(
             x=trend_df['datetime'], y=trend_df['avg_data_lag_seconds'],
@@ -183,7 +184,7 @@ def show():
             height=230, yaxis=dict(title='Seconds'),
             margin=dict(t=40, b=20),
         )
-        st.plotly_chart(fig_lag, use_container_width=True)
+        st.plotly_chart(fig_lag, use_container_width=True, key=f"drill_lag_{selected}")
 
     st.divider()
 
