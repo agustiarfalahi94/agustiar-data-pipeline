@@ -2,10 +2,13 @@ import pandas as pd
 import pytest
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from utils.data_processor import convert_speed_to_kmh, prepare_map_data, get_sorted_regions
+from unittest.mock import patch, MagicMock
+from utils.ingestion import _fetch_endpoint
 
 
 # ── convert_speed_to_kmh ──────────────────────────────────────────────────────
@@ -119,3 +122,27 @@ def test_get_sorted_regions_others_alphabetical():
     result = get_sorted_regions(df)
     assert result[0] == 'Rapid Bus KL'
     assert result[1:] == sorted(result[1:])
+
+
+# ── _fetch_endpoint ───────────────────────────────────────────────────────────
+
+def test_fetch_endpoint_returns_tuple_on_network_error():
+    """_fetch_endpoint must return (list, int) even when the request fails."""
+    with patch('utils.ingestion.requests.get', side_effect=ConnectionError("timeout")):
+        result = _fetch_endpoint("Test Region", "test-endpoint")
+    assert isinstance(result, tuple), "should return a tuple"
+    assert isinstance(result[0], list), "first element should be a list"
+    assert isinstance(result[1], int), "second element should be duration_ms int"
+    assert result[0] == [], "vehicle list should be empty on error"
+    assert result[1] >= 0, "duration should be non-negative"
+
+
+def test_fetch_endpoint_returns_tuple_on_non_200():
+    """_fetch_endpoint must return ([], duration_ms) for non-200 responses."""
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    with patch('utils.ingestion.requests.get', return_value=mock_response):
+        result = _fetch_endpoint("Test Region", "test-endpoint")
+    assert isinstance(result, tuple)
+    assert result[0] == []
+    assert isinstance(result[1], int)

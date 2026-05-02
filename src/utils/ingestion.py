@@ -40,15 +40,16 @@ except ImportError:
 def _fetch_endpoint(name, endpoint):
     """
     Fetch vehicle data from a single API endpoint.
-    Returns a list of vehicle dicts, or an empty list on error.
+    Returns (vehicles, duration_ms) — vehicles is [] on any error.
     """
     url = f'{API_BASE_URL}{endpoint}'
+    t0 = time.time()
     try:
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        duration_ms = int((time.time() - t0) * 1000)
         if response.status_code == 200:
             feed = gtfs_realtime_pb2.FeedMessage()
             feed.ParseFromString(response.content)
-
             vehicles = []
             for entity in feed.entity:
                 if entity.HasField('vehicle'):
@@ -67,10 +68,10 @@ def _fetch_endpoint(name, endpoint):
                         'trip_id': trip_info.get('tripId', ''),
                         'route_id': trip_info.get('routeId', ''),
                     })
-            return vehicles
+            return vehicles, duration_ms
     except Exception as e:
         print(f"Error fetching {name} ({endpoint}): {e}")
-    return []
+    return [], int((time.time() - t0) * 1000)
 
 
 def fetch_and_store_transit_data():
@@ -93,8 +94,12 @@ def fetch_and_store_transit_data():
             executor.submit(_fetch_endpoint, name, endpoint): (name, endpoint)
             for name, endpoint in tasks
         }
+        duration_by_region = {}
         for future in as_completed(future_to_task):
-            all_vehicle_data.extend(future.result())
+            name, endpoint = future_to_task[future]
+            vehicles, duration_ms = future.result()
+            all_vehicle_data.extend(vehicles)
+            duration_by_region[name] = duration_by_region.get(name, 0) + duration_ms
 
     if not all_vehicle_data:
         print("No vehicle data fetched")
