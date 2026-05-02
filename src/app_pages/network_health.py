@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 from utils import db
+from utils.ingestion import fetch_and_store_transit_data
 
 try:
     from config import UTC_OFFSET_HOURS
@@ -45,7 +46,27 @@ def _score_label(score):
     return 'Unreliable'
 
 
+def _clear_caches():
+    _get_health_summary.clear()
+    _get_trend.clear()
+    _get_fetch_log.clear()
+
+
 def show():
+    # Refresh behaviour — same pattern as other pages
+    if st.session_state.auto_refresh:
+        with st.spinner('🛰️ Auto-refreshing...'):
+            fetch_and_store_transit_data()
+            _clear_caches()
+            st.session_state.last_refresh = True
+    else:
+        if st.button("🔄 Refresh Data", type="primary", use_container_width=False):
+            with st.spinner('🛰️ Fetching...'):
+                fetch_and_store_transit_data()
+                _clear_caches()
+                st.session_state.last_refresh = True
+            st.rerun()
+
     st.markdown("## 📡 Network Health")
     st.caption("Per-region data quality tracking — how reliably each transit region reports to the API.")
 
