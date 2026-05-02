@@ -184,6 +184,12 @@ def fetch_and_store_transit_data():
         print("No vehicle data fetched")
         return
 
+    # Count vehicles per region BEFORE filtering (ground truth for quality log)
+    received_by_region = {}
+    for item in all_vehicle_data:
+        r = item.get('region', 'Unknown')
+        received_by_region[r] = received_by_region.get(r, 0) + 1
+
     # ===== Step 2: Clean and filter data =====
     df = pd.DataFrame(all_vehicle_data)
 
@@ -203,6 +209,18 @@ def fetch_and_store_transit_data():
         print("No valid vehicle data after filtering")
         return
 
+    # Count valid vehicles per region AFTER filtering
+    valid_by_region = df.groupby('region').size().to_dict()
+
+    # Compute per-region data lag before inserting
+    df['_lag'] = current_unix - pd.to_numeric(df['timestamp'], errors='coerce').fillna(current_unix)
+    _lag_stats = df.groupby('region')['_lag'].agg(['mean', 'max'])
+    lag_by_region = {
+        region: {'avg': float(row['mean']), 'max': float(row['max'])}
+        for region, row in _lag_stats.iterrows()
+    }
+    df = df.drop(columns=['_lag'])
+
     df['insert_timestamp'] = current_unix
     df['created_at'] = datetime.now(timezone.utc)
 
@@ -221,6 +239,12 @@ def fetch_and_store_transit_data():
         if not table_exists:
             con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
             print(f"✓ Created table and synced {len(df)} vehicles")
+            inserted_by_region = df.groupby('region').size().to_dict()
+            quality_stats = _build_quality_stats(
+                received_by_region, valid_by_region, inserted_by_region,
+                lag_by_region, duration_by_region, current_unix
+            )
+            _write_quality_log(quality_stats, con)
         else:
             columns = con.execute(
                 f"SELECT column_name FROM information_schema.columns WHERE table_name = '{DATABASE_TABLE}'"
@@ -264,6 +288,24 @@ def fetch_and_store_transit_data():
             else:
                 print("⚠ No new data inserted (all records were duplicates)")
 
+            # Capture per-region insert counts for quality log
+            inserted_by_region = {}
+            try:
+                ins_df = con.execute(
+                    f"SELECT region, COUNT(*) as cnt FROM {DATABASE_TABLE} "
+                    f"WHERE insert_timestamp = {current_unix} GROUP BY region"
+                ).df()
+                inserted_by_region = ins_df.set_index('region')['cnt'].to_dict()
+            except Exception:
+                pass
+
+            # Build and write quality log
+            quality_stats = _build_quality_stats(
+                received_by_region, valid_by_region, inserted_by_region,
+                lag_by_region, duration_by_region, current_unix
+            )
+            _write_quality_log(quality_stats, con)
+
             # Prune rows outside the retention window
             try:
                 from config import DATA_RETENTION_DAYS
@@ -271,6 +313,7 @@ def fetch_and_store_transit_data():
                 DATA_RETENTION_DAYS = 7
             cutoff = current_unix - DATA_RETENTION_DAYS * 86400
             con.execute(f"DELETE FROM {DATABASE_TABLE} WHERE insert_timestamp < {cutoff}")
+            con.execute(f"DELETE FROM fetch_quality_log WHERE fetch_timestamp < {cutoff}")
 
     except Exception as e:
         print(f"Database error: {e}")
