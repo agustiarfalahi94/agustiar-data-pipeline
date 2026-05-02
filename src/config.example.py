@@ -42,6 +42,13 @@ ARROW_OPACITY = 200
 DATA_MAX_AGE = 3600
 DATA_FUTURE_TOLERANCE = 300
 
+# Data retention — rows older than this are pruned from DuckDB on each ingestion run.
+# Increase if you need more history for analytics; decrease to save disk space.
+DATA_RETENTION_DAYS = 7
+
+# Primary region displayed first in dropdowns
+PRIMARY_REGION = 'Rapid Bus KL'
+
 # API endpoints mapping
 API_SOURCES = {
     'Rapid Bus KL': ['prasarana?category=rapid-bus-kl'],

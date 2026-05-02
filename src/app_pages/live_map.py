@@ -278,9 +278,9 @@ def show():
                 "ScatterplotLayer",
                 data=accuracy_circle_data,
                 get_position='[lon, lat]',
-                get_radius=30,
-                radius_min_pixels=8,
-                radius_max_pixels=14,
+                get_radius='accuracy',   # metres, matches the GPS accuracy value
+                radius_min_pixels=10,
+                radius_max_pixels=500,
                 get_fill_color=[255, 0, 0, 40],
                 pickable=False,
             )
@@ -425,13 +425,13 @@ def show():
                 # ---- Always show historical position table if trail exists ----
                 if trail_df is not None and not trail_df.empty:
                     display_trail = trail_df[['timestamp', 'latitude', 'longitude', 'speed', 'bearing']].copy()
-                    display_trail['speed'] = display_trail['speed'].round(1)
+                    display_trail['speed'] = (display_trail['speed'] * 3.6).round(1)  # m/s → km/h
                     display_trail['bearing'] = display_trail['bearing'].round(1)
                     display_trail = display_trail.rename(columns={
                         'timestamp': 'Timestamp',
                         'latitude': 'Latitude',
                         'longitude': 'Longitude',
-                        'speed': 'Speed (m/s)',
+                        'speed': 'Speed (km/h)',
                         'bearing': 'Bearing (°)',
                     })
                     st.dataframe(display_trail, use_container_width=True)
