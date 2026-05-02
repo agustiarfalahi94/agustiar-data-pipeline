@@ -4,37 +4,38 @@ from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
 import duckdb
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Constants
-API_SOURCES = {
-    'Rapid Bus KL': ['prasarana?category=rapid-bus-kl'],
-    'Rapid Bus MRT Feeder': ['prasarana?category=rapid-bus-mrtfeeder'],
-    'Rapid Bus Kuantan': ['prasarana?category=rapid-bus-kuantan'],
-    'Rapid Bus Penang': ['prasarana?category=rapid-bus-penang'],
-    'KTM Berhad': ['ktmb'],
-    'myBAS Kangar': ['mybas-kangar'],
-    'myBAS Alor Setar': ['mybas-alor-setar'],
-    'myBAS Kota Bharu': ['mybas-kota-bharu'],
-    'myBAS Kuala Terengganu': ['mybas-kuala-terengganu'],
-    'myBAS Ipoh': ['mybas-ipoh'],
-    'myBAS Seremban': ['mybas-seremban-a', 'mybas-seremban-b'],
-    'myBAS Melaka': ['mybas-melaka'],
-    'myBAS Johor': ['mybas-johor'],
-    'myBAS Kuching': ['mybas-kuching']
-}
-
-API_BASE_URL = 'https://api.data.gov.my/gtfs-realtime/vehicle-position/'
-REQUEST_TIMEOUT = 10
-
 try:
-    from config import DATABASE_NAME, DATABASE_TABLE, DATA_MAX_AGE, DATA_FUTURE_TOLERANCE
+    from config import (
+        DATABASE_NAME, DATABASE_TABLE, DATA_MAX_AGE, DATA_FUTURE_TOLERANCE,
+        API_SOURCES, API_BASE_URL, REQUEST_TIMEOUT,
+    )
 except ImportError:
     DATABASE_NAME = 'agustiar_analytics.duckdb'
     DATABASE_TABLE = 'live_buses'
     DATA_MAX_AGE = 3600
     DATA_FUTURE_TOLERANCE = 300
+    API_SOURCES = {
+        'Rapid Bus KL': ['prasarana?category=rapid-bus-kl'],
+        'Rapid Bus MRT Feeder': ['prasarana?category=rapid-bus-mrtfeeder'],
+        'Rapid Bus Kuantan': ['prasarana?category=rapid-bus-kuantan'],
+        'Rapid Bus Penang': ['prasarana?category=rapid-bus-penang'],
+        'KTM Berhad': ['ktmb'],
+        'myBAS Kangar': ['mybas-kangar'],
+        'myBAS Alor Setar': ['mybas-alor-setar'],
+        'myBAS Kota Bharu': ['mybas-kota-bharu'],
+        'myBAS Kuala Terengganu': ['mybas-kuala-terengganu'],
+        'myBAS Ipoh': ['mybas-ipoh'],
+        'myBAS Seremban': ['mybas-seremban-a', 'mybas-seremban-b'],
+        'myBAS Melaka': ['mybas-melaka'],
+        'myBAS Johor': ['mybas-johor'],
+        'myBAS Kuching': ['mybas-kuching'],
+    }
+    API_BASE_URL = 'https://api.data.gov.my/gtfs-realtime/vehicle-position/'
+    REQUEST_TIMEOUT = 10
+
 
 def _fetch_endpoint(name, endpoint):
     """
@@ -54,7 +55,6 @@ def _fetch_endpoint(name, endpoint):
                     v = MessageToDict(entity.vehicle)
                     pos = v.get('position', {})
                     vehicle_info = v.get('vehicle', {})
-
                     trip_info = v.get('trip', {})
                     vehicles.append({
                         'region': name,
@@ -72,12 +72,11 @@ def _fetch_endpoint(name, endpoint):
         print(f"Error fetching {name} ({endpoint}): {e}")
     return []
 
+
 def fetch_and_store_transit_data():
     """
-    Fetch live transit data from Malaysia GTFS API and store in DuckDB
-    - Fetches data from all configured regions
-    - Filters invalid/stale data
-    - Deduplicates before inserting
+    Fetch live transit data from Malaysia GTFS API and store in DuckDB.
+    Prunes rows older than DATA_RETENTION_DAYS after each successful insert.
     """
     all_vehicle_data = []
     current_unix = int(time.time())
@@ -104,12 +103,10 @@ def fetch_and_store_transit_data():
     # ===== Step 2: Clean and filter data =====
     df = pd.DataFrame(all_vehicle_data)
 
-    # Convert to numeric for filtering
     df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
     df['timestamp_num'] = pd.to_numeric(df['timestamp'], errors='coerce')
 
-    # Filter invalid coordinates and timestamps
     df = df[
         (df['latitude'] != 0) &
         (df['longitude'] != 0) &
@@ -123,12 +120,16 @@ def fetch_and_store_transit_data():
         return
 
     df['insert_timestamp'] = current_unix
-    df['created_at'] = datetime.utcnow()
+    df['created_at'] = datetime.now(timezone.utc)
 
     # ===== Step 3: Store in database with deduplication =====
     try:
         con = duckdb.connect(DATABASE_NAME)
+    except Exception as e:
+        print(f"Database connection error: {e}")
+        return
 
+    try:
         table_exists = con.execute(
             f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
         ).fetchone()[0] > 0
@@ -137,7 +138,6 @@ def fetch_and_store_transit_data():
             con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
             print(f"✓ Created table and synced {len(df)} vehicles")
         else:
-            # Ensure insert_timestamp column exists (for migration)
             columns = con.execute(
                 f"SELECT column_name FROM information_schema.columns WHERE table_name = '{DATABASE_TABLE}'"
             ).df()['column_name'].tolist()
@@ -158,7 +158,6 @@ def fetch_and_store_transit_data():
                 con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN route_id VARCHAR")
                 con.execute(f"UPDATE {DATABASE_TABLE} SET route_id = '' WHERE route_id IS NULL")
 
-            # Insert only non-duplicate records
             con.execute(f"""
                 INSERT INTO {DATABASE_TABLE}
                 SELECT df.* FROM df
@@ -179,11 +178,21 @@ def fetch_and_store_transit_data():
             if inserted_count > 0:
                 print(f"✓ Inserted {inserted_count} new vehicles (skipped duplicates)")
             else:
-                print(f"⚠ No new data inserted (all records were duplicates)")
+                print("⚠ No new data inserted (all records were duplicates)")
 
-        con.close()
+            # Prune rows outside the retention window
+            try:
+                from config import DATA_RETENTION_DAYS
+            except ImportError:
+                DATA_RETENTION_DAYS = 7
+            cutoff = current_unix - DATA_RETENTION_DAYS * 86400
+            con.execute(f"DELETE FROM {DATABASE_TABLE} WHERE insert_timestamp < {cutoff}")
+
     except Exception as e:
         print(f"Database error: {e}")
+    finally:
+        con.close()
+
 
 if __name__ == "__main__":
     fetch_and_store_transit_data()

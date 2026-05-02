@@ -1,34 +1,56 @@
+import time
 import duckdb
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
 try:
-    from config import DATABASE_NAME, DATABASE_TABLE, TIMEZONE, UTC_OFFSET_HOURS
+    from config import DATABASE_NAME, DATABASE_TABLE, TIMEZONE, UTC_OFFSET_HOURS, DATA_RETENTION_DAYS
 except ImportError:
     DATABASE_NAME = 'agustiar_analytics.duckdb'
     DATABASE_TABLE = 'live_buses'
     TIMEZONE = 'Asia/Kuala_Lumpur'
     UTC_OFFSET_HOURS = 8
+    DATA_RETENTION_DAYS = 7
+
 
 def get_connection():
-    """Get database connection with timezone set"""
     con = duckdb.connect(DATABASE_NAME)
     con.execute(f"SET TimeZone='{TIMEZONE}'")
     return con
 
+
+def _format_sync_time(unix_ts):
+    dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc) + timedelta(hours=UTC_OFFSET_HOURS)
+    return f"{dt.day} {dt.strftime('%b %Y %H:%M:%S')}"
+
+
 def table_exists():
-    """Check if table exists"""
     con = get_connection()
-    result = con.execute(
-        f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
-    ).fetchone()[0]
-    con.close()
-    return result > 0
+    try:
+        result = con.execute(
+            f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
+        ).fetchone()[0]
+        return result > 0
+    finally:
+        con.close()
+
+
+def prune_old_data():
+    """Delete rows older than DATA_RETENTION_DAYS to keep the database bounded."""
+    if not table_exists():
+        return
+    cutoff = int(time.time()) - DATA_RETENTION_DAYS * 86400
+    con = get_connection()
+    try:
+        con.execute(f"DELETE FROM {DATABASE_TABLE} WHERE insert_timestamp < {cutoff}")
+    finally:
+        con.close()
+
 
 def get_live_data_optimized():
     """
     Get latest live data for display (last 60 seconds, deduplicated by vehicle)
-    
+
     Returns:
         tuple: (dataframe, metrics_dict, sync_time_string)
             - dataframe: Latest position for each vehicle
@@ -37,22 +59,18 @@ def get_live_data_optimized():
     """
     if not table_exists():
         return None, {}, None
-    
+
     con = get_connection()
-    
+
     try:
-        # Get the most recent timestamp from database (not system time)
         max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
-        
+
         if max_timestamp_raw is None:
-            con.close()
             return pd.DataFrame(), {}, None
-        
+
         max_timestamp = int(max_timestamp_raw)
         sixty_seconds_ago = max_timestamp - 60
-        
-        # Get data from last 60 seconds, keeping only latest per vehicle
-        # trip_id and route_id are included for the Route Viewer GTFS static lookup
+
         query = f"""
         SELECT * FROM (
             SELECT *,
@@ -61,50 +79,40 @@ def get_live_data_optimized():
             WHERE CAST(timestamp AS BIGINT) >= {sixty_seconds_ago}
         ) WHERE rn = 1
         """
-        
+
         df = con.execute(query).df()
-        
+
         if df.empty:
-            con.close()
             return df, {}, None
-        
+
         if 'rn' in df.columns:
             df = df.drop(columns=['rn'])
-        
-        # Get sync time (from the max timestamp)
-        sync_time_str = con.execute(
-            f"SELECT strftime(to_timestamp({max_timestamp}::BIGINT), '%-d %b %Y %H:%M:%S')"
-        ).fetchone()[0]
-        
-        con.close()
-        
-        # Format timestamp column
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
-            df['timestamp_formatted'] = pd.to_datetime(
-                df['timestamp'], unit='s', utc=True
-            ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Ensure trip_id / route_id columns are present (they may be absent on older DBs
-        # before the migration runs for the first time)
-        for col in ('trip_id', 'route_id'):
-            if col not in df.columns:
-                df[col] = ''
-            else:
-                df[col] = df[col].fillna('').astype(str)
 
-        # Calculate metrics
-        metrics = {
-            'total': len(df),
-            'regions': len(df['region'].unique()),
-            'busiest': df['region'].value_counts().idxmax() if len(df) > 0 else 'N/A'
-        }
+        sync_time_str = _format_sync_time(max_timestamp)
 
-        return df, metrics, sync_time_str
-        
-    except Exception as e:
+    finally:
         con.close()
-        raise e
+
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+        df['timestamp_formatted'] = pd.to_datetime(
+            df['timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    for col in ('trip_id', 'route_id'):
+        if col not in df.columns:
+            df[col] = ''
+        else:
+            df[col] = df[col].fillna('').astype(str)
+
+    metrics = {
+        'total': len(df),
+        'regions': len(df['region'].unique()),
+        'busiest': df['region'].value_counts().idxmax() if len(df) > 0 else 'N/A'
+    }
+
+    return df, metrics, sync_time_str
+
 
 def get_vehicle_trail(vehicle_id, region, limit=50):
     """
@@ -132,93 +140,79 @@ def get_vehicle_trail(vehicle_id, region, limit=50):
         LIMIT {int(limit)}
         """
         df = con.execute(query, [vehicle_id, region]).df()
+    finally:
         con.close()
 
-        if df.empty:
-            return df
-
-        # Convert types
-        df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
-        df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
-        df['bearing'] = pd.to_numeric(df['bearing'], errors='coerce').fillna(0)
-        df['speed'] = pd.to_numeric(df['speed'], errors='coerce').fillna(0)
-        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
-
-        # Format timestamp as readable datetime
-        df['timestamp'] = pd.to_datetime(
-            df['timestamp'], unit='s', utc=True
-        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
-
-        # Drop rows with invalid coordinates
-        df = df[
-            df['latitude'].notna() & df['longitude'].notna() &
-            (df['latitude'] != 0) & (df['longitude'] != 0)
-        ]
-
+    if df.empty:
         return df
 
-    except Exception as e:
-        con.close()
-        raise e
+    df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
+    df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
+    df['bearing'] = pd.to_numeric(df['bearing'], errors='coerce').fillna(0)
+    df['speed'] = pd.to_numeric(df['speed'], errors='coerce').fillna(0)
+    df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+
+    df['timestamp'] = pd.to_datetime(
+        df['timestamp'], unit='s', utc=True
+    ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    df = df[
+        df['latitude'].notna() & df['longitude'].notna() &
+        (df['latitude'] != 0) & (df['longitude'] != 0)
+    ]
+
+    return df
 
 
 def get_historical_data():
     """
-    Get ALL historical data for analytics and data table
-    
+    Get historical data for analytics and data table (rolling DATA_RETENTION_DAYS window).
+
     Returns:
         tuple: (dataframe, metrics_dict, sync_time_string)
-            - dataframe: All historical records
+            - dataframe: Records within the retention window
             - metrics_dict: {'regions': int}
             - sync_time_string: Formatted timestamp of most recent data
     """
     if not table_exists():
         return None, {}, None
-    
+
+    cutoff = int(time.time()) - DATA_RETENTION_DAYS * 86400
     con = get_connection()
-    
+
     try:
-        # Get all historical data
-        df = con.execute(f"SELECT * FROM {DATABASE_TABLE}").df()
-        
+        df = con.execute(
+            f"SELECT * FROM {DATABASE_TABLE} WHERE insert_timestamp >= {cutoff}"
+        ).df()
+
         if df.empty:
-            con.close()
             return df, {}, None
-        
-        # Get sync time (most recent timestamp)
-        sync_time_str = con.execute(
-            f"SELECT strftime(to_timestamp(MAX(timestamp)::BIGINT), '%-d %b %Y %H:%M:%S') FROM {DATABASE_TABLE}"
-        ).fetchone()[0]
-        
-        con.close()
-        
-        # Format timestamp column once - fix deprecation warning by converting to numeric first
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
-            df['timestamp_formatted'] = pd.to_datetime(
-                df['timestamp'], unit='s', utc=True
-            ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Format insert_timestamp for display
-        if 'insert_timestamp' in df.columns:
-            df['insert_timestamp'] = pd.to_numeric(df['insert_timestamp'], errors='coerce')
-            df['insert_timestamp_formatted'] = pd.to_datetime(
-                df['insert_timestamp'], unit='s', utc=True
-            ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Format created_at for display
-        if 'created_at' in df.columns:
-            df['created_at_formatted'] = pd.to_datetime(
-                df['created_at'], utc=True, errors='coerce'
-            ).dt.tz_convert(TIMEZONE).dt.strftime('%-d %b %Y, %H:%M')
+        max_ts_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
+        sync_time_str = _format_sync_time(int(max_ts_raw)) if max_ts_raw else None
 
-        # Calculate metrics (only regions for historical data)
-        metrics = {
-            'regions': len(df['region'].unique())
-        }
-        
-        return df, metrics, sync_time_str
-        
-    except Exception as e:
+    finally:
         con.close()
-        raise e
+
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+        df['timestamp_formatted'] = pd.to_datetime(
+            df['timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    if 'insert_timestamp' in df.columns:
+        df['insert_timestamp'] = pd.to_numeric(df['insert_timestamp'], errors='coerce')
+        df['insert_timestamp_formatted'] = pd.to_datetime(
+            df['insert_timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    if 'created_at' in df.columns:
+        df['created_at_formatted'] = pd.to_datetime(
+            df['created_at'], utc=True, errors='coerce'
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%-d %b %Y, %H:%M')
+
+    metrics = {
+        'regions': len(df['region'].unique())
+    }
+
+    return df, metrics, sync_time_str

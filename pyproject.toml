@@ -2,13 +2,25 @@
 name = "malaysia-transit-tracker"
 version = "2.0.0"
 description = "Real-time transit tracking dashboard for Malaysia"
-authors = [{name = "Agustiar Falahi", email = "your.email@example.com"}]
+authors = [{name = "Agustiar Falahi", email = "agustiarfalahi@gmail.com"}]
 requires-python = ">=3.8"
 dependencies = [
     "streamlit>=1.28.0",
+    "streamlit-autorefresh>=1.0.1",
+    "streamlit-js-eval>=0.1.7",
     "pandas>=2.0.0",
     "duckdb>=0.9.0",
-    # ... other dependencies
+    "numpy>=1.24.0",
+    "pydeck>=0.8.0",
+    "plotly>=5.14.0",
+    "requests>=2.31.0",
+    "gtfs-realtime-bindings>=1.0.0",
+    "protobuf>=4.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
 ]
 
 [project.urls]

@@ -1,7 +1,7 @@
 import pandas as pd
 
 try:
-    from config import REGIONS
+    from config import REGIONS, PRIMARY_REGION
 except ImportError:
     REGIONS = [
         'Rapid Bus KL', 'Rapid Bus MRT Feeder', 'Rapid Bus Kuantan', 'Rapid Bus Penang',
@@ -9,6 +9,7 @@ except ImportError:
         'myBAS Kuala Terengganu', 'myBAS Ipoh', 'myBAS Seremban',
         'myBAS Melaka', 'myBAS Johor', 'myBAS Kuching',
     ]
+    PRIMARY_REGION = 'Rapid Bus KL'
 
 def convert_speed_to_kmh(df, speed_column='speed'):
     """
@@ -27,11 +28,10 @@ def convert_speed_to_kmh(df, speed_column='speed'):
     return df
 
 def get_sorted_regions(df):
-    """Get available regions sorted with Rapid Bus KL first"""
-    primary = ['Rapid Bus KL']
+    """Get available regions sorted with PRIMARY_REGION first"""
     available = df['region'].unique().tolist()
-    others = sorted([r for r in available if r != 'Rapid Bus KL'])
-    return [r for r in primary if r in available] + others
+    others = sorted([r for r in available if r != PRIMARY_REGION])
+    return ([PRIMARY_REGION] if PRIMARY_REGION in available else []) + others
 
 def prepare_map_data(df, region):
     """
