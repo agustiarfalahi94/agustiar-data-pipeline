@@ -11,25 +11,6 @@ except ImportError:
     UTC_OFFSET_HOURS = 8
 
 
-# ── Cached DB accessors (TTL 60s — avoids 14+ queries per auto-refresh rerun) ─
-
-@st.cache_data(ttl=60)
-def _get_health_summary():
-    return db.get_network_health_summary(window_hours=24)
-
-
-@st.cache_data(ttl=60)
-def _get_trend(region, window_hours):
-    return db.get_region_health_trend(region, window_hours=window_hours)
-
-
-@st.cache_data(ttl=60)
-def _get_fetch_log(region):
-    return db.get_region_fetch_log(region, limit=100)
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
 def _score_color(score):
     if score >= 80:
         return '#2ecc71'
@@ -46,36 +27,28 @@ def _score_label(score):
     return 'Unreliable'
 
 
-def _clear_caches():
-    _get_health_summary.clear()
-    _get_trend.clear()
-    _get_fetch_log.clear()
-
-
 def show():
-    # Refresh behaviour — same pattern as other pages
+    # Identical refresh pattern to every other page — no special treatment
     if st.session_state.auto_refresh:
         with st.spinner('🛰️ Auto-refreshing...'):
             fetch_and_store_transit_data()
-            _clear_caches()
             st.session_state.last_refresh = True
     else:
         if st.button("🔄 Refresh Data", type="primary", use_container_width=False):
             with st.spinner('🛰️ Fetching...'):
                 fetch_and_store_transit_data()
-                _clear_caches()
                 st.session_state.last_refresh = True
             st.rerun()
 
     st.markdown("## 📡 Network Health")
     st.caption("Per-region data quality tracking — how reliably each transit region reports to the API.")
 
-    health_df = _get_health_summary()
+    health_df = db.get_network_health_summary(window_hours=24)
 
     # Thin-data / no-data notice
     provisional = False
     if health_df.empty:
-        st.info("No quality data yet. Click **Refresh Data** on the Live Map page (or enable auto-refresh) to start building history.")
+        st.info("No quality data yet. Click **Refresh Data** or enable auto-refresh to start building history.")
         return
     if health_df['total_fetches'].max() < 10:
         st.info("⚠️ Reliability scores improve with more data. Enable auto-refresh to build history.")
@@ -105,12 +78,6 @@ def show():
     if provisional:
         st.caption("Provisional — fewer than 10 fetch cycles recorded.")
 
-    # Pre-load sparklines for all regions (single cached call per region)
-    trend_cache = {
-        row['region']: _get_trend(row['region'], 24)
-        for _, row in health_df.iterrows()
-    }
-
     regions = health_df.to_dict('records')
     for i in range(0, len(regions), 4):
         cols = st.columns(4)
@@ -134,7 +101,7 @@ def show():
                 </div>
                 """, unsafe_allow_html=True)
 
-                t_df = trend_cache.get(row['region'], pd.DataFrame())
+                t_df = db.get_region_health_trend(row['region'], window_hours=24)
                 if not t_df.empty and 'reliability_score' in t_df.columns:
                     fig = go.Figure(go.Scatter(
                         y=t_df['reliability_score'],
@@ -179,7 +146,7 @@ def show():
     )
     window_hours = window_map[window_label]
 
-    trend_df = _get_trend(selected, window_hours)
+    trend_df = db.get_region_health_trend(selected, window_hours=window_hours)
 
     if trend_df.empty:
         st.info("No data for this region in the selected window.")
@@ -231,7 +198,7 @@ def show():
 
     # ── Section 4: Raw Fetch Log ─────────────────────────────────────────────
     st.markdown("### 📋 Raw Fetch Log")
-    log_df = _get_fetch_log(selected)
+    log_df = db.get_region_fetch_log(selected, limit=100)
 
     if log_df.empty:
         st.info("No fetch log entries for this region.")
