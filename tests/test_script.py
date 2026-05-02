@@ -318,3 +318,47 @@ def test_get_network_health_summary_returns_empty_when_no_table():
         # db may not exist if never opened
         if os.path.exists(db_path):
             os.unlink(db_path)
+
+
+def test_get_region_health_trend_returns_time_series():
+    now = int(time.time())
+    rows = [
+        {'fetch_timestamp': now - (i * 20), 'region': 'Rapid Bus KL',
+         'vehicles_received': 50, 'vehicles_rejected': 2, 'vehicles_inserted': 45,
+         'avg_data_lag_seconds': 15.0, 'max_data_lag_seconds': 40.0,
+         'total_dropout': False, 'fetch_duration_ms': 700}
+        for i in range(5)
+    ]
+    db_path = _make_temp_quality_db(rows)
+    try:
+        with patch('utils.db.DATABASE_NAME', db_path):
+            from utils import db as _db
+            result = _db.get_region_health_trend('Rapid Bus KL', window_hours=1)
+        assert len(result) == 5
+        assert 'reliability_score' in result.columns
+        assert 'datetime' in result.columns
+        assert 'avg_data_lag_seconds' in result.columns
+        assert 'vehicles_received' in result.columns
+    finally:
+        os.unlink(db_path)
+
+
+def test_get_region_fetch_log_returns_most_recent_first():
+    now = int(time.time())
+    rows = [
+        {'fetch_timestamp': now - (i * 20), 'region': 'KTM Berhad',
+         'vehicles_received': 30, 'vehicles_rejected': 1, 'vehicles_inserted': 28,
+         'avg_data_lag_seconds': 25.0, 'max_data_lag_seconds': 70.0,
+         'total_dropout': False, 'fetch_duration_ms': 500}
+        for i in range(10)
+    ]
+    db_path = _make_temp_quality_db(rows)
+    try:
+        with patch('utils.db.DATABASE_NAME', db_path):
+            from utils import db as _db
+            result = _db.get_region_fetch_log('KTM Berhad', limit=5)
+        assert len(result) == 5
+        assert 'datetime' in result.columns
+        assert result.iloc[0]['fetch_timestamp'] >= result.iloc[1]['fetch_timestamp']
+    finally:
+        os.unlink(db_path)
