@@ -174,10 +174,10 @@ def fetch_and_store_transit_data():
         _guard_con = duckdb.connect(DATABASE_NAME)
         try:
             recent = _guard_con.execute(
-                f"SELECT COUNT(*) FROM fetch_quality_log WHERE fetch_timestamp >= {current_unix - 15}"
+                f"SELECT COUNT(*) FROM fetch_quality_log WHERE fetch_timestamp >= {current_unix - 3}"
             ).fetchone()[0]
             if recent > 0:
-                print("⚡ Skipping fetch — already ran within last 15 seconds")
+                print("⚡ Skipping fetch — already ran within last 3 seconds")
                 return
         finally:
             _guard_con.close()

@@ -233,7 +233,7 @@ def test_fetch_guard_skips_when_recent_fetch_exists():
             )
         """)
         con.execute(
-            f"INSERT INTO fetch_quality_log VALUES ({int(time.time()) - 5}, 'Test', 0, 0, 0, 0, 0, false, 0)"
+            f"INSERT INTO fetch_quality_log VALUES ({int(time.time()) - 1}, 'Test', 0, 0, 0, 0, 0, false, 0)"
         )
         con.close()
 
