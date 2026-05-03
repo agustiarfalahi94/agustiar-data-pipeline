@@ -1,14 +1,16 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import duckdb
 from datetime import datetime, timezone, timedelta
 from utils import db
 from utils.ingestion import fetch_and_store_transit_data
 
 try:
-    from config import UTC_OFFSET_HOURS
+    from config import UTC_OFFSET_HOURS, DATABASE_NAME
 except ImportError:
     UTC_OFFSET_HOURS = 8
+    DATABASE_NAME = 'agustiar_analytics.duckdb'
 
 
 def _score_color(score):
@@ -42,6 +44,38 @@ def show():
 
     st.markdown("## 📡 Network Health")
     st.caption("Per-region data quality tracking — how reliably each transit region reports to the API.")
+
+    # ── Debug panel (remove once issue is resolved) ──────────────────────────
+    with st.expander("🔍 Debug — DB state", expanded=True):
+        try:
+            _con = duckdb.connect(DATABASE_NAME)
+            try:
+                tables = _con.execute(
+                    "SELECT table_name FROM information_schema.tables ORDER BY table_name"
+                ).df()
+                st.write("**Tables in DB:**", tables['table_name'].tolist())
+
+                quality_exists = 'fetch_quality_log' in tables['table_name'].tolist()
+                st.write("**fetch_quality_log exists:**", quality_exists)
+
+                if quality_exists:
+                    row_count = _con.execute("SELECT COUNT(*) FROM fetch_quality_log").fetchone()[0]
+                    st.write("**fetch_quality_log row count:**", row_count)
+                    if row_count > 0:
+                        latest = _con.execute(
+                            "SELECT * FROM fetch_quality_log ORDER BY fetch_timestamp DESC LIMIT 5"
+                        ).df()
+                        st.dataframe(latest)
+                    else:
+                        st.warning("Table exists but has 0 rows.")
+
+                live_count = _con.execute("SELECT COUNT(*) FROM live_buses").fetchone()[0]
+                st.write("**live_buses row count:**", live_count)
+            finally:
+                _con.close()
+        except Exception as e:
+            st.error(f"Debug query failed: {e}")
+    # ── End debug panel ───────────────────────────────────────────────────────
 
     health_df = db.get_network_health_summary(window_hours=24)
 
