@@ -112,9 +112,18 @@ def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region
     return stats
 
 
-def _write_quality_log(stats_list, con):
-    """Write quality stats rows to fetch_quality_log. Creates table if needed."""
+def _write_quality_log(stats_list):
+    """Write quality stats to fetch_quality_log using its own connection.
+
+    Opens a fresh connection so it is never affected by in-memory state
+    (e.g. registered DataFrames) left over from the main insert connection.
+    """
     if not stats_list:
+        return
+    try:
+        con = duckdb.connect(DATABASE_NAME)
+    except Exception as e:
+        print(f"Quality log connection error: {e}")
         return
     try:
         con.execute("""
@@ -130,20 +139,24 @@ def _write_quality_log(stats_list, con):
                 fetch_duration_ms INTEGER
             )
         """)
-        # Use parameterised inserts — avoids DuckDB's frame-based variable
-        # lookup which is unreliable when the connection crosses function boundaries.
-        rows = [
-            (s['fetch_timestamp'], s['region'], s['vehicles_received'],
-             s['vehicles_rejected'], s['vehicles_inserted'],
-             s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
-             bool(s['total_dropout']), s['fetch_duration_ms'])
-            for s in stats_list
-        ]
-        con.executemany(
-            "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)", rows
-        )
+        for s in stats_list:
+            con.execute(
+                "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)",
+                [s['fetch_timestamp'], s['region'], s['vehicles_received'],
+                 s['vehicles_rejected'], s['vehicles_inserted'],
+                 s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
+                 bool(s['total_dropout']), s['fetch_duration_ms']]
+            )
+        try:
+            from config import DATA_RETENTION_DAYS as _DRD
+        except ImportError:
+            _DRD = 7
+        cutoff = stats_list[0]['fetch_timestamp'] - _DRD * 86400
+        con.execute(f"DELETE FROM fetch_quality_log WHERE fetch_timestamp < {cutoff}")
     except Exception as e:
-        print(f"Quality log write error (non-fatal): {e}")
+        print(f"Quality log write error: {e}")
+    finally:
+        con.close()
 
 
 def fetch_and_store_transit_data():
@@ -235,6 +248,8 @@ def fetch_and_store_transit_data():
     df['created_at'] = datetime.now(timezone.utc)
 
     # ===== Step 3: Store in database with deduplication =====
+    quality_stats = []  # collected here, written after con is closed
+
     try:
         con = duckdb.connect(DATABASE_NAME)
     except Exception as e:
@@ -250,11 +265,6 @@ def fetch_and_store_transit_data():
             con.execute(f"CREATE TABLE {DATABASE_TABLE} AS SELECT * FROM df")
             print(f"✓ Created table and synced {len(df)} vehicles")
             inserted_by_region = df.groupby('region').size().to_dict()
-            quality_stats = _build_quality_stats(
-                received_by_region, valid_by_region, inserted_by_region,
-                lag_by_region, duration_by_region, current_unix
-            )
-            _write_quality_log(quality_stats, con)
         else:
             columns = con.execute(
                 f"SELECT column_name FROM information_schema.columns WHERE table_name = '{DATABASE_TABLE}'"
@@ -292,13 +302,11 @@ def fetch_and_store_transit_data():
             """)
 
             inserted_count = con.execute("SELECT changes()").fetchone()[0]
-
             if inserted_count > 0:
                 print(f"✓ Inserted {inserted_count} new vehicles (skipped duplicates)")
             else:
                 print("⚠ No new data inserted (all records were duplicates)")
 
-            # Capture per-region insert counts for quality log
             inserted_by_region = {}
             try:
                 ins_df = con.execute(
@@ -309,26 +317,26 @@ def fetch_and_store_transit_data():
             except Exception:
                 pass
 
-            # Build and write quality log
-            quality_stats = _build_quality_stats(
-                received_by_region, valid_by_region, inserted_by_region,
-                lag_by_region, duration_by_region, current_unix
-            )
-            _write_quality_log(quality_stats, con)
-
-            # Prune rows outside the retention window
+            # Prune live_buses while connection is still open
             try:
                 from config import DATA_RETENTION_DAYS
             except ImportError:
                 DATA_RETENTION_DAYS = 7
             cutoff = current_unix - DATA_RETENTION_DAYS * 86400
             con.execute(f"DELETE FROM {DATABASE_TABLE} WHERE insert_timestamp < {cutoff}")
-            con.execute(f"DELETE FROM fetch_quality_log WHERE fetch_timestamp < {cutoff}")
+
+        quality_stats = _build_quality_stats(
+            received_by_region, valid_by_region, inserted_by_region,
+            lag_by_region, duration_by_region, current_unix
+        )
 
     except Exception as e:
         print(f"Database error: {e}")
     finally:
-        con.close()
+        con.close()  # always close before touching fetch_quality_log
+
+    # Write quality log with a fresh connection — main con is fully closed above
+    _write_quality_log(quality_stats)
 
 
 if __name__ == "__main__":
