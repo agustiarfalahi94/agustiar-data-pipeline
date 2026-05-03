@@ -15,9 +15,14 @@ DIAGNOSTICS = {
     'fetch_calls': 0,
     'guard_blocks': 0,
     'fetches_with_data': 0,
+    'df_empty_returns': 0,
+    'main_db_exceptions': 0,
+    'quality_stats_built_count': 0,
     'quality_writes_attempted': 0,
     'quality_writes_succeeded': 0,
     'quality_writes_failed': 0,
+    'last_main_db_error': None,
+    'last_main_db_traceback': None,
     'last_quality_error': None,
     'last_quality_traceback': None,
     'last_rows_count_before_write': None,
@@ -263,6 +268,7 @@ def fetch_and_store_transit_data():
     ].drop(columns=['timestamp_num']).copy()
 
     if df.empty:
+        DIAGNOSTICS['df_empty_returns'] += 1
         print("No valid vehicle data after filtering")
         return
 
@@ -363,8 +369,12 @@ def fetch_and_store_transit_data():
             received_by_region, valid_by_region, inserted_by_region,
             lag_by_region, duration_by_region, current_unix
         )
+        DIAGNOSTICS['quality_stats_built_count'] += 1
 
     except Exception as e:
+        DIAGNOSTICS['main_db_exceptions'] += 1
+        DIAGNOSTICS['last_main_db_error'] = str(e)
+        DIAGNOSTICS['last_main_db_traceback'] = traceback.format_exc()
         print(f"Database error: {e}")
     finally:
         con.close()  # always close before touching fetch_quality_log
