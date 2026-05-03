@@ -341,12 +341,7 @@ def fetch_and_store_transit_data():
                 )
             """)
 
-            inserted_count = con.execute("SELECT changes()").fetchone()[0]
-            if inserted_count > 0:
-                print(f"✓ Inserted {inserted_count} new vehicles (skipped duplicates)")
-            else:
-                print("⚠ No new data inserted (all records were duplicates)")
-
+            # DuckDB has no SQLite-style changes() — count rows by insert_timestamp instead
             inserted_by_region = {}
             try:
                 ins_df = con.execute(
@@ -356,6 +351,12 @@ def fetch_and_store_transit_data():
                 inserted_by_region = ins_df.set_index('region')['cnt'].to_dict()
             except Exception:
                 pass
+
+            inserted_count = sum(inserted_by_region.values())
+            if inserted_count > 0:
+                print(f"✓ Inserted {inserted_count} new vehicles (skipped duplicates)")
+            else:
+                print("⚠ No new data inserted (all records were duplicates)")
 
             # Prune live_buses while connection is still open
             try:
