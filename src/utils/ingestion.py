@@ -4,8 +4,26 @@ from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
 import duckdb
 import time
+import traceback
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+# Module-level diagnostics — survive across Streamlit reruns within a session.
+# Read by the Network Health debug panel.
+DIAGNOSTICS = {
+    'fetch_calls': 0,
+    'guard_blocks': 0,
+    'fetches_with_data': 0,
+    'quality_writes_attempted': 0,
+    'quality_writes_succeeded': 0,
+    'quality_writes_failed': 0,
+    'last_quality_error': None,
+    'last_quality_traceback': None,
+    'last_rows_count_before_write': None,
+    'last_rows_count_after_write': None,
+    'last_fetch_timestamp_used': None,
+}
 
 try:
     from config import (
@@ -113,17 +131,17 @@ def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region
 
 
 def _write_quality_log(stats_list):
-    """Write quality stats to fetch_quality_log using its own connection.
-
-    Opens a fresh connection so it is never affected by in-memory state
-    (e.g. registered DataFrames) left over from the main insert connection.
-    """
+    """Write quality stats to fetch_quality_log using its own connection."""
     if not stats_list:
         return
+    DIAGNOSTICS['quality_writes_attempted'] += 1
+    DIAGNOSTICS['last_fetch_timestamp_used'] = stats_list[0]['fetch_timestamp']
     try:
         con = duckdb.connect(DATABASE_NAME)
     except Exception as e:
-        print(f"Quality log connection error: {e}")
+        DIAGNOSTICS['quality_writes_failed'] += 1
+        DIAGNOSTICS['last_quality_error'] = f"connect: {e}"
+        DIAGNOSTICS['last_quality_traceback'] = traceback.format_exc()
         return
     try:
         con.execute("""
@@ -139,6 +157,9 @@ def _write_quality_log(stats_list):
                 fetch_duration_ms INTEGER
             )
         """)
+        before = con.execute("SELECT COUNT(*) FROM fetch_quality_log").fetchone()[0]
+        DIAGNOSTICS['last_rows_count_before_write'] = before
+
         for s in stats_list:
             con.execute(
                 "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)",
@@ -147,14 +168,23 @@ def _write_quality_log(stats_list):
                  s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
                  bool(s['total_dropout']), s['fetch_duration_ms']]
             )
+
+        after = con.execute("SELECT COUNT(*) FROM fetch_quality_log").fetchone()[0]
+        DIAGNOSTICS['last_rows_count_after_write'] = after
+
         try:
             from config import DATA_RETENTION_DAYS as _DRD
         except ImportError:
             _DRD = 7
         cutoff = stats_list[0]['fetch_timestamp'] - _DRD * 86400
         con.execute(f"DELETE FROM fetch_quality_log WHERE fetch_timestamp < {cutoff}")
+        DIAGNOSTICS['quality_writes_succeeded'] += 1
+        DIAGNOSTICS['last_quality_error'] = None
+        DIAGNOSTICS['last_quality_traceback'] = None
     except Exception as e:
-        print(f"Quality log write error: {e}")
+        DIAGNOSTICS['quality_writes_failed'] += 1
+        DIAGNOSTICS['last_quality_error'] = str(e)
+        DIAGNOSTICS['last_quality_traceback'] = traceback.format_exc()
     finally:
         con.close()
 
@@ -164,6 +194,7 @@ def fetch_and_store_transit_data():
     Fetch live transit data from Malaysia GTFS API and store in DuckDB.
     Prunes rows older than DATA_RETENTION_DAYS after each successful insert.
     """
+    DIAGNOSTICS['fetch_calls'] += 1
     all_vehicle_data = []
     current_unix = int(time.time())
 
@@ -177,6 +208,7 @@ def fetch_and_store_transit_data():
                 f"SELECT COUNT(*) FROM fetch_quality_log WHERE fetch_timestamp >= {current_unix - 3}"
             ).fetchone()[0]
             if recent > 0:
+                DIAGNOSTICS['guard_blocks'] += 1
                 print("⚡ Skipping fetch — already ran within last 3 seconds")
                 return
         finally:
@@ -206,6 +238,8 @@ def fetch_and_store_transit_data():
     if not all_vehicle_data:
         print("No vehicle data fetched")
         return
+
+    DIAGNOSTICS['fetches_with_data'] += 1
 
     # Count vehicles per region BEFORE filtering (ground truth for quality log)
     received_by_region = {}
