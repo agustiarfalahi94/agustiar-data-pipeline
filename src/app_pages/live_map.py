@@ -182,6 +182,20 @@ def show():
     df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
     df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
 
+    # Resolve human-readable route names from GTFS Static for all unique route_ids
+    agency_slug = gtfs_static.STATIC_API_SOURCES.get(selected_region, '')
+    if agency_slug and 'route_id' in df_map.columns:
+        unique_routes = df_map['route_id'].dropna().unique()
+        route_name_cache = {
+            rid: gtfs_static.get_route_name(agency_slug, rid)
+            for rid in unique_routes if rid
+        }
+        df_map['route_display'] = df_map['route_id'].map(
+            lambda rid: route_name_cache.get(rid) or rid or '—'
+        )
+    else:
+        df_map['route_display'] = df_map.get('route_id', '—').fillna('—')
+
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
 
@@ -295,7 +309,7 @@ def show():
             initial_view_state=view_state,
             layers=layers,
             tooltip={
-                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°",
+                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
         )
