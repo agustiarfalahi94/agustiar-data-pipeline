@@ -16,11 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI running `dbt build --target ci` (seed → run → test) and pytest on every push/PR, plus a separate informational `dbt source freshness` step (`dbt build` does not run freshness; the committed fixtures carry fixed, old timestamps, so the step is `continue-on-error`)
 - `dbt_runner.ensure_dbt_models` — creates the mart views once after the first ingestion (bootstraps Streamlit Cloud). It requires **all three** marts before skipping, gives up after two failed attempts per process so a doomed bootstrap cannot stall every ~20s auto-refresh, and invokes dbt via `sys.executable -m dbt.cli.main` rather than a bare `dbt` on `PATH`
 - Model lineage diagram (Mermaid) in the README's new "Data Modeling (dbt)" section
+- Regression test (`tests/test_dbt_marts.py`) asserting `dbt ls --target dev --resource-type seed` returns no seed nodes while `--target ci` does — guarding the seed-disabled-on-`dev` data-loss fix with an explicit check
 
 ### Changed
 - Network Health reads (`get_network_health_summary`, `get_region_health_trend`) and the Analytics region charts now query dbt marts instead of inline SQL; the live-map path is unchanged
 - `get_network_health_summary()` no longer takes a `window_hours` argument — the mart bakes in the 24h window, so the parameter was ignored — and now orders explicitly by `reliability_score DESC` instead of relying on a view's inner `ORDER BY`
 - dbt seeds are enabled only on the `ci` target. They are CI fixtures named identically to the real app tables, so an unqualified `dbt build` against a live database would have truncated ingested history; the documented local command is now `dbt run` / `dbt test`
+- The `ci` target now resolves its DuckDB path from its own `DBT_CI_DUCKDB_PATH` env var (default `ci.duckdb`), never `DBT_DUCKDB_PATH` — closing a gap where a shell that had exported `DBT_DUCKDB_PATH` to the real app database would have had `dbt build --target ci` truncate it, since seeds are enabled on that target
 - Minimum Python raised to **3.9** (`pyproject.toml`, README badge) — dbt-core does not support 3.8; CI runs 3.11
 - Analytics page now shows a refresh hint instead of a blank bar and pie when regional vehicle counts are unavailable
 

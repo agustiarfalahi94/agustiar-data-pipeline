@@ -11,8 +11,10 @@ transit:
 
     # CI only, against a throwaway DuckDB file. Seeds are enabled here so
     # `dbt build --target ci` exercises the models and tests on fixed fixtures.
+    # Uses its OWN env var (DBT_CI_DUCKDB_PATH), never DBT_DUCKDB_PATH, so this
+    # target can never resolve to the real app database and truncate it.
     ci:
       type: duckdb
-      path: "{{ env_var('DBT_DUCKDB_PATH', '../src/agustiar_analytics.duckdb') }}"
+      path: "{{ env_var('DBT_CI_DUCKDB_PATH', 'ci.duckdb') }}"
       schema: main
       threads: 1

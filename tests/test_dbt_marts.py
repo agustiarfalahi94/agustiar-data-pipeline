@@ -13,7 +13,10 @@ DBT = [sys.executable, "-m", "dbt.cli.main"]
 @pytest.fixture(scope="module")
 def built_db(tmp_path_factory):
     db_path = tmp_path_factory.mktemp("dbt") / "test.duckdb"
-    env = {**os.environ, "DBT_DUCKDB_PATH": str(db_path)}
+    # The `ci` target reads its path from DBT_CI_DUCKDB_PATH only (see
+    # transform/profiles.yml) - it never falls back to DBT_DUCKDB_PATH, so
+    # only the CI var needs to be set here to point at the tmp file.
+    env = {**os.environ, "DBT_CI_DUCKDB_PATH": str(db_path)}
     # --target ci is mandatory: the seeds shadow the real app tables, so they
     # are disabled on every other target. This DB is a throwaway tmp file.
     common = ["--target", "ci",
@@ -60,6 +63,32 @@ def test_region_vehicle_counts(built_db):
         "WHERE region = 'TestRegion'"
     ).fetchone()[0]
     assert count == 2  # V1 and V2 (BadCoords row filtered out in staging)
+
+
+def test_seeds_disabled_on_dev_target():
+    """Regression guard for the data-loss bug: seeds must never be loadable on
+    `dev`. The seed fixtures are named identically to the real app tables
+    (`live_buses`, `fetch_quality_log`) - if they were ever enabled there,
+    `dbt seed`/`dbt build` against a real database would truncate ingested
+    history. This does not build anything; it only asks dbt which seed nodes
+    would be selected on each target.
+    """
+    common = ["--resource-type", "seed",
+              "--project-dir", TRANSFORM, "--profiles-dir", TRANSFORM]
+
+    dev_result = subprocess.run(
+        [*DBT, "--quiet", "ls", "--target", "dev", *common],
+        check=True, capture_output=True, text=True, cwd=REPO,
+    )
+    dev_seeds = [line for line in dev_result.stdout.splitlines() if line.strip()]
+    assert dev_seeds == [], f"seeds must be disabled on dev, got: {dev_seeds}"
+
+    ci_result = subprocess.run(
+        [*DBT, "--quiet", "ls", "--target", "ci", *common],
+        check=True, capture_output=True, text=True, cwd=REPO,
+    )
+    ci_seeds = [line for line in ci_result.stdout.splitlines() if line.strip()]
+    assert ci_seeds, "expected seed nodes to be selected on --target ci"
 
 
 def test_staging_drops_null_and_null_island_coordinates(built_db):

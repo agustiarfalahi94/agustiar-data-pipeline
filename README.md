@@ -303,7 +303,10 @@ Run locally against your own database:
 > `transform/seeds/` are CI fixtures deliberately named after the real tables (`live_buses`,
 > `fetch_quality_log`). They are disabled on every target except `ci`, so this is belt-and-braces
 > — but `dbt run` never loads seeds at all. Seeded runs belong on a throwaway database:
-> `dbt build --target ci ...`.
+> `dbt build --target ci ...`. The `ci` target reads its DuckDB path from its **own** env var,
+> `DBT_CI_DUCKDB_PATH` (default `ci.duckdb`, created relative to wherever `dbt` is invoked from
+> — repo root in the commands above and in CI) — it never falls back to `DBT_DUCKDB_PATH`, so
+> `--target ci` cannot resolve to the same file as `dev` no matter what you've exported above.
 
 For the full interactive lineage graph:
 
