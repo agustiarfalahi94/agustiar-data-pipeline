@@ -43,6 +43,9 @@ data/processed/
 *.json
 *.parquet
 
+# dbt CI seed fixtures (intentional, checked-in test data)
+!transform/seeds/*.csv
+
 # Backup files
 *.bak
 *.old

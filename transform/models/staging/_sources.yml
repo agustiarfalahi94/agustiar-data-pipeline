@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: transit
+    schema: main
+    tables:
+      - name: live_buses
+      - name: fetch_quality_log
+        loaded_at_field: to_timestamp(fetch_timestamp)
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 120, period: minute}
