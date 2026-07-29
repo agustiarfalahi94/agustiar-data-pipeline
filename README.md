@@ -71,10 +71,16 @@ agustiar-data-pipeline/
 │       ├── data_processor.py     # Speed conversion, filtering, display formatting
 │       └── gtfs_static.py        # GTFS Static ZIP download, caching, shape/route lookup
 │
-├── transform/                    # dbt-duckdb project (transformation layer scaffold)
+├── transform/                    # dbt-duckdb project (analytics transformation layer)
 │   ├── dbt_project.yml
 │   ├── profiles.yml
-│   └── packages.yml
+│   ├── packages.yml
+│   ├── macros/
+│   │   └── reliability_score.sql # Single definition of the 0–100 score formula
+│   ├── models/
+│   │   ├── staging/              # Silver — cleaned views over the raw tables
+│   │   └── marts/                # Gold — analytical views read by the app
+│   └── seeds/                    # CI fixtures for dbt build/test
 │
 ├── tests/
 ├── docs/
