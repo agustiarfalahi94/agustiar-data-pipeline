@@ -2,9 +2,10 @@
 
 A web dashboard for tracking live bus and rail positions across Malaysia with real-time updates, interactive maps, route visualisation, and comprehensive analytics.
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml)
 
 **🚀 [Live Demo](https://malaysia-realtime-transit-tracker.streamlit.app/)**
 
@@ -70,6 +71,18 @@ agustiar-data-pipeline/
 │       ├── data_processor.py     # Speed conversion, filtering, display formatting
 │       └── gtfs_static.py        # GTFS Static ZIP download, caching, shape/route lookup
 │
+├── transform/                    # dbt-duckdb project (analytics transformation layer)
+│   ├── dbt_project.yml
+│   ├── profiles.yml
+│   ├── macros/
+│   │   ├── reliability_score.sql # Single definition of the 0–100 score formula
+│   │   ├── test_accepted_range.sql            # Generic test: value within [min, max]
+│   │   └── test_unique_combination_of_columns.sql # Generic test: composite-key uniqueness
+│   ├── models/
+│   │   ├── staging/              # Silver — cleaned views over the raw tables
+│   │   └── marts/                # Gold — analytical views read by the app
+│   └── seeds/                    # CI fixtures for dbt build/test
+│
 ├── tests/
 ├── docs/
 ├── .gitignore
@@ -82,7 +95,7 @@ agustiar-data-pipeline/
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.9+ (required by dbt-core; CI runs 3.11)
 - pip
 
 ### Installation
@@ -100,7 +113,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # 4. Set up config
-cp config.example.py src/config.py
+cp src/config.example.py src/config.py
 # Edit src/config.py if you want to customise settings
 
 # 5. Run
@@ -232,6 +245,78 @@ One row per region per fetch cycle. Powers the Network Health page.
 
 ---
 
+### Data Modeling (dbt)
+
+Analytical transformations live in a dbt project (`transform/`, dbt-duckdb adapter) as a
+bronze → silver → gold medallion model. The live-map path stays on direct DuckDB queries for
+sub-minute freshness; only the analytical pages read dbt marts.
+
+| Layer | Model | Grain | Feeds |
+|---|---|---|---|
+| source (bronze) | `live_buses`, `fetch_quality_log` | raw rows | — |
+| staging (silver) | `stg_vehicle_positions`, `stg_fetch_quality` | cleaned rows | marts |
+| mart (gold) | `mart_network_health` | region (24h) | Network Health scorecards |
+| mart (gold) | `mart_region_health_trend` | region × fetch cycle | drill-down charts |
+| mart (gold) | `mart_region_vehicle_counts` | region | Analytics bar + pie |
+
+The reliability-score formula is a single dbt macro (`reliability_score`) shared by the two
+health marts. Data quality is enforced by dbt tests — region `accepted_values`, 0–100 score
+range, 0–1 rate range, and key uniqueness including the trend mart's `region + fetch_timestamp`
+grain — which CI runs via `dbt build`. `fetch_quality_log` also declares a freshness policy,
+checked by a separate `dbt source freshness` step in CI (`dbt build` does not run freshness);
+that step is informational only, because the committed fixtures carry fixed, old timestamps.
+
+The project has **no dbt package dependencies** — the generic tests it needs (`accepted_range`,
+`unique_combination_of_columns`) are defined locally in `transform/macros/`. That keeps `dbt run`
+working on a fresh clone and on Streamlit Cloud, where no `dbt deps` step exists.
+
+```mermaid
+flowchart LR
+  subgraph bronze["bronze — sources"]
+    A[live_buses]
+    B[fetch_quality_log]
+  end
+  subgraph silver["silver — staging"]
+    C[stg_vehicle_positions]
+    D[stg_fetch_quality]
+  end
+  subgraph gold["gold — marts"]
+    E[mart_region_vehicle_counts]
+    F[mart_network_health]
+    G[mart_region_health_trend]
+  end
+  A --> C --> E
+  B --> D --> F
+  D --> G
+```
+
+The lineage diagram above is **Mermaid**, not a screenshot: it is version-controlled, reviewed in
+diffs, rendered natively by GitHub, and so cannot silently go stale the way a committed PNG does.
+For the full interactive graph — column-level docs, tests, and compiled SQL per node — run
+`dbt docs generate && dbt docs serve` as shown below.
+
+Run locally against your own database:
+
+    export DBT_DUCKDB_PATH="$(pwd)/src/agustiar_analytics.duckdb"
+    dbt run  --project-dir transform --profiles-dir transform
+    dbt test --project-dir transform --profiles-dir transform
+
+> **Use `dbt run`, not `dbt build`, against a database you care about.** The seeds under
+> `transform/seeds/` are CI fixtures deliberately named after the real tables (`live_buses`,
+> `fetch_quality_log`). They are disabled on every target except `ci`, so this is belt-and-braces
+> — but `dbt run` never loads seeds at all. Seeded runs belong on a throwaway database:
+> `dbt build --target ci ...`. The `ci` target reads its DuckDB path from its **own** env var,
+> `DBT_CI_DUCKDB_PATH` (default `ci.duckdb`, created relative to wherever `dbt` is invoked from
+> — repo root in the commands above and in CI) — it never falls back to `DBT_DUCKDB_PATH`, so
+> `--target ci` cannot resolve to the same file as `dev` no matter what you've exported above.
+
+For the full interactive lineage graph:
+
+    dbt docs generate --project-dir transform --profiles-dir transform
+    dbt docs serve --project-dir transform --profiles-dir transform
+
+---
+
 ## 📊 Data Sources
 
 | Source | URL | Used For |
@@ -257,6 +342,7 @@ plotly>=5.14.0                 # Analytics charts
 requests>=2.31.0               # HTTP API calls
 gtfs-realtime-bindings>=1.0.0  # GTFS Protobuf parsing
 protobuf>=4.21.0               # Protocol Buffers
+dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 ```
 
 ---

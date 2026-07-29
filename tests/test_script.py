@@ -256,7 +256,15 @@ def test_fetch_guard_skips_when_recent_fetch_exists():
 # ── DB health functions ───────────────────────────────────────────────────────
 
 def _make_temp_quality_db(rows):
-    """Create a temp DuckDB with fetch_quality_log populated."""
+    """
+    Create a temp DuckDB with fetch_quality_log populated, plus mart_network_health
+    and mart_region_health_trend views exposing the same columns as the real dbt
+    marts (transform/models/marts/*.sql). db.py's get_network_health_summary and
+    get_region_health_trend read these view names directly, so unit tests need
+    them present even without running a full dbt build. reliability_score is a
+    fixed stand-in value here, not the real weighted formula — see the comment
+    on the view definitions below.
+    """
     db_path = os.path.join(tempfile.mkdtemp(), 'test_quality.duckdb')
     con = _duckdb.connect(db_path)
     con.execute("""
@@ -276,6 +284,43 @@ def _make_temp_quality_db(rows):
              row['avg_data_lag_seconds'], row['max_data_lag_seconds'],
              row['total_dropout'], row['fetch_duration_ms']]
         )
+    con.execute("""
+        CREATE VIEW mart_network_health AS
+        SELECT
+            region,
+            COUNT(*) AS total_fetches,
+            SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END) AS dropout_count,
+            COALESCE(AVG(CASE WHEN vehicles_received > 0
+                THEN vehicles_inserted::DOUBLE / vehicles_received
+                ELSE NULL END), 0) AS reporting_rate,
+            1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*) AS availability,
+            COALESCE(AVG(avg_data_lag_seconds), 0) AS avg_data_lag_seconds,
+            MAX(fetch_timestamp) AS last_fetch_timestamp,
+            -- Fixed stand-in score, not the real formula: these tests only assert
+            -- range/shape (see reliability_score.between(0, 100) below), so the
+            -- actual weighted arithmetic doesn't need to be duplicated here. The
+            -- real formula (transform/macros/reliability_score.sql) is exercised
+            -- against the dbt macro in tests/test_dbt_marts.py.
+            95 AS reliability_score
+        FROM fetch_quality_log
+        GROUP BY region
+    """)
+    con.execute("""
+        CREATE VIEW mart_region_health_trend AS
+        SELECT
+            region,
+            fetch_timestamp,
+            vehicles_received,
+            vehicles_rejected,
+            vehicles_inserted,
+            avg_data_lag_seconds,
+            max_data_lag_seconds,
+            total_dropout,
+            -- Fixed stand-in score (see comment on mart_network_health above):
+            -- only range/shape is asserted here, not the real formula.
+            90 AS reliability_score
+        FROM fetch_quality_log
+    """)
     con.close()
     return db_path
 
@@ -295,7 +340,7 @@ def test_get_network_health_summary_returns_one_row_per_region():
     try:
         with patch('utils.db.DATABASE_NAME', db_path):
             from utils import db as _db
-            result = _db.get_network_health_summary(window_hours=24)
+            result = _db.get_network_health_summary()
         assert len(result) == 2
         assert set(result['region'].tolist()) == {'Rapid Bus KL', 'KTM Berhad'}
         assert 'reliability_score' in result.columns
@@ -360,5 +405,37 @@ def test_get_region_fetch_log_returns_most_recent_first():
         assert len(result) == 5
         assert 'datetime' in result.columns
         assert result.iloc[0]['fetch_timestamp'] >= result.iloc[1]['fetch_timestamp']
+    finally:
+        os.unlink(db_path)
+
+
+def test_get_region_vehicle_counts_returns_region_and_count():
+    """
+    get_region_vehicle_counts() should read distinct-vehicle counts per region
+    from mart_region_vehicle_counts, exposed as columns ['Region', 'Count'].
+    """
+    db_path = os.path.join(tempfile.mkdtemp(), 'test_region_counts.duckdb')
+    con = _duckdb.connect(db_path)
+    # table_exists() checks for DATABASE_TABLE ('live_buses'); its presence
+    # (not contents) is what gates get_region_vehicle_counts().
+    con.execute("CREATE TABLE live_buses (vehicle_id VARCHAR, region VARCHAR)")
+    con.execute("""
+        CREATE VIEW mart_region_vehicle_counts AS
+        SELECT * FROM (VALUES
+            ('Rapid Bus KL', 3),
+            ('KTM Berhad', 1)
+        ) AS t(region, unique_vehicles)
+    """)
+    con.close()
+    try:
+        with patch('utils.db.DATABASE_NAME', db_path):
+            from utils import db as _db
+            result = _db.get_region_vehicle_counts()
+        assert list(result.columns) == ['Region', 'Count']
+        assert set(result['Region'].tolist()) == {'Rapid Bus KL', 'KTM Berhad'}
+        kl_count = result.loc[result['Region'] == 'Rapid Bus KL', 'Count'].iloc[0]
+        ktm_count = result.loc[result['Region'] == 'KTM Berhad', 'Count'].iloc[0]
+        assert kl_count == 3
+        assert ktm_count == 1
     finally:
         os.unlink(db_path)

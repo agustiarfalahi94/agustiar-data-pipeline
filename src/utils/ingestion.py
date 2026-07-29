@@ -338,6 +338,13 @@ def fetch_and_store_transit_data():
     # Write quality log with a fresh connection — main con is fully closed above
     _write_quality_log(quality_stats)
 
+    # Create dbt mart views once the source tables exist (no-op thereafter).
+    try:
+        from utils.dbt_runner import ensure_dbt_models
+    except ImportError:
+        from dbt_runner import ensure_dbt_models
+    ensure_dbt_models(DATABASE_NAME)
+
 
 if __name__ == "__main__":
     fetch_and_store_transit_data()

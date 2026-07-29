@@ -1,0 +1,87 @@
+version: 2
+
+models:
+  - name: mart_network_health
+    description: >
+      Gold layer. One row per region summarising fetch reliability over the last
+      `health_window_hours` (24h by default). Backs the Network Health scorecards.
+      Ordered by reliability_score descending, but consumers must not rely on a
+      view's inner ordering - `db.get_network_health_summary` re-applies it.
+    columns:
+      - name: region
+        description: Transit region. The grain of this model.
+        tests:
+          - not_null
+          - unique
+          # The production contract is exactly the 14 canonical regions from
+          # `src/config.example.py`. The CI seed fixture's synthetic region is
+          # admitted only under the `ci` target, so `dev`/prod stay strict.
+          - accepted_values:
+              values: "{{ var('canonical_regions') + (['TestRegion'] if target.name == 'ci' else []) }}"
+      - name: total_fetches
+        description: Number of fetch cycles recorded for the region inside the window.
+      - name: dropout_count
+        description: Fetch cycles inside the window where the API returned zero vehicles.
+      - name: reporting_rate
+        description: Mean ratio of vehicles inserted to vehicles received; 0 when nothing was received.
+        tests:
+          - accepted_range: {min_value: 0, max_value: 1}
+      - name: availability
+        description: Share of fetch cycles in the window that were not total dropouts.
+      - name: avg_data_lag_seconds
+        description: Mean data lag across the window's fetch cycles, in seconds.
+      - name: last_fetch_timestamp
+        description: Unix timestamp of the most recent fetch cycle inside the window.
+      - name: reliability_score
+        description: >
+          Composite 0-100 score - 40% reporting rate, 40% availability, 20% data
+          freshness. Computed by the shared `reliability_score` macro.
+        tests:
+          - accepted_range: {min_value: 0, max_value: 100}
+
+  - name: mart_region_health_trend
+    description: >
+      Gold layer. One row per region per fetch cycle with a per-row reliability
+      score, using the same `reliability_score` macro as `mart_network_health`.
+      Deliberately unfiltered by time - the app applies its own window.
+    tests:
+      # Documented grain: one row per region per fetch cycle.
+      - unique_combination_of_columns:
+          combination_of_columns: [region, fetch_timestamp]
+    columns:
+      - name: region
+        description: Transit region. With `fetch_timestamp`, forms the grain of this model.
+        tests: [not_null]
+      - name: fetch_timestamp
+        description: Unix timestamp of the fetch cycle. With `region`, forms the grain of this model.
+        tests: [not_null]
+      - name: vehicles_received
+        description: Raw vehicle count returned by the API before any validation.
+      - name: vehicles_rejected
+        description: Vehicles discarded for bad coordinates or stale/future timestamps.
+      - name: vehicles_inserted
+        description: Vehicles actually written to `live_buses` after de-duplication.
+      - name: avg_data_lag_seconds
+        description: Mean data lag for this single fetch cycle, in seconds.
+      - name: max_data_lag_seconds
+        description: Worst per-vehicle data lag in this single fetch cycle, in seconds.
+      - name: total_dropout
+        description: True when the API returned zero vehicles for the region in this cycle.
+      - name: reliability_score
+        description: Composite 0-100 score for this single fetch cycle.
+        tests:
+          - accepted_range: {min_value: 0, max_value: 100}
+
+  - name: mart_region_vehicle_counts
+    description: >
+      Gold layer. Distinct vehicles seen per region over the last `retention_days`.
+      Single source of truth for the Analytics "Buses by Region" bar and the
+      "Regional Distribution" pie.
+    columns:
+      - name: region
+        description: Transit region. The grain of this model.
+        tests: [not_null, unique]
+      - name: unique_vehicles
+        description: Count of distinct `vehicle_id` values seen in the retention window.
+        tests:
+          - accepted_range: {min_value: 0}

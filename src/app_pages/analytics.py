@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
@@ -40,25 +39,34 @@ def show():
     # Charts - use DISTINCT vehicle counts from historical data
     col_chart1, col_chart2 = st.columns(2)
 
-    with col_chart1:
-        st.subheader("📊 Buses by Region")
-        # Count DISTINCT vehicle_id per region
-        region_counts = df_historical.groupby('region')['vehicle_id'].nunique().reset_index()
-        region_counts.columns = ['Region', 'Count']
+    # Count DISTINCT vehicle_id per region (from the dbt mart). Shared by the
+    # bar chart (below) and the pie chart (further down the page) - both must
+    # be skipped together when the mart has no data yet.
+    region_counts = db.get_region_vehicle_counts()
+    region_counts_available = not region_counts.empty
+    if region_counts_available:
         region_counts = region_counts.sort_values('Count', ascending=True)
 
-        fig1 = px.bar(
-            region_counts,
-            x='Count',
-            y='Region',
-            orientation='h',
-            color_discrete_sequence=['#3399FF']
-        )
-        fig1.update_layout(
-            height=400,
-            showlegend=False,
-        )
-        st.plotly_chart(fig1, use_container_width=True)
+    with col_chart1:
+        st.subheader("📊 Buses by Region")
+        if not region_counts_available:
+            st.info(
+                "🛰️ Regional vehicle counts are not available yet. "
+                "Click **Refresh Data** to build them."
+            )
+        else:
+            fig1 = px.bar(
+                region_counts,
+                x='Count',
+                y='Region',
+                orientation='h',
+                color_discrete_sequence=['#3399FF']
+            )
+            fig1.update_layout(
+                height=400,
+                showlegend=False,
+            )
+            st.plotly_chart(fig1, use_container_width=True)
 
     with col_chart2:
         st.subheader("🏃 Speed Distribution")
@@ -83,14 +91,20 @@ def show():
     # Pie chart for distribution (DISTINCT vehicle count)
     st.subheader("🎯 Regional Distribution")
 
-    fig3 = px.pie(
-        region_counts,
-        values='Count',
-        names='Region',
-        hole=0.4
-    )
-    fig3.update_layout(height=500)
-    st.plotly_chart(fig3, use_container_width=True)
+    if not region_counts_available:
+        st.info(
+            "🛰️ Regional distribution is not available yet. "
+            "Click **Refresh Data** to build it."
+        )
+    else:
+        fig3 = px.pie(
+            region_counts,
+            values='Count',
+            names='Region',
+            hole=0.4
+        )
+        fig3.update_layout(height=500)
+        st.plotly_chart(fig3, use_container_width=True)
 
     # Speed by region box plot (using average speed per vehicle)
     st.subheader("📈 Speed Analysis by Region")

@@ -43,7 +43,8 @@ def show():
     st.markdown("## 📡 Network Health")
     st.caption("Per-region data quality tracking — how reliably each transit region reports to the API.")
 
-    health_df = db.get_network_health_summary(window_hours=24)
+    # The mart bakes in the 24h window, so no window argument is passed.
+    health_df = db.get_network_health_summary()
 
     # Thin-data / no-data notice
     provisional = False

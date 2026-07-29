@@ -1,0 +1,56 @@
+version: 2
+
+models:
+  - name: stg_vehicle_positions
+    description: >
+      Silver layer over the raw `live_buses` feed. One row per vehicle position
+      report. Drops rows with missing or null-island (0/0) coordinates, converts
+      speed from m/s to km/h (capped at 120), and defaults a missing bearing to 0.
+    columns:
+      - name: region
+        description: Transit region name, as supplied by the ingestion layer.
+      - name: vehicle_id
+        description: Vehicle identifier from the GTFS Realtime feed.
+        tests: [not_null]
+      - name: latitude
+        description: GPS latitude. Null and 0/0 null-island coordinates are filtered out by this model.
+      - name: longitude
+        description: GPS longitude. Null and 0/0 null-island coordinates are filtered out by this model.
+      - name: bearing
+        description: Heading in degrees (0-360); 0 when the feed omits it.
+      - name: speed_kmh
+        description: Reported speed converted from m/s to km/h and capped at 120 to suppress feed outliers.
+        tests:
+          - accepted_range:
+              min_value: 0
+              max_value: 120
+      - name: timestamp
+        description: Unix timestamp the vehicle itself reported.
+      - name: insert_timestamp
+        description: Unix timestamp when the ingestion layer wrote the row; drives the retention window.
+
+  - name: stg_fetch_quality
+    description: >
+      Silver layer over the raw `fetch_quality_log` table. One row per region per
+      fetch cycle, typed for downstream arithmetic. No rows are filtered.
+    columns:
+      - name: fetch_timestamp
+        description: Unix timestamp of the fetch cycle. With `region`, forms the grain of this model.
+        tests: [not_null]
+      - name: region
+        description: Transit region the fetch cycle targeted.
+        tests: [not_null]
+      - name: vehicles_received
+        description: Raw vehicle count returned by the API before any validation.
+      - name: vehicles_rejected
+        description: Vehicles discarded for bad coordinates or stale/future timestamps.
+      - name: vehicles_inserted
+        description: Vehicles actually written to `live_buses` after de-duplication.
+      - name: avg_data_lag_seconds
+        description: Mean of (insert_timestamp - vehicle timestamp) across the cycle's vehicles.
+      - name: max_data_lag_seconds
+        description: Worst per-vehicle data lag observed in the cycle.
+      - name: total_dropout
+        description: True when the API returned zero vehicles for the region in this cycle.
+      - name: fetch_duration_ms
+        description: Wall-clock duration of the region's HTTP fetch, in milliseconds.
