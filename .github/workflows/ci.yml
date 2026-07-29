@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      - name: dbt deps
+        run: dbt deps --project-dir transform --profiles-dir transform
+      - name: dbt build (seed + run + test)
+        env:
+          DBT_DUCKDB_PATH: ${{ github.workspace }}/ci.duckdb
+        run: |
+          dbt seed --project-dir transform --profiles-dir transform \
+            --vars '{health_window_hours: 876000, retention_days: 40000}'
+          dbt build --project-dir transform --profiles-dir transform \
+            --vars '{health_window_hours: 876000, retention_days: 40000}'
+      - name: pytest
+        run: cd src && python -m pytest ../tests -v
