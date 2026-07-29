@@ -162,18 +162,35 @@ Before rewiring `db.py`, prove each mart reproduces the current query output:
 
 | Version | Enhancement | Rationale |
 |---|---|---|
-| 2.3 | Dagster orchestration — ingestion + dbt as a scheduled asset graph | The engineer flex; only sensible once dbt exists. Replaces Streamlit-triggered fetch. |
+| 2.3 | **Apache Airflow** orchestration — ingestion + dbt as a scheduled DAG | Owner already lists Airflow on their CV but has no public artifact for it; this turns a résumé claim into shown evidence. Preferred over Dagster for that reason. |
 | 2.3 | dbt `exposure` declaring the dashboard | Connects models → app in the lineage graph. |
-| 3.0 | MotherDuck / cloud warehouse via dbt adapter swap | Serves the roadmap's cloud-sync goal; showcases dbt portability. |
+| 3.0 | **dbt-bigquery adapter swap** — run the same models on BigQuery | Owner has heavy BigQuery + migration experience on their CV; a dbt-on-BigQuery artifact converts that into demonstrated dbt-warehouse work and showcases dbt portability. (MotherDuck is the lighter-weight alternative.) |
 | 3.x | Trip/route performance marts (headway, dwell, route reliability) | Deeper analyst-flavored modeling. |
-| 3.x | dbt Semantic Layer / MetricFlow | Define metrics once; advanced analytics-engineering signal. |
+| 3.x | dbt Semantic Layer / MetricFlow | Define metrics once; owner has semantic-layer exposure (Holistics/Domo) but no dbt equivalent — closes that gap. |
 
 ---
 
-## Open items to confirm with owner
+## CV-informed emphasis (owner: Muhamad Agustiar Falahi)
 
-- **CV not yet provided.** If shared, tune the README "Data Modeling" write-up toward the weaker
-  of analyst/engineer to cover the gap.
-- **Version-scheme discrepancy.** Saved memory notes a `v0.x.x` scheme, but `pyproject.toml` is at
-  `2.1.2`. This design follows the real repo + the `CLAUDE.md` rule (feature → 2.2.0). Confirm the
-  memory should be corrected.
+The CV brands as "BI Developer | Analytics Engineer | Data Analyst" and validates this plan
+strongly. dbt appears **nowhere** on it despite the "Analytics Engineer" title — so dbt is the
+single most glaring résumé gap this project can close. Specific tuning applied:
+
+- **Dimensional modeling:** the CV claims "Star Schema, Dimensional Modeling" but this project is
+  currently flat. Frame the marts with explicit dimensional language (fact/dimension separation
+  where it fits) so the README demonstrates a skill currently only asserted.
+- **Testing as a framework:** the CV repeatedly describes *manual* source-vs-output validation
+  ("validated all migrated output against source data"). Position `dbt test` as automating exactly
+  that instinct — a natural, credible narrative.
+- **CI on GitHub:** the CV shows GitLab CI/CD but this GitHub portfolio repo has none. GitHub
+  Actions closes that and matches the CV's listed GitHub skill.
+- **README "Data Modeling" section** should serve both target roles: tested + documented pipeline
+  (engineer) and clear analytical marts/metrics (analyst). No single-role bias needed — the CV is
+  strong on both; dbt is the shared gap.
+
+## Version scheme (resolved)
+
+No discrepancy. The saved `v0.x.x` versioning memory belongs to a *different* project
+(**Random Recall**, the owner's mobile app). This transit repo uses standard semver; `pyproject.toml`
+at `2.1.2` is correct, and this feature bumps to `2.2.0` per the `CLAUDE.md` rule. No memory change
+needed.
