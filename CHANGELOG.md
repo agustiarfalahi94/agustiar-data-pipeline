@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-07-30
+
+### Changed
+- Roadmap: replaced the planned **Route Planner** with **search by route name**. Origin→destination
+  journey planning duplicates Google Maps without improving on it; the unmet need is the inverse —
+  when you already know your route, see where those specific vehicles are right now.
+- Roadmap: marked the dbt analytics layer complete.
+
+### Documentation
+- Recorded that live vehicle positions for LRT/MRT/Monorail are **not available**: the
+  `prasarana?category=rapid-rail-kl` vehicle-position feed returns a 404 (*"feed does not exist"*),
+  and the API currently publishes vehicle positions only — trip updates and service alerts are on
+  the provider's 2026 roadmap. Rail **static** data (8 lines, stops, shapes, frequencies) is
+  available, and KTM Berhad realtime is already ingested.
+
 ## [2.2.0] - 2026-07-29
 
 ### Added

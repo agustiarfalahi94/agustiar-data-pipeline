@@ -370,7 +370,13 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 - [x] Route Viewer (GTFS Static planned routes)
 - [x] Audit timestamps (`created_at`)
 - [x] Network Health page — per-region reliability scores and fetch quality log
-- [ ] Route Planner — enter origin/destination, get transit directions
+- [x] dbt analytics layer — bronze/silver/gold models, data tests, CI
+- [ ] Search by route name — type a route (e.g. `T580`) and see every vehicle on that
+      route live on the map, instead of looking up an opaque vehicle ID
+
+> **Not planned: a full route planner.** Origin→destination journey planning is well served
+> by Google Maps and this app would not improve on it. The gap worth filling is the opposite
+> one: you already know your route — you just want to see where *that* bus is right now.
 
 ---
 
