@@ -75,7 +75,9 @@ agustiar-data-pipeline/
 │   ├── dbt_project.yml
 │   ├── profiles.yml
 │   ├── macros/
-│   │   └── reliability_score.sql # Single definition of the 0–100 score formula
+│   │   ├── reliability_score.sql # Single definition of the 0–100 score formula
+│   │   ├── test_accepted_range.sql            # Generic test: value within [min, max]
+│   │   └── test_unique_combination_of_columns.sql # Generic test: composite-key uniqueness
 │   ├── models/
 │   │   ├── staging/              # Silver — cleaned views over the raw tables
 │   │   └── marts/                # Gold — analytical views read by the app
