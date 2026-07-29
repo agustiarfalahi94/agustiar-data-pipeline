@@ -2,10 +2,15 @@ version: 2
 
 sources:
   - name: transit
+    description: >
+      Bronze layer. The two tables the Streamlit ingestion layer writes directly
+      into the app's DuckDB file. dbt only reads them - it never writes them.
     schema: main
     tables:
       - name: live_buses
+        description: Raw vehicle position reports, appended once per fetch cycle per vehicle.
       - name: fetch_quality_log
+        description: One row per region per fetch cycle recording API quality metrics.
         loaded_at_field: to_timestamp(fetch_timestamp)
         freshness:
           warn_after: {count: 30, period: minute}
