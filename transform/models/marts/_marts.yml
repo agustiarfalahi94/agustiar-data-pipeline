@@ -29,3 +29,11 @@ models:
       - name: reliability_score
         tests:
           - dbt_utils.accepted_range: {min_value: 0, max_value: 100}
+
+  - name: mart_region_vehicle_counts
+    columns:
+      - name: region
+        tests: [not_null, unique]
+      - name: unique_vehicles
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0}

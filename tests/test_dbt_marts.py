@@ -46,3 +46,11 @@ def test_region_health_trend_per_row_score(built_db):
     # Row 1: reporting 0.8, avail 1.0, lag 30 -> round((0.32+0.4+0.18)*100)=90
     # Row 2: reporting 1.0, avail 1.0, lag 0  -> round((0.4+0.4+0.2)*100)=100
     assert [r[1] for r in rows] == [90, 100]
+
+
+def test_region_vehicle_counts(built_db):
+    count = built_db.execute(
+        "SELECT unique_vehicles FROM main.mart_region_vehicle_counts "
+        "WHERE region = 'TestRegion'"
+    ).fetchone()[0]
+    assert count == 2  # V1 and V2 (BadCoords row filtered out in staging)
