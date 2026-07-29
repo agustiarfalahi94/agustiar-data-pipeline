@@ -16,15 +16,23 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-      - name: dbt deps
-        run: dbt deps --project-dir transform --profiles-dir transform
       - name: dbt build (seed + run + test)
         env:
           DBT_DUCKDB_PATH: ${{ github.workspace }}/ci.duckdb
         run: |
-          dbt seed --project-dir transform --profiles-dir transform \
+          # --target ci is required: seeds are disabled on every other target
+          # because their names shadow the real app tables.
+          dbt seed --target ci --project-dir transform --profiles-dir transform \
             --vars '{health_window_hours: 876000, retention_days: 40000}'
-          dbt build --project-dir transform --profiles-dir transform \
+          dbt build --target ci --project-dir transform --profiles-dir transform \
             --vars '{health_window_hours: 876000, retention_days: 40000}'
+      - name: dbt source freshness
+        # Informational only: the seed fixtures carry fixed, deliberately old
+        # timestamps, so the freshness thresholds are expected to trip in CI.
+        continue-on-error: true
+        env:
+          DBT_DUCKDB_PATH: ${{ github.workspace }}/ci.duckdb
+        run: |
+          dbt source freshness --target ci --project-dir transform --profiles-dir transform
       - name: pytest
         run: cd src && python -m pytest ../tests -v

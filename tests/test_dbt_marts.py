@@ -1,22 +1,28 @@
 import os
 import subprocess
+import sys
 import duckdb
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRANSFORM = os.path.join(REPO, "transform")
+# Resolve dbt through the running interpreter rather than PATH.
+DBT = [sys.executable, "-m", "dbt.cli.main"]
 
 
 @pytest.fixture(scope="module")
 def built_db(tmp_path_factory):
     db_path = tmp_path_factory.mktemp("dbt") / "test.duckdb"
     env = {**os.environ, "DBT_DUCKDB_PATH": str(db_path)}
-    common = ["--project-dir", TRANSFORM, "--profiles-dir", TRANSFORM,
+    # --target ci is mandatory: the seeds shadow the real app tables, so they
+    # are disabled on every other target. This DB is a throwaway tmp file.
+    common = ["--target", "ci",
+              "--project-dir", TRANSFORM, "--profiles-dir", TRANSFORM,
               "--vars", "{health_window_hours: 876000, retention_days: 40000}"]
     # Seed first: dbt has no DAG edge between a seed and a same-named source(),
     # so `dbt build` alone can run models before seeds load on a fresh DB.
-    subprocess.run(["dbt", "seed", *common], check=True, env=env, cwd=REPO)
-    subprocess.run(["dbt", "build", *common], check=True, env=env, cwd=REPO)
+    subprocess.run([*DBT, "seed", *common], check=True, env=env, cwd=REPO)
+    subprocess.run([*DBT, "build", *common], check=True, env=env, cwd=REPO)
     con = duckdb.connect(str(db_path))
     yield con
     con.close()
@@ -54,3 +60,15 @@ def test_region_vehicle_counts(built_db):
         "WHERE region = 'TestRegion'"
     ).fetchone()[0]
     assert count == 2  # V1 and V2 (BadCoords row filtered out in staging)
+
+
+def test_staging_drops_null_and_null_island_coordinates(built_db):
+    """Both invalid-coordinate branches are filtered: 0/0 and NULL."""
+    regions = [
+        r[0] for r in built_db.execute(
+            "SELECT DISTINCT region FROM main.stg_vehicle_positions"
+        ).fetchall()
+    ]
+    assert "BadCoords" not in regions   # 0/0 null-island row
+    assert "NullCoords" not in regions  # empty lat/lon row
+    assert "TestRegion" in regions

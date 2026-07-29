@@ -1,7 +1,17 @@
 transit:
   target: dev
   outputs:
+    # Local / Streamlit Cloud. Seeds are DISABLED on this target (see
+    # dbt_project.yml) because the fixture names shadow the real app tables.
     dev:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', '../src/agustiar_analytics.duckdb') }}"
+      schema: main
+      threads: 1
+
+    # CI only, against a throwaway DuckDB file. Seeds are enabled here so
+    # `dbt build --target ci` exercises the models and tests on fixed fixtures.
+    ci:
       type: duckdb
       path: "{{ env_var('DBT_DUCKDB_PATH', '../src/agustiar_analytics.duckdb') }}"
       schema: main
