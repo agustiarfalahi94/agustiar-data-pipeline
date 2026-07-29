@@ -58,10 +58,13 @@ def _quality_log_exists():
         con.close()
 
 
-def get_network_health_summary(window_hours=24):
+def get_network_health_summary():
     """
-    Returns one row per region with reliability_score and component metrics.
-    Reads the dbt mart (fixed 24h window baked into the mart definition).
+    Returns one row per region with reliability_score and component metrics,
+    best-scoring region first.
+
+    Reads the dbt mart, which bakes in a fixed 24h window (see the
+    `health_window_hours` dbt var) - hence no window argument here.
 
     Columns: region, reliability_score, reporting_rate, availability,
              avg_data_lag_seconds, dropout_count, total_fetches, last_fetch_timestamp
@@ -75,7 +78,11 @@ def get_network_health_summary(window_hours=24):
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_network_health'"
         ).fetchone()[0] == 0:
             return pd.DataFrame()
-        return con.execute("SELECT * FROM main.mart_network_health").df()
+        # Order explicitly: the page renders scorecards in row order, and a
+        # view's inner ORDER BY is not a guaranteed property of a SELECT.
+        return con.execute(
+            "SELECT * FROM main.mart_network_health ORDER BY reliability_score DESC"
+        ).df()
     finally:
         con.close()
 

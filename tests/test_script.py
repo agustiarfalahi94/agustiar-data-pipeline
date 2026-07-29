@@ -340,7 +340,7 @@ def test_get_network_health_summary_returns_one_row_per_region():
     try:
         with patch('utils.db.DATABASE_NAME', db_path):
             from utils import db as _db
-            result = _db.get_network_health_summary(window_hours=24)
+            result = _db.get_network_health_summary()
         assert len(result) == 2
         assert set(result['region'].tolist()) == {'Rapid Bus KL', 'KTM Berhad'}
         assert 'reliability_score' in result.columns
