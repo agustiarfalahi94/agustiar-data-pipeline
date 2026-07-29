@@ -292,11 +292,12 @@ TRANSFORM = os.path.join(REPO, "transform")
 def built_db(tmp_path_factory):
     db_path = tmp_path_factory.mktemp("dbt") / "test.duckdb"
     env = {**os.environ, "DBT_DUCKDB_PATH": str(db_path)}
-    subprocess.run(
-        ["dbt", "build", "--project-dir", TRANSFORM, "--profiles-dir", TRANSFORM,
-         "--vars", "{health_window_hours: 876000, retention_days: 40000}"],
-        check=True, env=env, cwd=REPO,
-    )
+    common = ["--project-dir", TRANSFORM, "--profiles-dir", TRANSFORM,
+              "--vars", "{health_window_hours: 876000, retention_days: 40000}"]
+    # Seed first: dbt has no DAG edge between a seed and a same-named source(),
+    # so `dbt build` alone can run models before seeds load on a fresh DB.
+    subprocess.run(["dbt", "seed", *common], check=True, env=env, cwd=REPO)
+    subprocess.run(["dbt", "build", *common], check=True, env=env, cwd=REPO)
     con = duckdb.connect(str(db_path))
     yield con
     con.close()
@@ -828,6 +829,8 @@ jobs:
         env:
           DBT_DUCKDB_PATH: ${{ github.workspace }}/ci.duckdb
         run: |
+          dbt seed --project-dir transform --profiles-dir transform \
+            --vars '{health_window_hours: 876000, retention_days: 40000}'
           dbt build --project-dir transform --profiles-dir transform \
             --vars '{health_window_hours: 876000, retention_days: 40000}'
       - name: pytest
@@ -838,11 +841,13 @@ jobs:
 
 Run:
 ```bash
-DBT_DUCKDB_PATH="$(pwd)/ci.duckdb" dbt build --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
+export DBT_DUCKDB_PATH="$(pwd)/ci.duckdb"
+dbt seed --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
+dbt build --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
 cd src && python -m pytest ../tests -v && cd ..
 rm -f ci.duckdb
 ```
-Expected: dbt build all PASS; pytest all PASS.
+Expected: dbt seed loads 2 seeds; dbt build all PASS; pytest all PASS.
 
 - [ ] **Step 3: Commit**
 
@@ -869,8 +874,10 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 Run:
 ```bash
-DBT_DUCKDB_PATH="$(pwd)/docs_build.duckdb" dbt build --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
-DBT_DUCKDB_PATH="$(pwd)/docs_build.duckdb" dbt docs generate --project-dir transform --profiles-dir transform
+export DBT_DUCKDB_PATH="$(pwd)/docs_build.duckdb"
+dbt seed --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
+dbt build --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
+dbt docs generate --project-dir transform --profiles-dir transform
 DBT_DUCKDB_PATH="$(pwd)/docs_build.duckdb" dbt docs serve --project-dir transform --profiles-dir transform --port 8080
 ```
 Open `http://localhost:8080`, open the lineage graph (bottom-right icon), screenshot it to `docs/screenshots/dbt-lineage.png`, then stop the server (Ctrl-C) and `rm -f docs_build.duckdb`.
