@@ -10,13 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **dbt (dbt-duckdb) analytics layer** under `transform/` — bronze sources (`live_buses`, `fetch_quality_log`), silver staging views, and three gold mart views (`mart_network_health`, `mart_region_health_trend`, `mart_region_vehicle_counts`)
 - `reliability_score` dbt macro — single definition of the 0–100 score formula, replacing the copy in two `db.py` functions
-- dbt data tests: region `accepted_values`, score/rate range checks, key `not_null`/`unique`, plus `fetch_quality_log` source freshness
-- GitHub Actions CI running `dbt build` (seed → run → test) and pytest on every push/PR
-- `dbt_runner.ensure_dbt_models` — creates the mart views once after the first ingestion (bootstraps Streamlit Cloud)
+- dbt data tests: region `accepted_values` (the 14 canonical regions), 0–100 score and 0–1 rate range checks, key `not_null`/`unique`, and a composite-uniqueness test pinning `mart_region_health_trend` to its documented `region + fetch_timestamp` grain
+- Local generic test macros `accepted_range` and `unique_combination_of_columns` in `transform/macros/` — the project has **no dbt package dependencies**, so `dbt run` works on a fresh clone and on Streamlit Cloud without a `dbt deps` step
+- Model, source, and column `description:` metadata throughout, so `dbt docs generate` renders a documented project
+- GitHub Actions CI running `dbt build --target ci` (seed → run → test) and pytest on every push/PR, plus a separate informational `dbt source freshness` step (`dbt build` does not run freshness; the committed fixtures carry fixed, old timestamps, so the step is `continue-on-error`)
+- `dbt_runner.ensure_dbt_models` — creates the mart views once after the first ingestion (bootstraps Streamlit Cloud). It requires **all three** marts before skipping, gives up after two failed attempts per process so a doomed bootstrap cannot stall every ~20s auto-refresh, and invokes dbt via `sys.executable -m dbt.cli.main` rather than a bare `dbt` on `PATH`
 - Model lineage diagram (Mermaid) in the README's new "Data Modeling (dbt)" section
 
 ### Changed
 - Network Health reads (`get_network_health_summary`, `get_region_health_trend`) and the Analytics region charts now query dbt marts instead of inline SQL; the live-map path is unchanged
+- `get_network_health_summary()` no longer takes a `window_hours` argument — the mart bakes in the 24h window, so the parameter was ignored — and now orders explicitly by `reliability_score DESC` instead of relying on a view's inner `ORDER BY`
+- dbt seeds are enabled only on the `ci` target. They are CI fixtures named identically to the real app tables, so an unqualified `dbt build` against a live database would have truncated ingested history; the documented local command is now `dbt run` / `dbt test`
+- Minimum Python raised to **3.9** (`pyproject.toml`, README badge) — dbt-core does not support 3.8; CI runs 3.11
+- Analytics page now shows a refresh hint instead of a blank bar and pie when regional vehicle counts are unavailable
 
 ## [2.1.2] - 2026-05-14
 
