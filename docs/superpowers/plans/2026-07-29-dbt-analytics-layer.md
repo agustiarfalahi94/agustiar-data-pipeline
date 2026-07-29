@@ -861,17 +861,21 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Docs, lineage graph, and version bump (2.2.0)
+### Task 9: Docs, lineage diagram, and version bump (2.2.0)
 
 **Files:**
 - Modify: `README.md` (new "Data Modeling (dbt)" section + CI badge + dependency list)
 - Modify: `CHANGELOG.md` (new `[2.2.0]` section)
 - Modify: `pyproject.toml` (version → 2.2.0)
-- Create: `docs/screenshots/dbt-lineage.png` (from `dbt docs`)
 
 **Interfaces:** none (documentation only).
 
-- [ ] **Step 1: Generate the lineage docs**
+- [ ] **Step 1: Verify the docs artifacts generate**
+
+The lineage graph goes into the README as a **Mermaid diagram** (GitHub renders Mermaid
+natively; it is version-controlled and cannot go stale the way a committed screenshot
+does) rather than a PNG. This step only confirms `dbt docs generate` succeeds, so the
+full interactive graph is available locally via `dbt docs serve`.
 
 Run:
 ```bash
@@ -879,9 +883,10 @@ export DBT_DUCKDB_PATH="$(pwd)/docs_build.duckdb"
 dbt seed --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
 dbt build --project-dir transform --profiles-dir transform --vars '{health_window_hours: 876000, retention_days: 40000}'
 dbt docs generate --project-dir transform --profiles-dir transform
-DBT_DUCKDB_PATH="$(pwd)/docs_build.duckdb" dbt docs serve --project-dir transform --profiles-dir transform --port 8080
 ```
-Open `http://localhost:8080`, open the lineage graph (bottom-right icon), screenshot it to `docs/screenshots/dbt-lineage.png`, then stop the server (Ctrl-C) and `rm -f docs_build.duckdb`.
+Expected: completes and writes `transform/target/index.html` and `transform/target/manifest.json`.
+Confirm both exist, then `rm -f docs_build.duckdb`. Nothing under `transform/target/` is
+committed (already gitignored).
 
 - [ ] **Step 2: Add the `[2.2.0]` section to `CHANGELOG.md`** (above `[2.1.2]`)
 
@@ -894,7 +899,7 @@ Open `http://localhost:8080`, open the lineage graph (bottom-right icon), screen
 - dbt data tests: region `accepted_values`, score/rate range checks, key `not_null`/`unique`, plus `fetch_quality_log` source freshness
 - GitHub Actions CI running `dbt build` (seed → run → test) and pytest on every push/PR
 - `dbt_runner.ensure_dbt_models` — creates the mart views once after the first ingestion (bootstraps Streamlit Cloud)
-- dbt-generated lineage graph in `docs/screenshots/dbt-lineage.png`
+- Model lineage diagram (Mermaid) in the README's new "Data Modeling (dbt)" section
 
 ### Changed
 - Network Health reads (`get_network_health_summary`, `get_region_health_trend`) and the Analytics region charts now query dbt marts instead of inline SQL; the live-map path is unchanged
@@ -927,12 +932,35 @@ The reliability-score formula is a single dbt macro (`reliability_score`) shared
 health marts. Data quality is enforced by dbt tests (region `accepted_values`, 0–100 score range,
 0–1 rate range, key uniqueness) and source freshness, run in CI via `dbt build`.
 
-![dbt lineage](docs/screenshots/dbt-lineage.png)
+```mermaid
+flowchart LR
+  subgraph bronze["bronze — sources"]
+    A[live_buses]
+    B[fetch_quality_log]
+  end
+  subgraph silver["silver — staging"]
+    C[stg_vehicle_positions]
+    D[stg_fetch_quality]
+  end
+  subgraph gold["gold — marts"]
+    E[mart_region_vehicle_counts]
+    F[mart_network_health]
+    G[mart_region_health_trend]
+  end
+  A --> C --> E
+  B --> D --> F
+  D --> G
+```
 
 Run locally:
 
-    DBT_DUCKDB_PATH="$(pwd)/src/agustiar_analytics.duckdb" \
-      dbt build --project-dir transform --profiles-dir transform
+    export DBT_DUCKDB_PATH="$(pwd)/src/agustiar_analytics.duckdb"
+    dbt build --project-dir transform --profiles-dir transform
+
+For the full interactive lineage graph:
+
+    dbt docs generate --project-dir transform --profiles-dir transform
+    dbt docs serve --project-dir transform --profiles-dir transform
 ```
 
 Also add `dbt-duckdb>=1.7.0` to the README "Dependencies" code block.
