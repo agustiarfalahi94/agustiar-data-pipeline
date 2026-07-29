@@ -35,3 +35,14 @@ def test_network_health_score_matches_hand_computation(built_db):
     assert dropouts == 0
     assert fetches == 2
     assert score == 95                          # round((0.36+0.40+0.19)*100)
+
+
+def test_region_health_trend_per_row_score(built_db):
+    rows = built_db.execute(
+        "SELECT fetch_timestamp, reliability_score "
+        "FROM main.mart_region_health_trend "
+        "WHERE region = 'TestRegion' ORDER BY fetch_timestamp"
+    ).fetchall()
+    # Row 1: reporting 0.8, avail 1.0, lag 30 -> round((0.32+0.4+0.18)*100)=90
+    # Row 2: reporting 1.0, avail 1.0, lag 0  -> round((0.4+0.4+0.2)*100)=100
+    assert [r[1] for r in rows] == [90, 100]

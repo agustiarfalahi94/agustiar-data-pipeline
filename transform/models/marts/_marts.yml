@@ -19,3 +19,13 @@ models:
       - name: reporting_rate
         tests:
           - dbt_utils.accepted_range: {min_value: 0, max_value: 1}
+
+  - name: mart_region_health_trend
+    columns:
+      - name: region
+        tests: [not_null]
+      - name: fetch_timestamp
+        tests: [not_null]
+      - name: reliability_score
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 100}
