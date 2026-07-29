@@ -981,8 +981,8 @@ Expected: version present in CHANGELOG + pyproject; dbt-duckdb present in all th
 - [ ] **Step 6: Commit**
 
 ```bash
-git add README.md CHANGELOG.md pyproject.toml docs/screenshots/dbt-lineage.png
-git commit -m "docs: document dbt layer, add lineage graph, bump to 2.2.0
+git add README.md CHANGELOG.md pyproject.toml
+git commit -m "docs: document dbt layer, add lineage diagram, bump to 2.2.0
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
