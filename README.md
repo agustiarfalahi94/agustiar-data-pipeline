@@ -200,8 +200,8 @@ Live Map      Data Table        Analytics     Network Health
 | **GTFS Static 24h cache** | Static schedules change daily at most — avoids hammering the API |
 | **`streamlit-js-eval` for geolocation** | `components.html()` is one-way only; `streamlit-js-eval` provides the two-way JS bridge needed to return browser GPS coordinates to Python |
 | **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout. Powers the Network Health page without touching `live_buses` |
-| **Fetch guard (15s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
-| **`@st.cache_data(ttl=60)` on health queries** | Network Health loads 14+ DB queries for sparklines — caching cuts this to one round-trip per minute instead of per render |
+| **Fetch guard (3s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
+| **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query for sub-minute freshness |
 
 ### Route Viewer — How It Works
 

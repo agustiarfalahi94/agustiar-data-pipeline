@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimum Python raised to **3.9** (`pyproject.toml`, README badge) — dbt-core does not support 3.8; CI runs 3.11
 - Analytics page now shows a refresh hint instead of a blank bar and pie when regional vehicle counts are unavailable
 
+### Fixed
+- Corrected two stale entries in the README's "Key Design Decisions" table that had drifted since 2.1.1: the fetch guard is a **3s** window (not 15s), and the `@st.cache_data(ttl=60)` row was removed entirely — that caching was dropped in 2.1.1 and `st.cache_data` is no longer used anywhere in `src/`
+- Corrected the matching stale "last 15 seconds" comment on the fetch guard in `src/utils/ingestion.py` (the guard queries a 3-second window)
+
 ## [2.1.2] - 2026-05-14
 
 ### Added

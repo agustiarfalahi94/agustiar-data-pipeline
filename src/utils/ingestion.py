@@ -166,7 +166,7 @@ def fetch_and_store_transit_data():
     all_vehicle_data = []
     current_unix = int(time.time())
 
-    # Fetch guard: skip if a fetch already ran within the last 15 seconds.
+    # Fetch guard: skip if a fetch already ran within the last 3 seconds.
     # Prevents duplicate quality log entries and DuckDB write collisions when
     # multiple Streamlit sessions trigger refresh simultaneously.
     try:
