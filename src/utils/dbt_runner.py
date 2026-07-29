@@ -1,6 +1,8 @@
 import os
 import subprocess
 
+import duckdb
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TRANSFORM_DIR = os.path.join(_REPO_ROOT, "transform")
 _SENTINEL_VIEW = "mart_network_health"
@@ -24,7 +26,7 @@ def ensure_dbt_models(database_name):
     """
     db_path = os.path.abspath(database_name)
     try:
-        con = __import__("duckdb").connect(db_path)
+        con = duckdb.connect(db_path)
         try:
             if marts_exist(con):
                 return False
@@ -46,4 +48,10 @@ def ensure_dbt_models(database_name):
         return True
     except Exception as e:
         print(f"dbt run skipped/failed (non-fatal): {e}")
+        stderr = getattr(e, "stderr", None)
+        stdout = getattr(e, "stdout", None)
+        if stderr:
+            print(f"dbt stderr:\n{stderr}")
+        if stdout:
+            print(f"dbt stdout:\n{stdout}")
         return False
