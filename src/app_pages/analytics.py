@@ -44,8 +44,6 @@ def show():
         st.subheader("📊 Buses by Region")
         # Count DISTINCT vehicle_id per region (from the dbt mart)
         region_counts = db.get_region_vehicle_counts()
-        if region_counts.empty:
-            region_counts = pd.DataFrame(columns=['Region', 'Count'])
         region_counts = region_counts.sort_values('Count', ascending=True)
 
         fig1 = px.bar(
