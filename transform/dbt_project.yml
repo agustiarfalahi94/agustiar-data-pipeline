@@ -1,0 +1,22 @@
+name: 'transit_transform'
+version: '2.2.0'
+config-version: 2
+profile: 'transit'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Widened in CI so fixed-timestamp seeds fall inside the windows.
+  health_window_hours: 24
+  retention_days: 7
+
+models:
+  transit_transform:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: view

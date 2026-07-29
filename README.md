@@ -70,6 +70,11 @@ agustiar-data-pipeline/
 │       ├── data_processor.py     # Speed conversion, filtering, display formatting
 │       └── gtfs_static.py        # GTFS Static ZIP download, caching, shape/route lookup
 │
+├── transform/                    # dbt-duckdb project (transformation layer scaffold)
+│   ├── dbt_project.yml
+│   ├── profiles.yml
+│   └── packages.yml
+│
 ├── tests/
 ├── docs/
 ├── .gitignore
@@ -257,6 +262,7 @@ plotly>=5.14.0                 # Analytics charts
 requests>=2.31.0               # HTTP API calls
 gtfs-realtime-bindings>=1.0.0  # GTFS Protobuf parsing
 protobuf>=4.21.0               # Protocol Buffers
+dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 ```
 
 ---

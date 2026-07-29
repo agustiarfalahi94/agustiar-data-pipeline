@@ -16,3 +16,6 @@ plotly>=5.14.0
 requests>=2.31.0
 gtfs-realtime-bindings>=1.0.0
 protobuf>=4.21.0
+
+# Analytics transformation layer
+dbt-duckdb>=1.7.0,<2.0.0
