@@ -523,7 +523,8 @@ Expected: FAIL — `mart_region_vehicle_counts` does not exist.
 - [ ] **Step 3: Create `transform/models/marts/mart_region_vehicle_counts.sql`**
 
 ```sql
-{% set cutoff = "cast(epoch(now()) as bigint) - " ~ var('retention_days') ~ " * 86400" %}
+-- cast the var to bigint: with widened CI vars, days * 86400 overflows DuckDB's INT32 literal math
+{% set cutoff = "cast(epoch(now()) as bigint) - cast(" ~ var('retention_days') ~ " as bigint) * 86400" %}
 
 select
     region,
