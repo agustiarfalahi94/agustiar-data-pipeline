@@ -58,7 +58,8 @@ def test_ensure_dbt_models_never_raises_when_dbt_missing(tmp_path, monkeypatch):
 
 
 def test_ensure_dbt_models_stops_retrying_after_max_failures(tmp_path, monkeypatch):
-    """A doomed bootstrap must not spawn a subprocess on every auto-refresh."""
+    """A doomed bootstrap must not spawn a subprocess on every auto-refresh,
+    at least until the cooldown window elapses (see the cooldown test below)."""
     db = tmp_path / "no_marts.duckdb"
     calls = []
 
@@ -72,6 +73,39 @@ def test_ensure_dbt_models_stops_retrying_after_max_failures(tmp_path, monkeypat
         assert dbt_runner.ensure_dbt_models(str(db)) is False
 
     assert len(calls) == dbt_runner._MAX_FAILED_ATTEMPTS
+
+
+def test_ensure_dbt_models_retries_after_cooldown(tmp_path, monkeypatch):
+    """Transient failures must not lock the bootstrap out permanently: once
+    the cooldown window has elapsed since the last failure, a retry becomes
+    possible again."""
+    db = tmp_path / "no_marts.duckdb"
+    calls = []
+    fake_now = {"t": 1_000.0}
+
+    def fake_run(*args, **kwargs):
+        calls.append(args)
+        raise FileNotFoundError("dbt not found")
+
+    def fake_monotonic():
+        return fake_now["t"]
+
+    monkeypatch.setattr(dbt_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(dbt_runner.time, "monotonic", fake_monotonic)
+
+    for _ in range(dbt_runner._MAX_FAILED_ATTEMPTS):
+        assert dbt_runner.ensure_dbt_models(str(db)) is False
+    assert len(calls) == dbt_runner._MAX_FAILED_ATTEMPTS
+
+    # Still inside the cooldown window - no new subprocess call.
+    fake_now["t"] += dbt_runner._FAILURE_COOLDOWN_SECONDS - 1
+    assert dbt_runner.ensure_dbt_models(str(db)) is False
+    assert len(calls) == dbt_runner._MAX_FAILED_ATTEMPTS
+
+    # Cooldown has now elapsed - a retry must be attempted again.
+    fake_now["t"] += 2
+    assert dbt_runner.ensure_dbt_models(str(db)) is False
+    assert len(calls) == dbt_runner._MAX_FAILED_ATTEMPTS + 1
 
 
 def test_ensure_dbt_models_invokes_dbt_via_current_interpreter(tmp_path, monkeypatch):
