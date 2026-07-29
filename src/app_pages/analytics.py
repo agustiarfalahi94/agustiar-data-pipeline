@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
