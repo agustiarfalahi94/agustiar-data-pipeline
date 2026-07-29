@@ -256,7 +256,13 @@ def test_fetch_guard_skips_when_recent_fetch_exists():
 # ── DB health functions ───────────────────────────────────────────────────────
 
 def _make_temp_quality_db(rows):
-    """Create a temp DuckDB with fetch_quality_log populated."""
+    """
+    Create a temp DuckDB with fetch_quality_log populated, plus mart_network_health
+    and mart_region_health_trend views mirroring the dbt marts' logic (same formulas
+    as transform/models/marts/*.sql). db.py's get_network_health_summary and
+    get_region_health_trend now read these view names directly, so unit tests need
+    them present even without running a full dbt build.
+    """
     db_path = os.path.join(tempfile.mkdtemp(), 'test_quality.duckdb')
     con = _duckdb.connect(db_path)
     con.execute("""
@@ -276,6 +282,47 @@ def _make_temp_quality_db(rows):
              row['avg_data_lag_seconds'], row['max_data_lag_seconds'],
              row['total_dropout'], row['fetch_duration_ms']]
         )
+    con.execute("""
+        CREATE VIEW mart_network_health AS
+        SELECT
+            region,
+            COUNT(*) AS total_fetches,
+            SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END) AS dropout_count,
+            COALESCE(AVG(CASE WHEN vehicles_received > 0
+                THEN vehicles_inserted::DOUBLE / vehicles_received
+                ELSE NULL END), 0) AS reporting_rate,
+            1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*) AS availability,
+            COALESCE(AVG(avg_data_lag_seconds), 0) AS avg_data_lag_seconds,
+            MAX(fetch_timestamp) AS last_fetch_timestamp,
+            ROUND((
+                0.4 * COALESCE(AVG(CASE WHEN vehicles_received > 0
+                    THEN vehicles_inserted::DOUBLE / vehicles_received
+                    ELSE NULL END), 0)
+                + 0.4 * (1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*))
+                + 0.2 * GREATEST(0.0, 1.0 - COALESCE(AVG(avg_data_lag_seconds), 0) / 300.0)
+            ) * 100) AS reliability_score
+        FROM fetch_quality_log
+        GROUP BY region
+    """)
+    con.execute("""
+        CREATE VIEW mart_region_health_trend AS
+        SELECT
+            region,
+            fetch_timestamp,
+            vehicles_received,
+            vehicles_rejected,
+            vehicles_inserted,
+            avg_data_lag_seconds,
+            max_data_lag_seconds,
+            total_dropout,
+            ROUND((
+                0.4 * CASE WHEN vehicles_received > 0
+                    THEN vehicles_inserted::DOUBLE / vehicles_received ELSE 0 END
+                + 0.4 * CASE WHEN total_dropout THEN 0.0 ELSE 1.0 END
+                + 0.2 * GREATEST(0.0, 1.0 - avg_data_lag_seconds / 300.0)
+            ) * 100) AS reliability_score
+        FROM fetch_quality_log
+    """)
     con.close()
     return db_path
 

@@ -42,9 +42,10 @@ def show():
 
     with col_chart1:
         st.subheader("📊 Buses by Region")
-        # Count DISTINCT vehicle_id per region
-        region_counts = df_historical.groupby('region')['vehicle_id'].nunique().reset_index()
-        region_counts.columns = ['Region', 'Count']
+        # Count DISTINCT vehicle_id per region (from the dbt mart)
+        region_counts = db.get_region_vehicle_counts()
+        if region_counts.empty:
+            region_counts = pd.DataFrame(columns=['Region', 'Count'])
         region_counts = region_counts.sort_values('Count', ascending=True)
 
         fig1 = px.bar(

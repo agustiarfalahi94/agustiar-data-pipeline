@@ -60,8 +60,8 @@ def _quality_log_exists():
 
 def get_network_health_summary(window_hours=24):
     """
-    Returns one row per region with reliability_score and component metrics,
-    calculated over the last window_hours of fetch_quality_log data.
+    Returns one row per region with reliability_score and component metrics.
+    Reads the dbt mart (fixed 24h window baked into the mart definition).
 
     Columns: region, reliability_score, reporting_rate, availability,
              avg_data_lag_seconds, dropout_count, total_fetches, last_fetch_timestamp
@@ -69,33 +69,13 @@ def get_network_health_summary(window_hours=24):
     if not _quality_log_exists():
         return pd.DataFrame()
 
-    cutoff = int(time.time()) - int(window_hours * 3600)
     con = get_connection()
     try:
-        query = f"""
-        SELECT
-            region,
-            COUNT(*) AS total_fetches,
-            SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END) AS dropout_count,
-            COALESCE(AVG(CASE WHEN vehicles_received > 0
-                THEN vehicles_inserted::DOUBLE / vehicles_received
-                ELSE NULL END), 0) AS reporting_rate,
-            1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*) AS availability,
-            COALESCE(AVG(avg_data_lag_seconds), 0) AS avg_data_lag_seconds,
-            MAX(fetch_timestamp) AS last_fetch_timestamp,
-            ROUND((
-                0.4 * COALESCE(AVG(CASE WHEN vehicles_received > 0
-                    THEN vehicles_inserted::DOUBLE / vehicles_received
-                    ELSE NULL END), 0)
-                + 0.4 * (1.0 - SUM(CASE WHEN total_dropout THEN 1 ELSE 0 END)::DOUBLE / COUNT(*))
-                + 0.2 * GREATEST(0.0, 1.0 - COALESCE(AVG(avg_data_lag_seconds), 0) / 300.0)
-            ) * 100) AS reliability_score
-        FROM fetch_quality_log
-        WHERE fetch_timestamp >= {cutoff}
-        GROUP BY region
-        ORDER BY reliability_score DESC
-        """
-        return con.execute(query).df()
+        if con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_network_health'"
+        ).fetchone()[0] == 0:
+            return pd.DataFrame()
+        return con.execute("SELECT * FROM main.mart_network_health").df()
     finally:
         con.close()
 
@@ -112,26 +92,18 @@ def get_region_health_trend(region, window_hours=24):
     cutoff = int(time.time()) - int(window_hours * 3600)
     con = get_connection()
     try:
-        query = f"""
-        SELECT
-            fetch_timestamp,
-            vehicles_received,
-            vehicles_rejected,
-            vehicles_inserted,
-            avg_data_lag_seconds,
-            max_data_lag_seconds,
-            total_dropout,
-            ROUND((
-                0.4 * CASE WHEN vehicles_received > 0
-                    THEN vehicles_inserted::DOUBLE / vehicles_received ELSE 0 END
-                + 0.4 * CASE WHEN total_dropout THEN 0.0 ELSE 1.0 END
-                + 0.2 * GREATEST(0.0, 1.0 - avg_data_lag_seconds / 300.0)
-            ) * 100) AS reliability_score
-        FROM fetch_quality_log
-        WHERE region = ? AND fetch_timestamp >= {cutoff}
+        if con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_region_health_trend'"
+        ).fetchone()[0] == 0:
+            return pd.DataFrame()
+        query = """
+        SELECT fetch_timestamp, vehicles_received, vehicles_rejected, vehicles_inserted,
+               avg_data_lag_seconds, max_data_lag_seconds, total_dropout, reliability_score
+        FROM main.mart_region_health_trend
+        WHERE region = ? AND fetch_timestamp >= ?
         ORDER BY fetch_timestamp ASC
         """
-        df = con.execute(query, [region]).df()
+        df = con.execute(query, [region, cutoff]).df()
     finally:
         con.close()
 
@@ -339,3 +311,22 @@ def get_historical_data():
     }
 
     return df, metrics, sync_time_str
+
+
+def get_region_vehicle_counts():
+    """Unique vehicles per region from the dbt mart. Columns: Region, Count."""
+    if not table_exists():
+        return pd.DataFrame(columns=['Region', 'Count'])
+    con = get_connection()
+    try:
+        if con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_region_vehicle_counts'"
+        ).fetchone()[0] == 0:
+            return pd.DataFrame(columns=['Region', 'Count'])
+        df = con.execute(
+            "SELECT region AS \"Region\", unique_vehicles AS \"Count\" "
+            "FROM main.mart_region_vehicle_counts"
+        ).df()
+    finally:
+        con.close()
+    return df
