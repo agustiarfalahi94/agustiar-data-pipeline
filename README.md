@@ -5,6 +5,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml)
 
 **🚀 [Live Demo](https://malaysia-realtime-transit-tracker.streamlit.app/)**
 
@@ -234,6 +235,56 @@ One row per region per fetch cycle. Powers the Network Health page.
 | `max_data_lag_seconds` | DOUBLE | Worst lag observed in this fetch |
 | `total_dropout` | BOOLEAN | True if API returned zero vehicles for this region |
 | `fetch_duration_ms` | INTEGER | Wall-clock time for this region's HTTP fetch |
+
+---
+
+### Data Modeling (dbt)
+
+Analytical transformations live in a dbt project (`transform/`, dbt-duckdb adapter) as a
+bronze → silver → gold medallion model. The live-map path stays on direct DuckDB queries for
+sub-minute freshness; only the analytical pages read dbt marts.
+
+| Layer | Model | Grain | Feeds |
+|---|---|---|---|
+| source (bronze) | `live_buses`, `fetch_quality_log` | raw rows | — |
+| staging (silver) | `stg_vehicle_positions`, `stg_fetch_quality` | cleaned rows | marts |
+| mart (gold) | `mart_network_health` | region (24h) | Network Health scorecards |
+| mart (gold) | `mart_region_health_trend` | region × fetch cycle | drill-down charts |
+| mart (gold) | `mart_region_vehicle_counts` | region | Analytics bar + pie |
+
+The reliability-score formula is a single dbt macro (`reliability_score`) shared by the two
+health marts. Data quality is enforced by dbt tests (region `accepted_values`, 0–100 score range,
+0–1 rate range, key uniqueness) and source freshness, run in CI via `dbt build`.
+
+```mermaid
+flowchart LR
+  subgraph bronze["bronze — sources"]
+    A[live_buses]
+    B[fetch_quality_log]
+  end
+  subgraph silver["silver — staging"]
+    C[stg_vehicle_positions]
+    D[stg_fetch_quality]
+  end
+  subgraph gold["gold — marts"]
+    E[mart_region_vehicle_counts]
+    F[mart_network_health]
+    G[mart_region_health_trend]
+  end
+  A --> C --> E
+  B --> D --> F
+  D --> G
+```
+
+Run locally:
+
+    export DBT_DUCKDB_PATH="$(pwd)/src/agustiar_analytics.duckdb"
+    dbt build --project-dir transform --profiles-dir transform
+
+For the full interactive lineage graph:
+
+    dbt docs generate --project-dir transform --profiles-dir transform
+    dbt docs serve --project-dir transform --profiles-dir transform
 
 ---
 
