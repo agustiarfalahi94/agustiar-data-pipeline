@@ -94,7 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DATA_FUTURE_TOLERANCE` is deliberately unchanged. Clamping ages at zero removes its ability to
   distort the window, so tightening it would treat a symptom that is already fixed and would start
   rejecting real data from feeds whose clocks run slightly fast
-- Verified by the automated test suite and parse checks; not yet exercised in a running browser
+- Verified by the automated test suite and parse checks; not yet exercised in a running browser.
+  The outage banner and the "no rows in the window" message are now covered by page-level tests that
+  drive `live_map.show()` / `analytics.show()` against a stubbed Streamlit — the previous db-layer
+  test asserted only that `sync_time_str` was not `None`, which passed while the user-visible string
+  was still the old one
 
 ## [2.3.1] - 2026-07-30
 

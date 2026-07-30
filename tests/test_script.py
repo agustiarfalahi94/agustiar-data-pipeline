@@ -799,7 +799,15 @@ def test_live_window_ignores_future_dated_rows_from_other_regions(tmp_path, monk
     regions = set(df['region'])
     assert 'Rapid Bus KL' in regions, "honest bus was excluded by another region's fast clock"
     assert 'myBAS Melaka' in regions
-    assert metrics['total'] == 2   # both are fresh; the future-dated one clamps to age 0
+    assert metrics['total'] == 2   # both drawn; the future-dated one clamps to age 0
+
+    # Ages must be measured from wall-clock now, not from the future-dated
+    # MAX(timestamp). Re-anchoring to MAX(timestamp) would age the honest bus by
+    # a further 250s and demote it to 'stale' — still drawn, so the drawn count
+    # alone no longer catches the revert. These two assertions do.
+    assert metrics['fresh'] == 2, "an honest bus was aged by another region's fast clock"
+    honest_age = int(df[df['vehicle_id'] == 'KL1'].iloc[0]['age_seconds'])
+    assert honest_age < 60, f"honest bus aged {honest_age}s — window is not anchored to now"
 
 
 def test_live_metrics_split_fresh_from_stale(tmp_path, monkeypatch):
