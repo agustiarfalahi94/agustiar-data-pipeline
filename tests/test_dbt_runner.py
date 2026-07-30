@@ -11,9 +11,16 @@ def _clear_attempt_guard():
     dbt_runner.reset_attempts()
 
 
-def _make_marts(con, names):
+def _make_marts(con, names, current_schema=True):
+    """Create stand-in mart views. `current_schema=False` reproduces the views a
+    previous release left behind: present, but without this release's columns."""
     for i, name in enumerate(names):
-        con.execute(f"CREATE VIEW {name} AS SELECT {i} AS region")
+        cols = f"{i} AS region"
+        if name == dbt_runner._SCHEMA_SENTINEL_MART and current_schema:
+            cols += "".join(
+                f", false AS {c}" for c in dbt_runner._SCHEMA_SENTINEL_COLUMNS
+            )
+        con.execute(f"CREATE VIEW {name} AS SELECT {cols}")
 
 
 def test_marts_exist_false_on_empty_db(tmp_path):
@@ -44,6 +51,51 @@ def test_marts_exist_true_when_all_marts_present(tmp_path):
         assert dbt_runner.marts_exist(con) is True
     finally:
         con.close()
+
+
+def test_marts_are_current_false_when_schema_is_stale(tmp_path):
+    """Marts are views, so an existing database upgraded from a previous release
+    has all three present while they still hold the OLD SQL. Presence alone must
+    not be mistaken for currency, or the new scoring never reaches the page."""
+    db = tmp_path / "stale.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        _make_marts(con, dbt_runner._REQUIRED_MARTS, current_schema=False)
+        assert dbt_runner.marts_exist(con) is True
+        assert dbt_runner.marts_are_current(con) is False
+    finally:
+        con.close()
+
+
+def test_marts_are_current_true_on_current_schema(tmp_path):
+    db = tmp_path / "current.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        _make_marts(con, dbt_runner._REQUIRED_MARTS)
+        assert dbt_runner.marts_are_current(con) is True
+    finally:
+        con.close()
+
+
+def test_ensure_dbt_models_rebuilds_stale_marts(tmp_path, monkeypatch):
+    """A database whose `mart_network_health` lacks `feed_unavailable` needs a
+    rebuild, not a skip."""
+    db = tmp_path / "stale_marts.duckdb"
+    con = duckdb.connect(str(db))
+    try:
+        _make_marts(con, dbt_runner._REQUIRED_MARTS, current_schema=False)
+    finally:
+        con.close()
+
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(dbt_runner.subprocess, "run", fake_run)
+    assert dbt_runner.ensure_dbt_models(str(db)) is True
+    assert len(calls) == 1
 
 
 def test_ensure_dbt_models_never_raises_when_dbt_missing(tmp_path, monkeypatch):
@@ -124,7 +176,7 @@ def test_ensure_dbt_models_invokes_dbt_via_current_interpreter(tmp_path, monkeyp
     assert captured["cmd"][:4] == [sys.executable, "-m", "dbt.cli.main", "run"]
 
 
-def test_ensure_dbt_models_skips_when_all_marts_present(tmp_path, monkeypatch):
+def test_ensure_dbt_models_skips_when_all_marts_present_and_current(tmp_path, monkeypatch):
     db = tmp_path / "all_marts.duckdb"
     con = duckdb.connect(str(db))
     try:
