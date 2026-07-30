@@ -539,3 +539,26 @@ def test_build_quality_stats_defaults_missing_status_to_error():
         fetch_timestamp=1750000000,
     )
     assert stats[0]['fetch_status'] == 'ERROR'
+
+
+def test_early_return_logs_no_feed_status(tmp_path):
+    """
+    Step 8: a fully-dead fetch cycle (every endpoint fails, all_vehicle_data
+    stays empty) must still write a quality-log row instead of vanishing
+    silently — this is what makes a withdrawn feed like Rapid Bus Kuantan's
+    HTTP 404 visible rather than indistinguishable from a passing cycle.
+    """
+    db_path = str(tmp_path / 'test_early_return.duckdb')
+    captured = []
+
+    with patch('utils.ingestion.DATABASE_NAME', db_path), \
+         patch('utils.ingestion.API_SOURCES', {'Rapid Bus Kuantan': ['dead-endpoint']}), \
+         patch('utils.ingestion._fetch_endpoint', return_value=([], 5, 'NO_FEED')), \
+         patch('utils.ingestion._write_quality_log', side_effect=captured.append):
+        ingestion.fetch_and_store_transit_data()
+
+    assert len(captured) == 1
+    stats_list = captured[0]
+    assert len(stats_list) > 0
+    row = next(s for s in stats_list if s['region'] == 'Rapid Bus Kuantan')
+    assert row['fetch_status'] == 'NO_FEED'
