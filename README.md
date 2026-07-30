@@ -201,7 +201,9 @@ GTFS Realtime API
   ┌────┴──────────┬──────────┴──────┬──────────────┐
   ▼               ▼                 ▼               ▼
 Live Map      Data Table        Analytics     Network Health
-(last 60s)   (7-day history)  (7-day history) (fetch_quality_log)
+(last 15 min  (7-day history)  (7-day history) (fetch_quality_log)
+ fetched;
+ 5 min drawn)
 ```
 
 ### Key Design Decisions
@@ -217,8 +219,9 @@ Live Map      Data Table        Analytics     Network Health
 | **`streamlit-js-eval` for geolocation** | `components.html()` is one-way only; `streamlit-js-eval` provides the two-way JS bridge needed to return browser GPS coordinates to Python |
 | **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout, and the fetch's `fetch_status` (`OK` / `EMPTY` / `NO_FEED` / `THROTTLED` / `ERROR`), which is what lets the score distinguish an agency outage from a withdrawn feed or our own rate limiting. Powers the Network Health page without touching `live_buses` |
 | **Fetch guard (3s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
-| **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query for sub-minute freshness |
+| **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query, so positions and their per-second ages are always current |
 | **Live window anchored to wall-clock now** | Anchoring to `MAX(timestamp)` let one feed with a fast clock drag the window into the future and black out regions reporting honestly. Ages are clamped at zero so a fast clock reads as current rather than being discarded |
+| **15 min fetched, 5 min drawn, 60s solid** | `LIVE_HIDDEN_SECONDS` bounds the query, `LIVE_STALE_SECONDS` bounds what is drawn, `LIVE_FRESH_SECONDS` bounds what is drawn solid. A vehicle between the last two is dimmed rather than deleted, so a 90-second gap in one feed no longer looks like the bus vanished |
 
 ### Route Viewer — How It Works
 
@@ -266,8 +269,8 @@ One row per region per fetch cycle. Powers the Network Health page.
 ### Data Modeling (dbt)
 
 Analytical transformations live in a dbt project (`transform/`, dbt-duckdb adapter) as a
-bronze → silver → gold medallion model. The live-map path stays on direct DuckDB queries for
-sub-minute freshness; only the analytical pages read dbt marts.
+bronze → silver → gold medallion model. The live-map path stays on direct DuckDB queries so
+positions and their per-second ages are always current; only the analytical pages read dbt marts.
 
 | Layer | Model | Grain | Feeds |
 |---|---|---|---|

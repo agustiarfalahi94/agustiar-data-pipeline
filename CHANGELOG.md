@@ -79,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wall-clock now and decays to zero between refreshes. Read `metrics['fresh']` for the
   reporting-right-now count
 
+### Docs
+- The README pipeline diagram still labelled the Live Map "last 60s" — it is now 15 minutes fetched
+  and 5 minutes drawn. It sits one screen above the Key Design Decisions table this release updated,
+  so the contradiction was visible at a glance. The table gains a row spelling out the three
+  windows, and the two "sub-minute freshness" asides now say what the direct query actually buys
+  (up-to-the-second positions and ages), rather than describing the pre-2.4.0 window
+
 ### Notes
 - Measured while diagnosing this: the Rapid Bus MRT Feeder feed published a timestamp of
   `1886017556` — roughly the year 2029. Ingestion rejects it, but `myBAS Kuching` and `myBAS Melaka`
