@@ -126,6 +126,10 @@ def show():
         # Update session state only if changed
         if selected_region != st.session_state.selected_region:
             st.session_state.selected_region = selected_region
+            # Clear any stale search term so it doesn't silently re-apply to
+            # the new region's vehicles. Safe here: this runs before the
+            # text_input widget below is instantiated for this run.
+            st.session_state.pop('route_search_live_map', None)
 
         # Route search — hidden for KTM, whose realtime feed carries no route_id
         if selected_region == 'KTM Berhad':
@@ -220,7 +224,8 @@ def show():
         else:
             df_map = df_filtered
             matched = sorted(df_map['route_display'].unique())
-            st.success(f"Showing {len(df_map)} vehicle(s) on {', '.join(matched[:3])}")
+            matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
+            st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")
 
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
