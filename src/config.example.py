@@ -42,6 +42,12 @@ ARROW_OPACITY = 200
 DATA_MAX_AGE = 3600
 DATA_FUTURE_TOLERANCE = 300
 
+# Live Map freshness tiers (seconds). Ages are measured from wall-clock now and
+# clamped at zero, so a feed whose clock runs fast cannot shift the window.
+LIVE_FRESH_SECONDS = 60     # at or under this age a vehicle is drawn solid
+LIVE_STALE_SECONDS = 300    # up to this age it is drawn dimmed with a "last update" note
+LIVE_HIDDEN_SECONDS = 900   # up to this age it is counted as hidden; older is not fetched
+
 # Data retention — rows older than this are pruned from DuckDB on each ingestion run.
 # Increase if you need more history for analytics; decrease to save disk space.
 DATA_RETENTION_DAYS = 7

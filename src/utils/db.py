@@ -2,15 +2,22 @@ import time
 import duckdb
 import pandas as pd
 from datetime import datetime, timedelta, timezone
+from utils import data_processor
 
 try:
-    from config import DATABASE_NAME, DATABASE_TABLE, TIMEZONE, UTC_OFFSET_HOURS, DATA_RETENTION_DAYS
+    from config import (
+        DATABASE_NAME, DATABASE_TABLE, TIMEZONE, UTC_OFFSET_HOURS, DATA_RETENTION_DAYS,
+        LIVE_FRESH_SECONDS, LIVE_STALE_SECONDS, LIVE_HIDDEN_SECONDS,
+    )
 except ImportError:
     DATABASE_NAME = 'agustiar_analytics.duckdb'
     DATABASE_TABLE = 'live_buses'
     TIMEZONE = 'Asia/Kuala_Lumpur'
     UTC_OFFSET_HOURS = 8
     DATA_RETENTION_DAYS = 7
+    LIVE_FRESH_SECONDS = 60
+    LIVE_STALE_SECONDS = 300
+    LIVE_HIDDEN_SECONDS = 900
 
 
 def get_connection():
@@ -166,20 +173,18 @@ def get_live_data_optimized():
     con = get_connection()
 
     try:
-        max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
-
-        if max_timestamp_raw is None:
-            return pd.DataFrame(), {}, None
-
-        max_timestamp = int(max_timestamp_raw)
-        sixty_seconds_ago = max_timestamp - 60
+        # Anchor to wall-clock now, NOT MAX(timestamp). Anchoring to the newest
+        # row let one feed with a fast clock drag the window into the future and
+        # black out every region reporting honestly.
+        now = int(time.time())
+        cutoff = now - LIVE_HIDDEN_SECONDS
 
         query = f"""
         SELECT * FROM (
             SELECT *,
                    ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY CAST(timestamp AS BIGINT) DESC) as rn
             FROM {DATABASE_TABLE}
-            WHERE CAST(timestamp AS BIGINT) >= {sixty_seconds_ago}
+            WHERE CAST(timestamp AS BIGINT) >= {cutoff}
         ) WHERE rn = 1
         """
 
@@ -191,7 +196,8 @@ def get_live_data_optimized():
         if 'rn' in df.columns:
             df = df.drop(columns=['rn'])
 
-        sync_time_str = _format_sync_time(max_timestamp)
+        max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
+        sync_time_str = _format_sync_time(int(max_timestamp_raw)) if max_timestamp_raw else None
 
     finally:
         con.close()
@@ -208,10 +214,19 @@ def get_live_data_optimized():
         else:
             df[col] = df[col].fillna('').astype(str)
 
+    df = data_processor.classify_freshness(
+        df, now, fresh_seconds=LIVE_FRESH_SECONDS, stale_seconds=LIVE_STALE_SECONDS
+    )
+
+    # Drawn on the map = fresh + stale. 'total' keeps its old meaning of
+    # "reporting right now" so the headline number stays comparable.
+    drawn = df[df['freshness'] != 'hidden']
     metrics = {
-        'total': len(df),
-        'regions': len(df['region'].unique()),
-        'busiest': df['region'].value_counts().idxmax() if len(df) > 0 else 'N/A'
+        'total': int((df['freshness'] == 'fresh').sum()),
+        'stale': int((df['freshness'] == 'stale').sum()),
+        'hidden': int((df['freshness'] == 'hidden').sum()),
+        'regions': len(drawn['region'].unique()),
+        'busiest': drawn['region'].value_counts().idxmax() if len(drawn) > 0 else 'N/A',
     }
 
     return df, metrics, sync_time_str

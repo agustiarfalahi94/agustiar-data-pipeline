@@ -697,3 +697,72 @@ def test_classify_freshness_respects_custom_bounds():
     df = pd.DataFrame({'vehicle_id': ['a'], 'timestamp': [now - 30]})
     out = data_processor.classify_freshness(df, now, fresh_seconds=10, stale_seconds=20)
     assert list(out['freshness']) == ['hidden']
+
+
+def test_live_window_ignores_future_dated_rows_from_other_regions(tmp_path, monkeypatch):
+    """
+    A single future-dated vehicle must not black out regions reporting honestly.
+
+    This is the 2.4.0 bug: the window used to anchor to MAX(timestamp), so one
+    row timestamped now+250 shifted the window to [now+190, now+250] and every
+    normally-timestamped bus fell outside it.
+    """
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "live.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    # An honest bus reporting 10 seconds ago...
+    con.execute(
+        "INSERT INTO live_buses VALUES ('Rapid Bus KL','KL1',3.14,101.68,90,10.0,?, 'T1','T5800',?,current_timestamp)",
+        [now - 10, now - 10])
+    # ...and a vehicle in ANOTHER region whose clock runs 250s fast.
+    con.execute(
+        "INSERT INTO live_buses VALUES ('myBAS Melaka','MK1',2.19,102.25,90,5.0,?, 'M1','M100',?,current_timestamp)",
+        [now + 250, now])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    df, metrics, _ = db_mod.get_live_data_optimized()
+
+    regions = set(df['region'])
+    assert 'Rapid Bus KL' in regions, "honest bus was excluded by another region's fast clock"
+    assert 'myBAS Melaka' in regions
+    assert metrics['total'] == 2   # both are fresh; the future-dated one clamps to age 0
+
+
+def test_live_metrics_split_fresh_from_stale(tmp_path, monkeypatch):
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "tiers.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    for vid, age in [('f1', 10), ('f2', 30), ('s1', 120), ('h1', 600)]:
+        con.execute(
+            "INSERT INTO live_buses VALUES ('Rapid Bus KL',?,3.14,101.68,90,10.0,?, 'T1','T5800',?,current_timestamp)",
+            [vid, now - age, now - age])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    df, metrics, _ = db_mod.get_live_data_optimized()
+
+    assert metrics['total'] == 2    # fresh only
+    assert metrics['stale'] == 1
+    assert metrics['hidden'] == 1
+    assert len(df) == 4             # all four returned; the caller decides what to draw
