@@ -17,7 +17,7 @@ models:
           # `src/config.example.py`. The CI seed fixture's synthetic region is
           # admitted only under the `ci` target, so `dev`/prod stay strict.
           - accepted_values:
-              values: "{{ var('canonical_regions') + (['TestRegion', 'DeadFeed', 'QuietFeed'] if target.name == 'ci' else []) }}"
+              values: "{{ var('canonical_regions') + (['TestRegion', 'DeadFeed', 'QuietFeed', 'MixedFeed', 'ThrottledFeed'] if target.name == 'ci' else []) }}"
       - name: total_fetches
         description: Number of fetch cycles recorded for the region inside the window.
       - name: scoreable_fetches
@@ -28,10 +28,29 @@ models:
         description: True when the window contains no scoreable fetches — the feed is gone upstream.
         tests:
           - not_null
+      - name: no_feed_count
+        description: >
+          Fetch cycles in the window whose status was NO_FEED (HTTP 404). Lets the
+          page say why a feed is unavailable instead of assuming "withdrawn".
+        tests:
+          - not_null
+      - name: throttled_count
+        description: >
+          Fetch cycles in the window whose status was THROTTLED (HTTP 429) - our own
+          rate limiting, not an agency fault.
+        tests:
+          - not_null
       - name: dropout_count
-        description: Fetch cycles inside the window where the API returned zero vehicles.
+        description: >
+          Scoreable fetch cycles inside the window where the API returned zero
+          vehicles. Informational only - it is not an input to reliability_score,
+          and it excludes NO_FEED/THROTTLED cycles so it cannot contradict the
+          score displayed beside it.
       - name: reporting_rate
-        description: Mean ratio of vehicles inserted to vehicles received; 0 when nothing was received.
+        description: >
+          Mean ratio of vehicles inserted to vehicles received, over the cycles that
+          received anything. NULL when no cycle in the window received anything -
+          the rate is then undefined, not zero, and reliability_score renormalises.
         tests:
           - accepted_range: {min_value: 0, max_value: 1}
       - name: availability
@@ -41,14 +60,21 @@ models:
           answered, zero vehicles running) is not an error. NULL when
           feed_unavailable (no scoreable fetches in the window).
       - name: avg_data_lag_seconds
-        description: Mean data lag across the window's fetch cycles, in seconds.
+        description: >
+          Mean data lag across the window's scoreable fetch cycles, in seconds.
+          NO_FEED/THROTTLED cycles log a lag of 0 they never measured, so they are
+          excluded here just as they are from the score.
       - name: last_fetch_timestamp
         description: Unix timestamp of the most recent fetch cycle inside the window.
       - name: reliability_score
         description: >
           Composite 0-100 score - 40% reporting rate, 40% availability, 20% data
-          freshness. Computed by the shared `reliability_score` macro. NULL when
-          feed_unavailable (no scoreable fetches in the window to score).
+          freshness. Computed by the shared `reliability_score` macro. When no cycle
+          in the window received anything (reporting_rate is NULL) the reporting term
+          is dropped and the remaining weights renormalised, via
+          `reliability_score_without_reporting` - the same rule
+          `mart_region_health_trend` applies per row, so the two marts agree. NULL
+          when feed_unavailable (no scoreable fetches in the window to score).
         tests:
           - accepted_range: {min_value: 0, max_value: 100}
 
@@ -84,8 +110,13 @@ models:
         description: >
           Composite 0-100 score for this single fetch cycle - 40% reporting rate,
           40% availability (ERROR = 0, otherwise 1, including EMPTY), 20% data
-          freshness. NULL when the row isn't scoreable (NO_FEED/THROTTLED), so
-          it's absent from the trend line rather than plotted as a zero.
+          freshness. When the cycle received nothing the reporting rate is
+          undefined, so that term is dropped and the remaining weights
+          renormalised (`reliability_score_without_reporting`) - matching what
+          `mart_network_health` does when avg() skips the NULL, so the sparkline
+          and the scorecard above it cannot tell different stories. NULL when the
+          row isn't scoreable (NO_FEED/THROTTLED), so it's absent from the trend
+          line rather than plotted as a zero.
         tests:
           - accepted_range: {min_value: 0, max_value: 100}
 

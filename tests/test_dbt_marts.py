@@ -145,15 +145,65 @@ def test_trend_dead_feed_rows_are_null_not_zero(built_db):
     assert scores == [None, None]
 
 
-def test_trend_quiet_feed_rows_are_not_penalised(built_db):
-    """EMPTY rows are scoreable and healthy (feed answered, no service running),
-    so they must not score 0 like the old total_dropout-based rule would."""
+def test_trend_empty_rows_score_on_the_terms_that_apply(built_db):
+    """An EMPTY cycle received nothing, so its reporting rate is undefined, not
+    zero. Substituting a zero scored it 60 - "Degraded" on the page's own scale -
+    for a feed that answered correctly with no service running. The reporting
+    term is dropped and the remaining weights renormalised instead."""
     scores = [
         r[0] for r in built_db.execute(
             "SELECT reliability_score FROM main.mart_region_health_trend "
             "WHERE region = 'QuietFeed'"
         ).fetchall()
     ]
-    assert all(s is not None and s > 0 for s in scores)
-    # reporting 0, availability 1.0 (EMPTY != ERROR), lag 0 -> round((0+0.4+0.2)*100)=60
-    assert scores == [60, 60]
+    # availability 1.0 (EMPTY != ERROR), lag 0 -> round((0.4+0.2)/0.6*100) = 100
+    assert scores == [100, 100]
+
+
+def test_mixed_ok_and_empty_region_agrees_between_the_two_marts(built_db):
+    """The invariant that was silently broken: the scorecard's aggregate score
+    and the sparkline/drill-down trend beneath it describe the same window with
+    the same macro, so they must not tell different stories. Before the fix a
+    region with one OK and one EMPTY cycle read aggregate 100 with a trend of
+    [100, 60] - a green "Reliable" card above a sparkline dipping to Degraded."""
+    aggregate = built_db.execute(
+        "SELECT reliability_score FROM main.mart_network_health "
+        "WHERE region = 'MixedFeed'"
+    ).fetchone()[0]
+    trend = [
+        r[0] for r in built_db.execute(
+            "SELECT reliability_score FROM main.mart_region_health_trend "
+            "WHERE region = 'MixedFeed' ORDER BY fetch_timestamp"
+        ).fetchall()
+    ]
+    scoreable = [s for s in trend if s is not None]
+    assert scoreable, "fixture must contain at least one scoreable row"
+    assert aggregate == sum(scoreable) / len(scoreable)
+    assert aggregate == 100 and trend == [100, 100]
+
+
+def test_dropout_count_excludes_unscoreable_cycles(built_db):
+    """dropout_count sits on the scorecard next to the score, so it must be
+    counted over the same rows the score is. Counting NO_FEED/THROTTLED cycles
+    produced cards reading "100 / Reliable" beside a four-figure dropout count."""
+    rows = dict(built_db.execute(
+        "SELECT region, dropout_count FROM main.mart_network_health"
+    ).fetchall())
+    assert rows['DeadFeed'] == 0       # 2 NO_FEED cycles, none scoreable
+    assert rows['ThrottledFeed'] == 0  # 2 THROTTLED cycles, none scoreable
+    assert rows['QuietFeed'] == 2      # EMPTY is scoreable and did drop out
+    assert rows['MixedFeed'] == 1
+
+
+def test_unavailable_feeds_carry_their_cause(built_db):
+    """`feed_unavailable` alone cannot tell a withdrawn feed from a throttled
+    one, so the card used to assert "Withdrawn upstream" for both."""
+    rows = {
+        r[0]: r[1:] for r in built_db.execute(
+            "SELECT region, feed_unavailable, no_feed_count, throttled_count "
+            "FROM main.mart_network_health"
+        ).fetchall()
+    }
+    assert rows['DeadFeed'] == (True, 2, 0)
+    assert rows['ThrottledFeed'] == (True, 0, 2)
+    assert rows['TestRegion'] == (False, 0, 0)
