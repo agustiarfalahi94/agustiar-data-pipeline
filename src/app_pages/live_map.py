@@ -8,11 +8,12 @@ from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 
 try:
-    from config import DEFAULT_ZOOM, ARROW_SIZE, LIVE_FRESH_SECONDS
+    from config import DEFAULT_ZOOM, ARROW_SIZE, LIVE_FRESH_SECONDS, LIVE_STALE_SECONDS
 except ImportError:
     DEFAULT_ZOOM = 13
     ARROW_SIZE = 0.001
     LIVE_FRESH_SECONDS = 60
+    LIVE_STALE_SECONDS = 300
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
@@ -205,12 +206,13 @@ def show():
     hidden_count = 0
     if 'freshness' in df_map.columns:
         hidden_count = int((df_map['freshness'] == 'hidden').sum())
-        df_map = df_map[df_map['freshness'] != 'hidden']
+        df_map = df_map[df_map['freshness'] != 'hidden'].copy()
 
     if df_map.empty:
         st.warning(
             f"No recent data for {selected_region} — "
-            f"{hidden_count} vehicle(s) last reported over 5 minutes ago."
+            f"{hidden_count} vehicle(s) last reported over "
+            f"{LIVE_STALE_SECONDS // 60} minutes ago."
         )
         return
 
@@ -404,7 +406,8 @@ def show():
     # restate the same number as though it were the whole region.
     if hidden_count:
         st.caption(
-            f"🚫 {hidden_count} vehicle(s) hidden — no update in over 5 minutes."
+            f"🚫 {hidden_count} vehicle(s) hidden — no update in over "
+            f"{LIVE_STALE_SECONDS // 60} minutes."
         )
 
     if not filter_active:
