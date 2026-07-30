@@ -126,7 +126,23 @@ def show():
         # Update session state only if changed
         if selected_region != st.session_state.selected_region:
             st.session_state.selected_region = selected_region
-    
+            # Clear any stale search term so it doesn't silently re-apply to
+            # the new region's vehicles. Safe here: this runs before the
+            # text_input widget below is instantiated for this run.
+            st.session_state.pop('route_search_live_map', None)
+
+        # Route search — hidden for KTM, whose realtime feed carries no route_id
+        if selected_region == 'KTM Berhad':
+            route_query = ''
+            st.caption("Route search is not yet available for KTM Berhad.")
+        else:
+            route_query = st.text_input(
+                "Search route (e.g. T580)",
+                value='',
+                placeholder='Route number or name',
+                key='route_search_live_map',
+            )
+
     with col_locate:
         # Locate Me button
         st.markdown("<br>", unsafe_allow_html=True)  # Vertical alignment
@@ -196,6 +212,23 @@ def show():
     else:
         df_map['route_display'] = df_map.get('route_id', '—').fillna('—')
 
+    # Filter to the searched route. Applied after route_display is resolved and
+    # before layers are built, so the layers, the view centring below, the
+    # caption and the Route Viewer all reflect the filtered set.
+    filter_active = False
+    if route_query and route_query.strip():
+        df_filtered = data_processor.filter_by_route(df_map, route_query)
+        if df_filtered.empty:
+            # Leave the map unfiltered: a blank map cannot be told apart from
+            # a bad search term.
+            st.warning(f"No live vehicles found on '{route_query.strip()}' right now.")
+        else:
+            df_map = df_filtered
+            filter_active = True
+            matched = sorted(df_map['route_display'].unique())
+            matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
+            st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")
+
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
 
@@ -238,8 +271,16 @@ def show():
             'pitch': 0,
         }
     
-    # Only update view state if region changed
-    if st.session_state.selected_region != st.session_state.get('last_viewed_region', None):
+    # Re-centre on a *change of what is being shown* — a different region, or a
+    # different route search — and only then, so auto-refresh never yanks the
+    # viewport away from wherever the user panned. Without the search half, a
+    # search made while parked elsewhere in the region filtered the layers but
+    # left the camera behind, i.e. a "Showing 3 vehicle(s)" banner over a map
+    # with nothing on it.
+    current_query = (route_query or '').strip().lower()
+    region_changed = st.session_state.selected_region != st.session_state.get('last_viewed_region', None)
+    query_changed = current_query != st.session_state.get('last_route_query', '')
+    if region_changed or query_changed:
         st.session_state.map_view_state = {
             'latitude': df_map['latitude'].mean(),
             'longitude': df_map['longitude'].mean(),
@@ -247,6 +288,7 @@ def show():
             'pitch': 0,
         }
         st.session_state.last_viewed_region = st.session_state.selected_region
+        st.session_state.last_route_query = current_query
     
     view_state = pdk.ViewState(
         latitude=st.session_state.map_view_state['latitude'],
@@ -315,7 +357,11 @@ def show():
         )
     )
 
-    st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
+    # While a search is filtering the frame, len(df_map) is the match count, not
+    # the region total — the success banner above already states it, so don't
+    # restate the same number as though it were the whole region.
+    if not filter_active:
+        st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
 
     # ===== ROUTE VIEWER SECTION =====
     # Maps selected_region display names to GTFS static agency slugs

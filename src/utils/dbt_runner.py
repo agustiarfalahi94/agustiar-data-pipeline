@@ -16,6 +16,15 @@ _REQUIRED_MARTS = (
     "mart_region_vehicle_counts",
 )
 
+# The marts are views, so a database that ran an earlier release already has all
+# three present - holding their OLD SQL. Presence alone therefore proves nothing:
+# without a schema probe the bootstrap short-circuits forever and the new scoring
+# never takes effect, silently, because the page degrades rather than crashing.
+# These columns exist only in the current mart definitions, so a
+# `mart_network_health` missing any of them is a stale view that must be rebuilt.
+_SCHEMA_SENTINEL_MART = "mart_network_health"
+_SCHEMA_SENTINEL_COLUMNS = ("feed_unavailable", "no_feed_count", "throttled_count")
+
 # Ingestion calls ensure_dbt_models() after every fetch, and the page auto-
 # refreshes every ~20s. Without a guard, a permanently failing bootstrap would
 # spawn a doomed 2-5s dbt subprocess inside every Streamlit render. After a
@@ -42,6 +51,24 @@ def marts_exist(con):
     return row[0] == len(_REQUIRED_MARTS)
 
 
+def marts_are_current(con):
+    """Return True only if all mart views exist AND carry the current schema.
+
+    Marts are views: an upgraded app pointed at an existing database finds every
+    view present but still defined by the previous release's SQL. Rebuilding on a
+    missing sentinel column is what makes a schema change actually reach users.
+    """
+    if not marts_exist(con):
+        return False
+    placeholders = ", ".join("?" for _ in _SCHEMA_SENTINEL_COLUMNS)
+    row = con.execute(
+        "SELECT count(DISTINCT column_name) FROM information_schema.columns "
+        f"WHERE table_name = ? AND column_name IN ({placeholders})",
+        [_SCHEMA_SENTINEL_MART, *_SCHEMA_SENTINEL_COLUMNS],
+    ).fetchone()
+    return row[0] == len(_SCHEMA_SENTINEL_COLUMNS)
+
+
 def reset_attempts():
     """Clear the failed-attempt guard. Intended for tests."""
     global _failed_attempts, _last_failure_monotonic
@@ -51,8 +78,9 @@ def reset_attempts():
 
 def ensure_dbt_models(database_name):
     """
-    Create the dbt mart views once, after the source tables exist.
-    No-op if all mart views are already present. Never raises - a failed or
+    Create or refresh the dbt mart views after the source tables exist.
+    No-op if all mart views are already present *and* current; a stale view left
+    behind by an earlier release is rebuilt. Never raises - a failed or
     unavailable dbt run must not break ingestion.
     Returns True if `dbt run` succeeded, False if skipped/failed.
     """
@@ -62,7 +90,7 @@ def ensure_dbt_models(database_name):
     try:
         con = duckdb.connect(db_path)
         try:
-            if marts_exist(con):
+            if marts_are_current(con):
                 return False
         finally:
             con.close()
@@ -96,7 +124,7 @@ def ensure_dbt_models(database_name):
             check=True, env=env, cwd=_REPO_ROOT,
             capture_output=True, text=True, timeout=120,
         )
-        print("dbt marts created")
+        print("dbt marts created/refreshed")
         _failed_attempts = 0
         _last_failure_monotonic = None
         return True

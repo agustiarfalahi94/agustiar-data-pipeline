@@ -27,6 +27,25 @@ def _score_label(score):
     return 'Unreliable'
 
 
+def _unavailable_reason(row):
+    """Explain an unscored feed without asserting a cause we cannot support.
+
+    `feed_unavailable` only means "no scoreable fetch in the window", which is
+    equally true of a withdrawn feed (404) and of one we rate-limited ourselves
+    (429). Naming the wrong cause is the exact failure this release exists to
+    remove, so the copy follows whichever statuses actually occurred.
+    """
+    no_feed   = int(row.get('no_feed_count') or 0)
+    throttled = int(row.get('throttled_count') or 0)
+    if no_feed and throttled:
+        return "No feed returned (404) and rate-limited (429) — not scored"
+    if no_feed:
+        return "Withdrawn upstream (404) — not scored"
+    if throttled:
+        return "Rate-limited (429), not an agency fault — not scored"
+    return "No scoreable fetches in this window — not scored"
+
+
 def show():
     # Identical refresh pattern to every other page — no special treatment
     if st.session_state.auto_refresh:
@@ -57,16 +76,23 @@ def show():
 
     # ── Section 1: Network Summary Bar ─────────────────────────────────────
     total_regions = len(health_df)
-    healthy    = int((health_df['reliability_score'] >= 80).sum())
-    degraded   = int(((health_df['reliability_score'] >= 50) & (health_df['reliability_score'] < 80)).sum())
-    unreliable = int((health_df['reliability_score'] < 50).sum())
+    if 'feed_unavailable' in health_df.columns:
+        unavailable_mask = health_df['feed_unavailable'].fillna(False).astype(bool)
+    else:
+        unavailable_mask = pd.Series(False, index=health_df.index)
+    scored_df  = health_df[~unavailable_mask]
+    healthy    = int((scored_df['reliability_score'] >= 80).sum())
+    degraded   = int(((scored_df['reliability_score'] >= 50) & (scored_df['reliability_score'] < 80)).sum())
+    unreliable = int((scored_df['reliability_score'] < 50).sum())
+    unavailable = int(unavailable_mask.sum())
     last_ts    = health_df['last_fetch_timestamp'].max()
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("Regions Tracked", total_regions)
     col2.metric("🟢 Reliable",     healthy)
     col3.metric("🟡 Degraded",     degraded)
     col4.metric("🔴 Unreliable",   unreliable)
+    col6.metric("⚫ No Feed",      unavailable)
     if pd.notna(last_ts):
         dt = datetime.fromtimestamp(int(last_ts), tz=timezone.utc) + timedelta(hours=UTC_OFFSET_HOURS)
         col5.metric("Last Fetch", dt.strftime('%H:%M:%S'))
@@ -84,12 +110,24 @@ def show():
         cols = st.columns(4)
         for j, row in enumerate(regions[i:i + 4]):
             with cols[j]:
+                if row.get('feed_unavailable'):
+                    st.markdown(f"""
+                    <div style="border:1px solid #666;border-radius:8px;padding:12px;margin-bottom:8px;opacity:0.75;">
+                        <div style="font-weight:bold;font-size:0.85em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{row['region']}</div>
+                        <div style="font-size:1.1em;color:#999;font-weight:bold;line-height:1.6;">Feed unavailable</div>
+                        <div style="font-size:0.75em;color:#999;">{_unavailable_reason(row)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    continue
                 score     = int(row['reliability_score']) if pd.notna(row['reliability_score']) else 0
                 color     = _score_color(score)
                 label     = _score_label(score)
                 reporting = f"{row['reporting_rate'] * 100:.0f}%" if pd.notna(row['reporting_rate']) else "N/A"
                 lag       = f"{row['avg_data_lag_seconds']:.0f}s"  if pd.notna(row['avg_data_lag_seconds']) else "N/A"
-                dropouts  = int(row['dropout_count']) if pd.notna(row['dropout_count']) else 0
+                # Quiet cycles are context, not a scoring input — an EMPTY fetch
+                # is a healthy feed with no service running. Labelled as such so
+                # the number can't be read as "the score should be lower".
+                quiet     = int(row['dropout_count']) if pd.notna(row['dropout_count']) else 0
 
                 st.markdown(f"""
                 <div style="border:1px solid {color};border-radius:8px;padding:12px;margin-bottom:8px;">
@@ -97,7 +135,10 @@ def show():
                     <div style="font-size:2em;color:{color};font-weight:bold;line-height:1.1;">{score}</div>
                     <div style="font-size:0.75em;color:{color};">{label}</div>
                     <div style="font-size:0.72em;margin-top:4px;color:#888;">
-                        📶 {reporting} &nbsp;|&nbsp; ⏱ {lag} &nbsp;|&nbsp; 🚫 {dropouts}
+                        📶 {reporting} &nbsp;|&nbsp; ⏱ {lag}
+                    </div>
+                    <div style="font-size:0.68em;margin-top:2px;color:#888;" title="Fetch cycles where the feed answered but reported no vehicles. Informational — not part of the score.">
+                        💤 {quiet} quiet cycles
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -152,18 +193,28 @@ def show():
     if trend_df.empty:
         st.info("No data for this region in the selected window.")
     else:
-        fig_score = go.Figure(go.Scatter(
-            x=trend_df['datetime'], y=trend_df['reliability_score'],
-            mode='lines', name='Reliability Score',
-            line=dict(color='#3498db', width=2),
-            fill='tozeroy', fillcolor='rgba(52,152,219,0.1)',
-        ))
-        fig_score.update_layout(
-            title='Reliability Score Over Time',
-            yaxis=dict(range=[0, 100], title='Score (0–100)'),
-            height=280, margin=dict(t=40, b=20),
-        )
-        st.plotly_chart(fig_score, use_container_width=True, key=f"drill_score_{selected}")
+        # Every row unscoreable (NO_FEED/THROTTLED throughout) means there is no
+        # score series to draw. A titled, axis-labelled, entirely blank chart
+        # reads as a rendering failure, so say why instead.
+        if trend_df['reliability_score'].isna().all():
+            st.info(
+                "Not scored in this window — every fetch was `NO_FEED` (404) or "
+                "`THROTTLED` (429), which says nothing about the agency's reliability. "
+                "The cycle-level charts below still show what was fetched."
+            )
+        else:
+            fig_score = go.Figure(go.Scatter(
+                x=trend_df['datetime'], y=trend_df['reliability_score'],
+                mode='lines', name='Reliability Score',
+                line=dict(color='#3498db', width=2),
+                fill='tozeroy', fillcolor='rgba(52,152,219,0.1)',
+            ))
+            fig_score.update_layout(
+                title='Reliability Score Over Time',
+                yaxis=dict(range=[0, 100], title='Score (0–100)'),
+                height=280, margin=dict(t=40, b=20),
+            )
+            st.plotly_chart(fig_score, use_container_width=True, key=f"drill_score_{selected}")
 
         sample_df = trend_df if len(trend_df) <= 150 else trend_df.iloc[::max(1, len(trend_df) // 150)]
         fig_bar = go.Figure()
@@ -204,11 +255,19 @@ def show():
     if log_df.empty:
         st.info("No fetch log entries for this region.")
     else:
+        # `fetch_status` is what makes this table forensic rather than merely
+        # raw: without it a dropout row shows "Dropout: true" with no reason,
+        # contradicting the "Feed unavailable" card above. The CSV export is
+        # built from this same frame, so it inherits the column.
+        # A database written before the fetch_status migration has no such
+        # column until the next fetch runs, so it is included only if present.
+        status_cols = ['fetch_status'] if 'fetch_status' in log_df.columns else []
         display_df = log_df[[
-            'datetime', 'vehicles_received', 'vehicles_rejected', 'vehicles_inserted',
+            'datetime', *status_cols, 'vehicles_received', 'vehicles_rejected', 'vehicles_inserted',
             'avg_data_lag_seconds', 'max_data_lag_seconds', 'total_dropout', 'fetch_duration_ms',
         ]].rename(columns={
             'datetime':             'Timestamp',
+            'fetch_status':         'Status',
             'vehicles_received':    'Received',
             'vehicles_rejected':    'Rejected',
             'vehicles_inserted':    'Inserted',

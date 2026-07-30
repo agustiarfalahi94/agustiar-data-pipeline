@@ -81,7 +81,8 @@ def get_network_health_summary():
         # Order explicitly: the page renders scorecards in row order, and a
         # view's inner ORDER BY is not a guaranteed property of a SELECT.
         return con.execute(
-            "SELECT * FROM main.mart_network_health ORDER BY reliability_score DESC"
+            "SELECT * FROM main.mart_network_health "
+            "ORDER BY reliability_score DESC NULLS LAST"
         ).df()
     finally:
         con.close()

@@ -38,10 +38,38 @@ except ImportError:
     REQUEST_TIMEOUT = 10
 
 
+# Ranked best-first. A region with several endpoints takes the best status any
+# of them achieved: if one endpoint returned data the region is working, even
+# if a sibling endpoint is dead.
+_STATUS_PRECEDENCE = ['OK', 'EMPTY', 'ERROR', 'THROTTLED', 'NO_FEED']
+
+
+def _classify_status(status_code, vehicle_count):
+    """Map an HTTP status + vehicle count onto a fetch status label."""
+    if status_code == 200:
+        return 'OK' if vehicle_count > 0 else 'EMPTY'
+    if status_code == 404:
+        return 'NO_FEED'
+    if status_code == 429:
+        return 'THROTTLED'
+    return 'ERROR'
+
+
+def _merge_status(a, b):
+    """Combine two endpoint statuses for one region, best status winning."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return min(a, b, key=lambda s: _STATUS_PRECEDENCE.index(s)
+               if s in _STATUS_PRECEDENCE else len(_STATUS_PRECEDENCE))
+
+
 def _fetch_endpoint(name, endpoint):
     """
     Fetch vehicle data from a single API endpoint.
-    Returns (vehicles, duration_ms) — vehicles is [] on any error.
+    Returns (vehicles, duration_ms, status) — vehicles is [] on any error.
+    status is one of OK / EMPTY / NO_FEED / THROTTLED / ERROR.
     """
     url = f'{API_BASE_URL}{endpoint}'
     t0 = time.time()
@@ -69,14 +97,16 @@ def _fetch_endpoint(name, endpoint):
                         'trip_id': trip_info.get('tripId', ''),
                         'route_id': trip_info.get('routeId', ''),
                     })
-            return vehicles, duration_ms
+            return vehicles, duration_ms, _classify_status(200, len(vehicles))
+        return [], duration_ms, _classify_status(response.status_code, 0)
     except Exception as e:
         print(f"Error fetching {name} ({endpoint}): {e}")
-    return [], int((time.time() - t0) * 1000)
+    return [], int((time.time() - t0) * 1000), 'ERROR'
 
 
 def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region,
-                          lag_by_region, duration_by_region, fetch_timestamp):
+                          lag_by_region, duration_by_region, status_by_region,
+                          fetch_timestamp):
     """
     Build one quality-log row per region from per-stage pipeline counts.
 
@@ -86,12 +116,13 @@ def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region
         inserted_by_region:  {region: int}  count actually written to live_buses
         lag_by_region:       {region: {'avg': float, 'max': float}}
         duration_by_region:  {region: int}  fetch wall-clock ms
+        status_by_region:    {region: str}  merged fetch status for this cycle
         fetch_timestamp:     int  unix time of this fetch cycle
 
     Returns:
         list of dicts, one per region
     """
-    all_regions = set(received_by_region) | set(duration_by_region)
+    all_regions = set(received_by_region) | set(duration_by_region) | set(status_by_region)
     stats = []
     for region in sorted(all_regions):
         received = received_by_region.get(region, 0)
@@ -109,6 +140,7 @@ def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region
             'max_data_lag_seconds': float(lag['max']),
             'total_dropout': received == 0,
             'fetch_duration_ms': duration_by_region.get(region, 0),
+            'fetch_status': status_by_region.get(region, 'ERROR'),
         })
     return stats
 
@@ -133,17 +165,33 @@ def _write_quality_log(stats_list):
                 avg_data_lag_seconds DOUBLE,
                 max_data_lag_seconds DOUBLE,
                 total_dropout BOOLEAN,
-                fetch_duration_ms INTEGER
+                fetch_duration_ms INTEGER,
+                fetch_status VARCHAR
             )
         """)
 
+        # Additive migration for databases created before fetch_status existed.
+        existing_cols = con.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'fetch_quality_log'"
+        ).df()['column_name'].tolist()
+        if 'fetch_status' not in existing_cols:
+            con.execute("ALTER TABLE fetch_quality_log ADD COLUMN fetch_status VARCHAR")
+
         for s in stats_list:
             con.execute(
-                "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO fetch_quality_log ("
+                "  fetch_timestamp, region, vehicles_received, vehicles_rejected,"
+                "  vehicles_inserted, avg_data_lag_seconds, max_data_lag_seconds,"
+                "  total_dropout, fetch_duration_ms, fetch_status"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [s['fetch_timestamp'], s['region'], s['vehicles_received'],
                  s['vehicles_rejected'], s['vehicles_inserted'],
                  s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
-                 bool(s['total_dropout']), s['fetch_duration_ms']]
+                 bool(s['total_dropout']), s['fetch_duration_ms'],
+                 # Matches _build_quality_stats: an unknown status is recorded
+                 # as ERROR rather than fabricated as healthy.
+                 s.get('fetch_status', 'ERROR')]
             )
 
         try:
@@ -196,14 +244,20 @@ def fetch_and_store_transit_data():
             for name, endpoint in tasks
         }
         duration_by_region = {}
+        status_by_region = {}
         for future in as_completed(future_to_task):
             name, endpoint = future_to_task[future]
-            vehicles, duration_ms = future.result()
+            vehicles, duration_ms, status = future.result()
             all_vehicle_data.extend(vehicles)
             duration_by_region[name] = duration_by_region.get(name, 0) + duration_ms
+            status_by_region[name] = _merge_status(status_by_region.get(name), status)
 
     if not all_vehicle_data:
         print("No vehicle data fetched")
+        # Still record why, so a withdrawn feed is visible rather than silent.
+        _write_quality_log(_build_quality_stats(
+            {}, {}, {}, {}, duration_by_region, status_by_region, current_unix
+        ))
         return
 
     # Count vehicles per region BEFORE filtering (ground truth for quality log)
@@ -327,7 +381,7 @@ def fetch_and_store_transit_data():
 
         quality_stats = _build_quality_stats(
             received_by_region, valid_by_region, inserted_by_region,
-            lag_by_region, duration_by_region, current_unix
+            lag_by_region, duration_by_region, status_by_region, current_unix
         )
 
     except Exception as e:

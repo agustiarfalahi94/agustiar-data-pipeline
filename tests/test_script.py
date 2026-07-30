@@ -3,9 +3,11 @@ import pytest
 import sys
 import os
 import time
+import warnings
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from utils import data_processor
 from utils.data_processor import convert_speed_to_kmh, prepare_map_data, get_sorted_regions
 from unittest.mock import patch, MagicMock
 from utils.ingestion import _fetch_endpoint
@@ -162,9 +164,10 @@ def test_build_quality_stats_basic():
         'KTM Berhad': {'avg': 35.0, 'max': 90.0},
     }
     duration = {'Rapid Bus KL': 800, 'KTM Berhad': 600}
+    status = {'Rapid Bus KL': 'OK', 'KTM Berhad': 'OK'}
     ts = 1000000
 
-    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, status, ts)
 
     assert len(stats) == 2
     kl = next(s for s in stats if s['region'] == 'Rapid Bus KL')
@@ -184,9 +187,10 @@ def test_build_quality_stats_dropout():
     inserted = {}
     lag = {}
     duration = {'myBAS Johor': 500}
+    status = {'myBAS Johor': 'NO_FEED'}
     ts = 1000000
 
-    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, status, ts)
 
     assert len(stats) == 1
     assert stats[0]['total_dropout'] is True
@@ -202,9 +206,10 @@ def test_build_quality_stats_rejected_never_negative():
     inserted = {'Rapid Bus KL': 3}
     lag = {'Rapid Bus KL': {'avg': 5.0, 'max': 10.0}}
     duration = {'Rapid Bus KL': 300}
+    status = {'Rapid Bus KL': 'OK'}
     ts = 1000000
 
-    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, status, ts)
     assert stats[0]['vehicles_rejected'] == 0
 
 
@@ -439,3 +444,201 @@ def test_get_region_vehicle_counts_returns_region_and_count():
         assert ktm_count == 1
     finally:
         os.unlink(db_path)
+
+
+# ── filter_by_route ──────────────────────────────────────────────────────────
+
+def test_filter_by_route_matches_case_insensitively():
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B', 'C'],
+        'route_display': ['T580 — Awan Besar ~ TPM', 'U6000 — Klang', 'T581 — Other'],
+    })
+    out = data_processor.filter_by_route(df, 't580')
+    assert list(out['vehicle_id']) == ['A']
+
+
+def test_filter_by_route_matches_long_name():
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B'],
+        'route_display': ['T580 — Awan Besar ~ TPM', 'U6000 — Klang'],
+    })
+    out = data_processor.filter_by_route(df, 'awan besar')
+    assert list(out['vehicle_id']) == ['A']
+
+
+def test_filter_by_route_empty_query_returns_all():
+    df = pd.DataFrame({'vehicle_id': ['A', 'B'], 'route_display': ['T580', 'U6000']})
+    assert len(data_processor.filter_by_route(df, '')) == 2
+    assert len(data_processor.filter_by_route(df, '   ')) == 2
+
+
+def test_filter_by_route_no_match_returns_empty_with_columns():
+    df = pd.DataFrame({'vehicle_id': ['A'], 'route_display': ['T580']})
+    out = data_processor.filter_by_route(df, 'ZZZ999')
+    assert out.empty
+    assert list(out.columns) == ['vehicle_id', 'route_display']
+
+
+def test_filter_by_route_missing_column_returns_unchanged():
+    df = pd.DataFrame({'vehicle_id': ['A', 'B']})
+    assert len(data_processor.filter_by_route(df, 'T580')) == 2
+
+
+def test_filter_by_route_treats_regex_metacharacters_literally():
+    """The query is user input, so `regex=False` is load-bearing, not
+    defensive: as a regex, "." matches every vehicle in the region."""
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B', 'C'],
+        'route_display': ['T580 — Awan Besar', 'U6000 — Klang', 'No.7 — Shuttle'],
+    })
+    out = data_processor.filter_by_route(df, '.')
+    assert list(out['vehicle_id']) == ['C']
+
+
+def test_filter_by_route_returns_a_copy_not_a_slice():
+    """Callers assign derived columns onto the result (live_map's arrow_path);
+    on a slice that raises SettingWithCopyWarning on pandas 2.x."""
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B'],
+        'route_display': ['T580 — Awan Besar', 'U6000 — Klang'],
+    })
+    out = data_processor.filter_by_route(df, 'T580')
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out['derived'] = 1
+    assert 'derived' not in df.columns
+
+
+# ── fetch status classification ──────────────────────────────────────────────
+
+from utils import ingestion
+
+
+def test_classify_status_ok_and_empty():
+    assert ingestion._classify_status(200, 5) == 'OK'
+    assert ingestion._classify_status(200, 0) == 'EMPTY'
+
+
+def test_classify_status_no_feed_and_throttled():
+    assert ingestion._classify_status(404, 0) == 'NO_FEED'
+    assert ingestion._classify_status(429, 0) == 'THROTTLED'
+
+
+def test_classify_status_other_codes_are_errors():
+    assert ingestion._classify_status(500, 0) == 'ERROR'
+    assert ingestion._classify_status(None, 0) == 'ERROR'
+
+
+def test_merge_status_precedence():
+    # OK beats everything
+    assert ingestion._merge_status('OK', 'NO_FEED') == 'OK'
+    assert ingestion._merge_status('NO_FEED', 'OK') == 'OK'
+    # a responding-but-empty feed beats a dead one
+    assert ingestion._merge_status('EMPTY', 'NO_FEED') == 'EMPTY'
+    # a real error outranks throttling and a dead feed
+    assert ingestion._merge_status('ERROR', 'THROTTLED') == 'ERROR'
+    assert ingestion._merge_status('NO_FEED', 'NO_FEED') == 'NO_FEED'
+
+
+def test_build_quality_stats_carries_fetch_status():
+    stats = ingestion._build_quality_stats(
+        received_by_region={'R1': 10},
+        valid_by_region={'R1': 8},
+        inserted_by_region={'R1': 8},
+        lag_by_region={'R1': {'avg': 1.0, 'max': 2.0}},
+        duration_by_region={'R1': 120},
+        status_by_region={'R1': 'OK'},
+        fetch_timestamp=1750000000,
+    )
+    assert len(stats) == 1
+    assert stats[0]['fetch_status'] == 'OK'
+
+
+def test_build_quality_stats_defaults_missing_status_to_error():
+    stats = ingestion._build_quality_stats(
+        received_by_region={'R1': 0},
+        valid_by_region={},
+        inserted_by_region={},
+        lag_by_region={},
+        duration_by_region={'R1': 5},
+        status_by_region={},
+        fetch_timestamp=1750000000,
+    )
+    assert stats[0]['fetch_status'] == 'ERROR'
+
+
+def test_early_return_logs_no_feed_status(tmp_path):
+    """
+    Step 8: a fully-dead fetch cycle (every endpoint fails, all_vehicle_data
+    stays empty) must still write a quality-log row instead of vanishing
+    silently — this is what makes a withdrawn feed like Rapid Bus Kuantan's
+    HTTP 404 visible rather than indistinguishable from a passing cycle.
+    """
+    db_path = str(tmp_path / 'test_early_return.duckdb')
+    captured = []
+
+    with patch('utils.ingestion.DATABASE_NAME', db_path), \
+         patch('utils.ingestion.API_SOURCES', {'Rapid Bus Kuantan': ['dead-endpoint']}), \
+         patch('utils.ingestion._fetch_endpoint', return_value=([], 5, 'NO_FEED')), \
+         patch('utils.ingestion._write_quality_log', side_effect=captured.append):
+        ingestion.fetch_and_store_transit_data()
+
+    assert len(captured) == 1
+    stats_list = captured[0]
+    assert len(stats_list) > 0
+    row = next(s for s in stats_list if s['region'] == 'Rapid Bus Kuantan')
+    assert row['fetch_status'] == 'NO_FEED'
+
+
+def test_write_quality_log_persists_fetch_status(tmp_path, monkeypatch):
+    import duckdb
+    db = tmp_path / "q.duckdb"
+    monkeypatch.setattr(ingestion, 'DATABASE_NAME', str(db))
+    ingestion._write_quality_log([{
+        'fetch_timestamp': 1750000000, 'region': 'R1',
+        'vehicles_received': 5, 'vehicles_rejected': 0, 'vehicles_inserted': 5,
+        'avg_data_lag_seconds': 1.0, 'max_data_lag_seconds': 2.0,
+        'total_dropout': False, 'fetch_duration_ms': 100, 'fetch_status': 'OK',
+    }])
+    con = duckdb.connect(str(db))
+    try:
+        row = con.execute(
+            "SELECT region, fetch_status FROM fetch_quality_log"
+        ).fetchone()
+    finally:
+        con.close()
+    assert row == ('R1', 'OK')
+
+
+def test_write_quality_log_migrates_existing_table(tmp_path, monkeypatch):
+    import duckdb
+    db = tmp_path / "old.duckdb"
+    con = duckdb.connect(str(db))
+    con.execute("""
+        CREATE TABLE fetch_quality_log (
+            fetch_timestamp BIGINT, region VARCHAR,
+            vehicles_received INTEGER, vehicles_rejected INTEGER,
+            vehicles_inserted INTEGER, avg_data_lag_seconds DOUBLE,
+            max_data_lag_seconds DOUBLE, total_dropout BOOLEAN,
+            fetch_duration_ms INTEGER
+        )
+    """)
+    con.execute("INSERT INTO fetch_quality_log VALUES "
+                "(1749999999,'OLD',1,0,1,0.0,0.0,false,10)")
+    con.close()
+    monkeypatch.setattr(ingestion, 'DATABASE_NAME', str(db))
+    ingestion._write_quality_log([{
+        'fetch_timestamp': 1750000000, 'region': 'NEW',
+        'vehicles_received': 0, 'vehicles_rejected': 0, 'vehicles_inserted': 0,
+        'avg_data_lag_seconds': 0.0, 'max_data_lag_seconds': 0.0,
+        'total_dropout': True, 'fetch_duration_ms': 50, 'fetch_status': 'NO_FEED',
+    }])
+    con = duckdb.connect(str(db))
+    try:
+        rows = dict(con.execute(
+            "SELECT region, fetch_status FROM fetch_quality_log"
+        ).fetchall())
+    finally:
+        con.close()
+    assert rows['NEW'] == 'NO_FEED'
+    assert rows['OLD'] is None      # pre-existing row keeps NULL

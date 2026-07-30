@@ -1,3 +1,11 @@
-fetch_timestamp,region,vehicles_received,vehicles_rejected,vehicles_inserted,avg_data_lag_seconds,max_data_lag_seconds,total_dropout,fetch_duration_ms
-1750000000,TestRegion,10,2,8,30.0,60.0,false,120
-1750000060,TestRegion,10,0,10,0.0,0.0,false,110
+fetch_timestamp,region,vehicles_received,vehicles_rejected,vehicles_inserted,avg_data_lag_seconds,max_data_lag_seconds,total_dropout,fetch_duration_ms,fetch_status
+1750000000,TestRegion,10,2,8,30.0,60.0,false,120,OK
+1750000060,TestRegion,10,0,10,0.0,0.0,false,110,OK
+1750000000,DeadFeed,0,0,0,0.0,0.0,true,5,NO_FEED
+1750000060,DeadFeed,0,0,0,0.0,0.0,true,5,NO_FEED
+1750000000,QuietFeed,0,0,0,0.0,0.0,true,20,EMPTY
+1750000060,QuietFeed,0,0,0,0.0,0.0,true,20,EMPTY
+1750000000,MixedFeed,10,0,10,0.0,0.0,false,100,OK
+1750000060,MixedFeed,0,0,0,0.0,0.0,true,20,EMPTY
+1750000000,ThrottledFeed,0,0,0,0.0,0.0,true,5,THROTTLED
+1750000060,ThrottledFeed,0,0,0,0.0,0.0,true,5,THROTTLED

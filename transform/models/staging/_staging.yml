@@ -54,3 +54,8 @@ models:
         description: True when the API returned zero vehicles for the region in this cycle.
       - name: fetch_duration_ms
         description: Wall-clock duration of the region's HTTP fetch, in milliseconds.
+      - name: fetch_status
+        description: OK, EMPTY, NO_FEED, THROTTLED or ERROR. NULL (pre-migration) reads as OK.
+        tests:
+          - accepted_values:
+              values: ['OK', 'EMPTY', 'NO_FEED', 'THROTTLED', 'ERROR']

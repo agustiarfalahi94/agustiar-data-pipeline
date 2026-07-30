@@ -102,5 +102,29 @@ def format_display_dataframe(df):
     display_df['Heading (°)'] = display_df['Heading (°)'].round(1)
     display_df['Speed (km/h)'] = display_df['Speed (km/h)'].astype(int)
     display_df['Avg Speed (km/h)'] = display_df['Avg Speed (km/h)'].astype(int)
-    
+
     return display_df.reset_index(drop=True)
+
+
+def filter_by_route(df, query):
+    """
+    Filter vehicles to those whose route matches *query* (case-insensitive substring).
+
+    Matches against the 'route_display' column, which holds the resolved
+    "SHORT — Long Name" string, so both "T580" and "awan besar" match.
+
+    Returns df unchanged for an empty/whitespace query or when route_display
+    is absent, so callers can pass user input straight through.
+
+    `regex=False` is load-bearing, not defensive: a query of "." would otherwise
+    match every vehicle. The returned frame is a copy because callers assign
+    derived columns onto it (e.g. live_map's arrow_path), which on a slice
+    raises SettingWithCopyWarning on pandas 2.x.
+    """
+    if not query or not query.strip():
+        return df
+    if 'route_display' not in df.columns:
+        return df
+    needle = query.strip().lower()
+    mask = df['route_display'].fillna('').astype(str).str.lower().str.contains(needle, regex=False)
+    return df[mask].copy()
