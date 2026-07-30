@@ -766,3 +766,41 @@ def test_live_metrics_split_fresh_from_stale(tmp_path, monkeypatch):
     assert metrics['stale'] == 1
     assert metrics['hidden'] == 1
     assert len(df) == 4             # all four returned; the caller decides what to draw
+
+
+def test_live_data_reports_sync_time_during_outage(tmp_path, monkeypatch):
+    """
+    An outage (no rows within the window) must still report when data was
+    last seen, not go silent with sync_time_str=None.
+
+    Regression guard: the empty-window early return used to fire before
+    MAX(timestamp) was ever queried, so a table with only stale rows (older
+    than LIVE_HIDDEN_SECONDS) returned an empty frame AND sync_time_str=None -
+    indistinguishable from "nothing has ever been ingested".
+    """
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "outage.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    # Only row is well outside the live window - ingestion has been down.
+    stale_ts = now - db_mod.LIVE_HIDDEN_SECONDS - 3600
+    con.execute(
+        "INSERT INTO live_buses VALUES ('Rapid Bus KL','KL1',3.14,101.68,90,10.0,?, 'T1','T5800',?,current_timestamp)",
+        [stale_ts, stale_ts])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    df, metrics, sync_time_str = db_mod.get_live_data_optimized()
+
+    assert df.empty
+    assert metrics == {}
+    assert sync_time_str is not None

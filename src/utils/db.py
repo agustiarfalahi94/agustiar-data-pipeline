@@ -159,13 +159,32 @@ def get_region_fetch_log(region, limit=100):
 
 def get_live_data_optimized():
     """
-    Get latest live data for display (last 60 seconds, deduplicated by vehicle)
+    Get the latest position for each vehicle within LIVE_HIDDEN_SECONDS of now.
+
+    The window is anchored to wall-clock now, NOT MAX(timestamp). Anchoring to
+    the newest row let a single feed with a fast clock drag the window into
+    the future and black out every region reporting honestly (ingestion
+    accepts timestamps up to DATA_FUTURE_TOLERANCE seconds ahead of now). Do
+    not "simplify" this back to MAX(timestamp) - that reintroduces the bug.
+    Each row's age is measured from this same wall-clock now and clamped at
+    zero (see data_processor.classify_freshness), so a future-dated timestamp
+    reads as age 0 rather than excluding honest rows or going negative.
 
     Returns:
         tuple: (dataframe, metrics_dict, sync_time_string)
-            - dataframe: Latest position for each vehicle
-            - metrics_dict: {'total': int, 'regions': int, 'busiest': str}
-            - sync_time_string: Formatted timestamp of most recent data
+            - dataframe: Latest position for each vehicle within the window,
+              carrying 'age_seconds' and 'freshness' ('fresh'/'stale'/'hidden').
+              Rows are never dropped for staleness; the caller decides what to
+              draw.
+            - metrics_dict: {'total': int, 'stale': int, 'hidden': int,
+              'regions': int, 'busiest': str}. 'total' counts fresh rows only
+              (kept for backward compatibility with the old headline number);
+              'regions'/'busiest' are computed over fresh + stale rows only,
+              i.e. what is actually drawn on the map.
+            - sync_time_string: Formatted timestamp of the most recent row in
+              the whole table, even when the window itself is empty - this is
+              what lets the page report "data last seen 20 minutes ago" during
+              an outage instead of going silent.
     """
     if not table_exists():
         return None, {}, None
@@ -173,11 +192,14 @@ def get_live_data_optimized():
     con = get_connection()
 
     try:
-        # Anchor to wall-clock now, NOT MAX(timestamp). Anchoring to the newest
-        # row let one feed with a fast clock drag the window into the future and
-        # black out every region reporting honestly.
         now = int(time.time())
         cutoff = now - LIVE_HIDDEN_SECONDS
+
+        # Computed before the empty-window check below so that an outage
+        # (no rows within the window) still reports when data was last seen,
+        # instead of the sync time silently going to None.
+        max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
+        sync_time_str = _format_sync_time(int(max_timestamp_raw)) if max_timestamp_raw is not None else None
 
         query = f"""
         SELECT * FROM (
@@ -191,13 +213,10 @@ def get_live_data_optimized():
         df = con.execute(query).df()
 
         if df.empty:
-            return df, {}, None
+            return df, {}, sync_time_str
 
         if 'rn' in df.columns:
             df = df.drop(columns=['rn'])
-
-        max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
-        sync_time_str = _format_sync_time(int(max_timestamp_raw)) if max_timestamp_raw else None
 
     finally:
         con.close()
