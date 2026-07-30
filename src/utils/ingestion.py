@@ -165,17 +165,31 @@ def _write_quality_log(stats_list):
                 avg_data_lag_seconds DOUBLE,
                 max_data_lag_seconds DOUBLE,
                 total_dropout BOOLEAN,
-                fetch_duration_ms INTEGER
+                fetch_duration_ms INTEGER,
+                fetch_status VARCHAR
             )
         """)
 
+        # Additive migration for databases created before fetch_status existed.
+        existing_cols = con.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'fetch_quality_log'"
+        ).df()['column_name'].tolist()
+        if 'fetch_status' not in existing_cols:
+            con.execute("ALTER TABLE fetch_quality_log ADD COLUMN fetch_status VARCHAR")
+
         for s in stats_list:
             con.execute(
-                "INSERT INTO fetch_quality_log VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO fetch_quality_log ("
+                "  fetch_timestamp, region, vehicles_received, vehicles_rejected,"
+                "  vehicles_inserted, avg_data_lag_seconds, max_data_lag_seconds,"
+                "  total_dropout, fetch_duration_ms, fetch_status"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [s['fetch_timestamp'], s['region'], s['vehicles_received'],
                  s['vehicles_rejected'], s['vehicles_inserted'],
                  s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
-                 bool(s['total_dropout']), s['fetch_duration_ms']]
+                 bool(s['total_dropout']), s['fetch_duration_ms'],
+                 s.get('fetch_status', 'OK')]
             )
 
         try:

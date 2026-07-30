@@ -562,3 +562,57 @@ def test_early_return_logs_no_feed_status(tmp_path):
     assert len(stats_list) > 0
     row = next(s for s in stats_list if s['region'] == 'Rapid Bus Kuantan')
     assert row['fetch_status'] == 'NO_FEED'
+
+
+def test_write_quality_log_persists_fetch_status(tmp_path, monkeypatch):
+    import duckdb
+    db = tmp_path / "q.duckdb"
+    monkeypatch.setattr(ingestion, 'DATABASE_NAME', str(db))
+    ingestion._write_quality_log([{
+        'fetch_timestamp': 1750000000, 'region': 'R1',
+        'vehicles_received': 5, 'vehicles_rejected': 0, 'vehicles_inserted': 5,
+        'avg_data_lag_seconds': 1.0, 'max_data_lag_seconds': 2.0,
+        'total_dropout': False, 'fetch_duration_ms': 100, 'fetch_status': 'OK',
+    }])
+    con = duckdb.connect(str(db))
+    try:
+        row = con.execute(
+            "SELECT region, fetch_status FROM fetch_quality_log"
+        ).fetchone()
+    finally:
+        con.close()
+    assert row == ('R1', 'OK')
+
+
+def test_write_quality_log_migrates_existing_table(tmp_path, monkeypatch):
+    import duckdb
+    db = tmp_path / "old.duckdb"
+    con = duckdb.connect(str(db))
+    con.execute("""
+        CREATE TABLE fetch_quality_log (
+            fetch_timestamp BIGINT, region VARCHAR,
+            vehicles_received INTEGER, vehicles_rejected INTEGER,
+            vehicles_inserted INTEGER, avg_data_lag_seconds DOUBLE,
+            max_data_lag_seconds DOUBLE, total_dropout BOOLEAN,
+            fetch_duration_ms INTEGER
+        )
+    """)
+    con.execute("INSERT INTO fetch_quality_log VALUES "
+                "(1749999999,'OLD',1,0,1,0.0,0.0,false,10)")
+    con.close()
+    monkeypatch.setattr(ingestion, 'DATABASE_NAME', str(db))
+    ingestion._write_quality_log([{
+        'fetch_timestamp': 1750000000, 'region': 'NEW',
+        'vehicles_received': 0, 'vehicles_rejected': 0, 'vehicles_inserted': 0,
+        'avg_data_lag_seconds': 0.0, 'max_data_lag_seconds': 0.0,
+        'total_dropout': True, 'fetch_duration_ms': 50, 'fetch_status': 'NO_FEED',
+    }])
+    con = duckdb.connect(str(db))
+    try:
+        rows = dict(con.execute(
+            "SELECT region, fetch_status FROM fetch_quality_log"
+        ).fetchall())
+    finally:
+        con.close()
+    assert rows['NEW'] == 'NO_FEED'
+    assert rows['OLD'] is None      # pre-existing row keeps NULL
