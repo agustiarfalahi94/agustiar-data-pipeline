@@ -8,10 +8,11 @@ from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 
 try:
-    from config import DEFAULT_ZOOM, ARROW_SIZE
+    from config import DEFAULT_ZOOM, ARROW_SIZE, LIVE_FRESH_SECONDS
 except ImportError:
     DEFAULT_ZOOM = 13
     ARROW_SIZE = 0.001
+    LIVE_FRESH_SECONDS = 60
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
@@ -81,6 +82,11 @@ def show():
     col1.metric("Total Active Buses", metrics['total'])
     col2.metric("Regions Monitored", metrics['regions'])
     col3.metric("Busiest Region", metrics['busiest'])
+    if metrics.get('stale'):
+        st.caption(
+            f"⏳ {metrics['stale']} vehicle(s) last reported over "
+            f"{LIVE_FRESH_SECONDS}s ago — shown dimmed on the map."
+        )
 
     # Hardcoded region list to prevent dropdown changes during auto-refresh
     try:
@@ -193,10 +199,42 @@ def show():
     if df_map.empty:
         st.warning(f"No valid data for {selected_region}")
         return
-    
+
+    # Hidden vehicles are counted but not drawn — a 7-day retention window would
+    # otherwise fill the map with buses parked at depots overnight.
+    hidden_count = 0
+    if 'freshness' in df_map.columns:
+        hidden_count = int((df_map['freshness'] == 'hidden').sum())
+        df_map = df_map[df_map['freshness'] != 'hidden']
+
+    if df_map.empty:
+        st.warning(
+            f"No recent data for {selected_region} — "
+            f"{hidden_count} vehicle(s) last reported over 5 minutes ago."
+        )
+        return
+
     # Create formatted columns for tooltip display
     df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
     df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
+
+    # Stale vehicles keep their colour but drop to ~35% alpha, so they read as
+    # present-but-uncertain rather than as a different kind of thing.
+    is_stale = df_map.get('freshness', pd.Series('fresh', index=df_map.index)) == 'stale'
+    df_map['dot_color'] = [
+        [51, 153, 255, 90] if s else [51, 153, 255, 255] for s in is_stale
+    ]
+    df_map['arrow_color'] = [
+        [255, 255, 255, 90] if s else [255, 255, 255, 255] for s in is_stale
+    ]
+
+    df_map['freshness_display'] = [
+        f"{int(a)}s ago" if f == 'fresh' else f"⚠️ last update {int(a) // 60}m {int(a) % 60}s ago"
+        for a, f in zip(
+            df_map.get('age_seconds', pd.Series(0, index=df_map.index)),
+            df_map.get('freshness', pd.Series('fresh', index=df_map.index)),
+        )
+    ]
 
     # Resolve human-readable route names from GTFS Static for all unique route_ids
     agency_slug = gtfs_static.STATIC_API_SOURCES.get(selected_region, '')
@@ -237,7 +275,7 @@ def show():
         "ScatterplotLayer",
         data=df_map,
         get_position=['longitude', 'latitude'],
-        get_fill_color=[51, 153, 255, 255],
+        get_fill_color='dot_color',
         get_radius=100,
         radius_min_pixels=8,
         radius_max_pixels=15,
@@ -256,7 +294,7 @@ def show():
         "PathLayer",
         data=df_map,
         get_path='arrow_path',
-        get_color=[255, 255, 255, 255],
+        get_color='arrow_color',
         width_min_pixels=3,
         width_max_pixels=5,
         pickable=False,
@@ -355,7 +393,7 @@ def show():
             initial_view_state=view_state,
             layers=layers,
             tooltip={
-                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°",
+                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°<br/><b>Updated:</b> {freshness_display}",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
         )
@@ -364,6 +402,11 @@ def show():
     # While a search is filtering the frame, len(df_map) is the match count, not
     # the region total — the success banner above already states it, so don't
     # restate the same number as though it were the whole region.
+    if hidden_count:
+        st.caption(
+            f"🚫 {hidden_count} vehicle(s) hidden — no update in over 5 minutes."
+        )
+
     if not filter_active:
         st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
 
