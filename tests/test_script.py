@@ -163,9 +163,10 @@ def test_build_quality_stats_basic():
         'KTM Berhad': {'avg': 35.0, 'max': 90.0},
     }
     duration = {'Rapid Bus KL': 800, 'KTM Berhad': 600}
+    status = {'Rapid Bus KL': 'OK', 'KTM Berhad': 'OK'}
     ts = 1000000
 
-    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, status, ts)
 
     assert len(stats) == 2
     kl = next(s for s in stats if s['region'] == 'Rapid Bus KL')
@@ -185,9 +186,10 @@ def test_build_quality_stats_dropout():
     inserted = {}
     lag = {}
     duration = {'myBAS Johor': 500}
+    status = {'myBAS Johor': 'NO_FEED'}
     ts = 1000000
 
-    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, status, ts)
 
     assert len(stats) == 1
     assert stats[0]['total_dropout'] is True
@@ -203,9 +205,10 @@ def test_build_quality_stats_rejected_never_negative():
     inserted = {'Rapid Bus KL': 3}
     lag = {'Rapid Bus KL': {'avg': 5.0, 'max': 10.0}}
     duration = {'Rapid Bus KL': 300}
+    status = {'Rapid Bus KL': 'OK'}
     ts = 1000000
 
-    stats = _build_quality_stats(received, valid, inserted, lag, duration, ts)
+    stats = _build_quality_stats(received, valid, inserted, lag, duration, status, ts)
     assert stats[0]['vehicles_rejected'] == 0
 
 
@@ -478,3 +481,61 @@ def test_filter_by_route_no_match_returns_empty_with_columns():
 def test_filter_by_route_missing_column_returns_unchanged():
     df = pd.DataFrame({'vehicle_id': ['A', 'B']})
     assert len(data_processor.filter_by_route(df, 'T580')) == 2
+
+
+# ── fetch status classification ──────────────────────────────────────────────
+
+from utils import ingestion
+
+
+def test_classify_status_ok_and_empty():
+    assert ingestion._classify_status(200, 5) == 'OK'
+    assert ingestion._classify_status(200, 0) == 'EMPTY'
+
+
+def test_classify_status_no_feed_and_throttled():
+    assert ingestion._classify_status(404, 0) == 'NO_FEED'
+    assert ingestion._classify_status(429, 0) == 'THROTTLED'
+
+
+def test_classify_status_other_codes_are_errors():
+    assert ingestion._classify_status(500, 0) == 'ERROR'
+    assert ingestion._classify_status(None, 0) == 'ERROR'
+
+
+def test_merge_status_precedence():
+    # OK beats everything
+    assert ingestion._merge_status('OK', 'NO_FEED') == 'OK'
+    assert ingestion._merge_status('NO_FEED', 'OK') == 'OK'
+    # a responding-but-empty feed beats a dead one
+    assert ingestion._merge_status('EMPTY', 'NO_FEED') == 'EMPTY'
+    # a real error outranks throttling and a dead feed
+    assert ingestion._merge_status('ERROR', 'THROTTLED') == 'ERROR'
+    assert ingestion._merge_status('NO_FEED', 'NO_FEED') == 'NO_FEED'
+
+
+def test_build_quality_stats_carries_fetch_status():
+    stats = ingestion._build_quality_stats(
+        received_by_region={'R1': 10},
+        valid_by_region={'R1': 8},
+        inserted_by_region={'R1': 8},
+        lag_by_region={'R1': {'avg': 1.0, 'max': 2.0}},
+        duration_by_region={'R1': 120},
+        status_by_region={'R1': 'OK'},
+        fetch_timestamp=1750000000,
+    )
+    assert len(stats) == 1
+    assert stats[0]['fetch_status'] == 'OK'
+
+
+def test_build_quality_stats_defaults_missing_status_to_error():
+    stats = ingestion._build_quality_stats(
+        received_by_region={'R1': 0},
+        valid_by_region={},
+        inserted_by_region={},
+        lag_by_region={},
+        duration_by_region={'R1': 5},
+        status_by_region={},
+        fetch_timestamp=1750000000,
+    )
+    assert stats[0]['fetch_status'] == 'ERROR'
