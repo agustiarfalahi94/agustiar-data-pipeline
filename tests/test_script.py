@@ -694,9 +694,72 @@ def test_classify_freshness_handles_empty_and_missing_column():
 
 def test_classify_freshness_respects_custom_bounds():
     now = 1_800_000_000
-    df = pd.DataFrame({'vehicle_id': ['a'], 'timestamp': [now - 30]})
+    df = pd.DataFrame({
+        'vehicle_id': ['fresh', 'at_fresh_edge', 'stale', 'at_stale_edge', 'hidden'],
+        'timestamp': [now - 5, now - 10, now - 15, now - 20, now - 30],
+    })
     out = data_processor.classify_freshness(df, now, fresh_seconds=10, stale_seconds=20)
+    assert list(out['freshness']) == ['fresh', 'fresh', 'stale', 'stale', 'hidden']
+
+
+def test_classify_freshness_survives_equal_bounds():
+    """
+    Both bounds are user-tunable, so they can be set equal. pd.cut raises
+    "Bin edges must be unique" on duplicate edges — the tiers degrade to
+    fresh/hidden instead of the page crashing.
+    """
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['under', 'at_edge', 'over'],
+        'timestamp': [now - 30, now - 60, now - 61],
+    })
+    out = data_processor.classify_freshness(df, now, fresh_seconds=60, stale_seconds=60)
+    assert list(out['freshness']) == ['fresh', 'fresh', 'hidden']
+    assert 'stale' not in set(out['freshness'])
+
+
+def test_classify_freshness_survives_inverted_bounds():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['under', 'over'],
+        'timestamp': [now - 30, now - 120],
+    })
+    out = data_processor.classify_freshness(df, now, fresh_seconds=60, stale_seconds=20)
+    assert list(out['freshness']) == ['fresh', 'hidden']
+
+
+def test_classify_freshness_puts_unparseable_timestamps_in_hidden():
+    """A row with no usable timestamp must not be presented as current."""
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['good', 'garbage', 'missing'],
+        'timestamp': [now - 10, 'not-a-timestamp', None],
+    })
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['freshness']) == ['fresh', 'hidden', 'hidden']
+    assert out['age_seconds'].tolist() == [10, 301, 301]
+
+
+def test_classify_freshness_unparseable_timestamp_hidden_under_custom_bounds():
+    now = 1_800_000_000
+    df = pd.DataFrame({'vehicle_id': ['garbage'], 'timestamp': ['n/a']})
+    out = data_processor.classify_freshness(df, now, fresh_seconds=600, stale_seconds=900)
     assert list(out['freshness']) == ['hidden']
+
+
+# ── format_duration ───────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("seconds,expected", [
+    (0, '0 seconds'),
+    (1, '1 second'),
+    (45, '45 seconds'),
+    (60, '1 minute'),
+    (90, '1 minute 30 seconds'),
+    (300, '5 minutes'),
+    (900, '15 minutes'),
+])
+def test_format_duration(seconds, expected):
+    assert data_processor.format_duration(seconds) == expected
 
 
 def test_live_window_ignores_future_dated_rows_from_other_regions(tmp_path, monkeypatch):
