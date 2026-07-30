@@ -101,3 +101,33 @@ def test_staging_drops_null_and_null_island_coordinates(built_db):
     assert "BadCoords" not in regions   # 0/0 null-island row
     assert "NullCoords" not in regions  # empty lat/lon row
     assert "TestRegion" in regions
+
+
+def test_dead_feed_is_flagged_unavailable_with_no_score(built_db):
+    row = built_db.execute(
+        "SELECT feed_unavailable, scoreable_fetches, reliability_score "
+        "FROM main.mart_network_health WHERE region = 'DeadFeed'"
+    ).fetchone()
+    unavailable, scoreable, score = row
+    assert unavailable is True
+    assert scoreable == 0
+    assert score is None
+
+
+def test_empty_but_healthy_feed_is_not_penalised(built_db):
+    row = built_db.execute(
+        "SELECT feed_unavailable, scoreable_fetches, availability "
+        "FROM main.mart_network_health WHERE region = 'QuietFeed'"
+    ).fetchone()
+    unavailable, scoreable, availability = row
+    assert unavailable is False
+    assert scoreable == 2
+    assert availability == 1.0     # EMPTY is not an error
+
+
+def test_ok_region_still_scores_as_before(built_db):
+    score = built_db.execute(
+        "SELECT reliability_score FROM main.mart_network_health "
+        "WHERE region = 'TestRegion'"
+    ).fetchone()[0]
+    assert score == 95

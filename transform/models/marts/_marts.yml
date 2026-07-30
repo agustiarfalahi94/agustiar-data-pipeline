@@ -17,9 +17,17 @@ models:
           # `src/config.example.py`. The CI seed fixture's synthetic region is
           # admitted only under the `ci` target, so `dev`/prod stay strict.
           - accepted_values:
-              values: "{{ var('canonical_regions') + (['TestRegion'] if target.name == 'ci' else []) }}"
+              values: "{{ var('canonical_regions') + (['TestRegion', 'DeadFeed', 'QuietFeed'] if target.name == 'ci' else []) }}"
       - name: total_fetches
         description: Number of fetch cycles recorded for the region inside the window.
+      - name: scoreable_fetches
+        description: Fetches in the window that say something about agency reliability (excludes NO_FEED and THROTTLED).
+        tests:
+          - not_null
+      - name: feed_unavailable
+        description: True when the window contains no scoreable fetches — the feed is gone upstream.
+        tests:
+          - not_null
       - name: dropout_count
         description: Fetch cycles inside the window where the API returned zero vehicles.
       - name: reporting_rate
