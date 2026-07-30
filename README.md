@@ -22,6 +22,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. Not available for KTM Berhad, whose realtime feed carries no route ID
+- **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
+  are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
+  nothing disappears without explanation
 - **Dark/Light map themes**
 
 ### 📊 Data Table
@@ -141,6 +144,9 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 | `ARROW_SIZE` | `0.001` | Vehicle arrow size multiplier |
 | `DATA_MAX_AGE` | `3600` | Max record age accepted (seconds) |
 | `DATA_FUTURE_TOLERANCE` | `300` | Max future timestamp tolerance (seconds) |
+| `LIVE_FRESH_SECONDS` | `60` | Vehicles at or under this age are drawn solid |
+| `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
+| `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
 
 ### Streamlit Cloud Secrets (TOML)
 
@@ -204,6 +210,7 @@ Live Map      Data Table        Analytics     Network Health
 | **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout, and the fetch's `fetch_status` (`OK` / `EMPTY` / `NO_FEED` / `THROTTLED` / `ERROR`), which is what lets the score distinguish an agency outage from a withdrawn feed or our own rate limiting. Powers the Network Health page without touching `live_buses` |
 | **Fetch guard (3s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
 | **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query for sub-minute freshness |
+| **Live window anchored to wall-clock now** | Anchoring to `MAX(timestamp)` let one feed with a fast clock drag the window into the future and black out regions reporting honestly. Ages are clamped at zero so a fast clock reads as current rather than being discarded |
 
 ### Route Viewer — How It Works
 

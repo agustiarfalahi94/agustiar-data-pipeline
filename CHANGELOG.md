@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-30
+
+### Fixed
+- **Regions no longer vanish from the Live Map.** The freshness window was anchored to the newest
+  timestamp anywhere in the table, and ingestion accepts timestamps up to 5 minutes in the future —
+  so a single vehicle with a fast clock shifted the window past every bus reporting honestly, and
+  whole regions blacked out for a refresh at a time. Observed live: 101 buses across 7 regions
+  while Rapid Bus KL, the largest network, showed "No valid data". The window is now anchored to
+  wall-clock time and vehicle ages are clamped at zero, so no feed's clock can move it
+- During an ingestion outage longer than the fetch window, the app previously reported "No data —
+  click Refresh", which reads as *nothing was ever ingested*. It now still reports when data was
+  last seen, so a stale feed is distinguishable from an empty database
+
+### Added
+- **Vehicle freshness tiers on the Live Map.** Vehicles reporting within 60s are drawn as before;
+  those between 60s and 5 minutes are drawn dimmed with a "last update" line in their tooltip; those
+  older than 5 minutes are hidden but reported in a caption rather than silently dropped
+- `data_processor.classify_freshness` — pure, testable tier assignment
+- `LIVE_FRESH_SECONDS` (60), `LIVE_STALE_SECONDS` (300) and `LIVE_HIDDEN_SECONDS` (900) config knobs
+- A **Stale** count beside the existing Live Map metrics
+
+### Changed
+- The live window widened from 60 seconds to 5 minutes of drawn vehicles, so a bus that reported
+  90 seconds ago is now visible (marked stale) instead of disappearing
+- `get_live_data_optimized`'s metrics gain `stale` and `hidden` counts. `total` still counts only
+  vehicles reporting within 60s, so it stays comparable to previous releases
+
+### Notes
+- Measured while diagnosing this: the Rapid Bus MRT Feeder feed published a timestamp of
+  `1886017556` — roughly the year 2029. Ingestion rejects it, but `myBAS Kuching` and `myBAS Melaka`
+  were simultaneously reporting +3s and +10s, so mildly future-dated timestamps are routine in
+  these feeds rather than exotic
+- `DATA_FUTURE_TOLERANCE` is deliberately unchanged. Clamping ages at zero removes its ability to
+  distort the window, so tightening it would treat a symptom that is already fixed and would start
+  rejecting real data from feeds whose clocks run slightly fast
+- Verified by the automated test suite and parse checks; not yet exercised in a running browser
+
 ## [2.3.1] - 2026-07-30
 
 ### Fixed
