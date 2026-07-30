@@ -126,7 +126,19 @@ def show():
         # Update session state only if changed
         if selected_region != st.session_state.selected_region:
             st.session_state.selected_region = selected_region
-    
+
+        # Route search — hidden for KTM, whose realtime feed carries no route_id
+        if selected_region == 'KTM Berhad':
+            route_query = ''
+            st.caption("Route search is not yet available for KTM Berhad.")
+        else:
+            route_query = st.text_input(
+                "Search route (e.g. T580)",
+                value='',
+                placeholder='Route number or name',
+                key='route_search_live_map',
+            )
+
     with col_locate:
         # Locate Me button
         st.markdown("<br>", unsafe_allow_html=True)  # Vertical alignment
@@ -195,6 +207,20 @@ def show():
         )
     else:
         df_map['route_display'] = df_map.get('route_id', '—').fillna('—')
+
+    # Filter to the searched route. Applied after route_display is resolved and
+    # before layers are built, so layers, centring, the caption and the Route
+    # Viewer all reflect the filtered set.
+    if route_query and route_query.strip():
+        df_filtered = data_processor.filter_by_route(df_map, route_query)
+        if df_filtered.empty:
+            # Leave the map unfiltered: a blank map cannot be told apart from
+            # a bad search term.
+            st.warning(f"No live vehicles found on '{route_query.strip()}' right now.")
+        else:
+            df_map = df_filtered
+            matched = sorted(df_map['route_display'].unique())
+            st.success(f"Showing {len(df_map)} vehicle(s) on {', '.join(matched[:3])}")
 
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
