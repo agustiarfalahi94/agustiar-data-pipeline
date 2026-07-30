@@ -57,16 +57,23 @@ def show():
 
     # ── Section 1: Network Summary Bar ─────────────────────────────────────
     total_regions = len(health_df)
-    healthy    = int((health_df['reliability_score'] >= 80).sum())
-    degraded   = int(((health_df['reliability_score'] >= 50) & (health_df['reliability_score'] < 80)).sum())
-    unreliable = int((health_df['reliability_score'] < 50).sum())
+    if 'feed_unavailable' in health_df.columns:
+        unavailable_mask = health_df['feed_unavailable'].fillna(False).astype(bool)
+    else:
+        unavailable_mask = pd.Series(False, index=health_df.index)
+    scored_df  = health_df[~unavailable_mask]
+    healthy    = int((scored_df['reliability_score'] >= 80).sum())
+    degraded   = int(((scored_df['reliability_score'] >= 50) & (scored_df['reliability_score'] < 80)).sum())
+    unreliable = int((scored_df['reliability_score'] < 50).sum())
+    unavailable = int(unavailable_mask.sum())
     last_ts    = health_df['last_fetch_timestamp'].max()
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("Regions Tracked", total_regions)
     col2.metric("🟢 Reliable",     healthy)
     col3.metric("🟡 Degraded",     degraded)
     col4.metric("🔴 Unreliable",   unreliable)
+    col6.metric("⚫ No Feed",      unavailable)
     if pd.notna(last_ts):
         dt = datetime.fromtimestamp(int(last_ts), tz=timezone.utc) + timedelta(hours=UTC_OFFSET_HOURS)
         col5.metric("Last Fetch", dt.strftime('%H:%M:%S'))
@@ -84,6 +91,15 @@ def show():
         cols = st.columns(4)
         for j, row in enumerate(regions[i:i + 4]):
             with cols[j]:
+                if row.get('feed_unavailable'):
+                    st.markdown(f"""
+                    <div style="border:1px solid #666;border-radius:8px;padding:12px;margin-bottom:8px;opacity:0.75;">
+                        <div style="font-weight:bold;font-size:0.85em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{row['region']}</div>
+                        <div style="font-size:1.1em;color:#999;font-weight:bold;line-height:1.6;">Feed unavailable</div>
+                        <div style="font-size:0.75em;color:#999;">Withdrawn upstream — not scored</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    continue
                 score     = int(row['reliability_score']) if pd.notna(row['reliability_score']) else 0
                 color     = _score_color(score)
                 label     = _score_label(score)
