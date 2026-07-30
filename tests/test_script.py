@@ -6,6 +6,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from utils import data_processor
 from utils.data_processor import convert_speed_to_kmh, prepare_map_data, get_sorted_regions
 from unittest.mock import patch, MagicMock
 from utils.ingestion import _fetch_endpoint
@@ -439,3 +440,41 @@ def test_get_region_vehicle_counts_returns_region_and_count():
         assert ktm_count == 1
     finally:
         os.unlink(db_path)
+
+
+# ── filter_by_route ──────────────────────────────────────────────────────────
+
+def test_filter_by_route_matches_case_insensitively():
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B', 'C'],
+        'route_display': ['T580 — Awan Besar ~ TPM', 'U6000 — Klang', 'T581 — Other'],
+    })
+    out = data_processor.filter_by_route(df, 't580')
+    assert list(out['vehicle_id']) == ['A']
+
+
+def test_filter_by_route_matches_long_name():
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B'],
+        'route_display': ['T580 — Awan Besar ~ TPM', 'U6000 — Klang'],
+    })
+    out = data_processor.filter_by_route(df, 'awan besar')
+    assert list(out['vehicle_id']) == ['A']
+
+
+def test_filter_by_route_empty_query_returns_all():
+    df = pd.DataFrame({'vehicle_id': ['A', 'B'], 'route_display': ['T580', 'U6000']})
+    assert len(data_processor.filter_by_route(df, '')) == 2
+    assert len(data_processor.filter_by_route(df, '   ')) == 2
+
+
+def test_filter_by_route_no_match_returns_empty_with_columns():
+    df = pd.DataFrame({'vehicle_id': ['A'], 'route_display': ['T580']})
+    out = data_processor.filter_by_route(df, 'ZZZ999')
+    assert out.empty
+    assert list(out.columns) == ['vehicle_id', 'route_display']
+
+
+def test_filter_by_route_missing_column_returns_unchanged():
+    df = pd.DataFrame({'vehicle_id': ['A', 'B']})
+    assert len(data_processor.filter_by_route(df, 'T580')) == 2
