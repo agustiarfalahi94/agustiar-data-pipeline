@@ -825,10 +825,33 @@ def test_live_metrics_split_fresh_from_stale(tmp_path, monkeypatch):
     monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
     df, metrics, _ = db_mod.get_live_data_optimized()
 
-    assert metrics['total'] == 2    # fresh only
+    # 'total' is what the map draws: fresh + stale. It must never read 0 above a
+    # map still drawing buses, which is what a fresh-only count did 60 seconds
+    # after the last manual refresh.
+    assert metrics['total'] == 3
+    assert metrics['fresh'] == 2
     assert metrics['stale'] == 1
+    assert metrics['fresh'] + metrics['stale'] == metrics['total']
     assert metrics['hidden'] == 1
     assert len(df) == 4             # all four returned; the caller decides what to draw
+
+
+def test_live_total_counts_every_drawn_vehicle_after_the_fresh_window():
+    """
+    The manual-refresh case: data fetched 90 seconds ago is stale but still
+    drawn. The headline metric must agree with the map, not report zero.
+    """
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['a', 'b', 'c'],
+        'region': ['Rapid Bus KL'] * 3,
+        'timestamp': [now - 90, now - 91, now - 92],
+    })
+    classified = data_processor.classify_freshness(df, now)
+    drawn = classified[classified['freshness'] != 'hidden']
+
+    assert (classified['freshness'] == 'fresh').sum() == 0   # nothing is fresh...
+    assert len(drawn) == 3                                   # ...but all three are drawn
 
 
 def test_live_data_reports_sync_time_during_outage(tmp_path, monkeypatch):
@@ -944,3 +967,101 @@ def test_db_config_knobs_are_honoured_when_present(monkeypatch):
     assert values['LIVE_FRESH_SECONDS'] == 45
     assert values['LIVE_STALE_SECONDS'] == 200
     assert values['LIVE_HIDDEN_SECONDS'] == 800
+
+
+# ── outage messaging (page level) ─────────────────────────────────────────────
+
+class _SessionState(dict):
+    """Minimal stand-in for st.session_state: attribute *and* item access."""
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+
+def _stub_streamlit(monkeypatch, module):
+    """Replace a page module's `st` with a recorder and stop it fetching."""
+    st_stub = MagicMock()
+    st_stub.session_state = _SessionState(auto_refresh=False)
+    st_stub.button.return_value = False        # no refresh click
+    monkeypatch.setattr(module, 'st', st_stub)
+    monkeypatch.setattr(module, 'fetch_and_store_transit_data', lambda *a, **k: None)
+    return st_stub
+
+
+def _texts(mock_method):
+    return " ".join(str(call.args[0]) for call in mock_method.call_args_list if call.args)
+
+
+def test_live_map_names_last_seen_time_during_an_outage(monkeypatch):
+    """
+    The empty-frame early return used to fire *before* the sync banner, so a
+    >15-minute outage rendered "No data. Click 'Refresh Data' to fetch." —
+    exactly the string that reads as "nothing was ever ingested".
+    """
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (pd.DataFrame(), {}, '30 Jul 2026 21:04:11'),
+    )
+
+    live_map.show()
+
+    said = _texts(st_stub.warning) + _texts(st_stub.info)
+    assert '30 Jul 2026 21:04:11' in said, "outage banner did not say when data was last seen"
+    assert "Click 'Refresh Data' to fetch" not in said
+    # Wording is derived from LIVE_HIDDEN_SECONDS, not hardcoded.
+    assert data_processor.format_duration(live_map.LIVE_HIDDEN_SECONDS) in said
+
+
+def test_live_map_still_says_no_data_when_nothing_was_ever_ingested(monkeypatch):
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized', lambda *a, **k: (None, {}, None))
+
+    live_map.show()
+
+    assert "Click 'Refresh Data' to fetch" in _texts(st_stub.info)
+    assert _texts(st_stub.warning) == ""
+
+
+def test_analytics_names_last_seen_time_during_an_outage(monkeypatch):
+    from app_pages import analytics
+
+    st_stub = _stub_streamlit(monkeypatch, analytics)
+    monkeypatch.setattr(
+        analytics.db, 'get_live_data_optimized',
+        lambda *a, **k: (pd.DataFrame(), {}, '30 Jul 2026 21:04:11'),
+    )
+    monkeypatch.setattr(
+        analytics.db, 'get_historical_data', lambda *a, **k: (pd.DataFrame(), {}, None))
+
+    analytics.show()
+
+    said = _texts(st_stub.warning) + _texts(st_stub.info)
+    assert '30 Jul 2026 21:04:11' in said
+    assert 'No data available. Please refresh.' not in said
+    assert data_processor.format_duration(analytics.LIVE_HIDDEN_SECONDS) in said
+
+
+def test_analytics_still_says_no_data_when_nothing_was_ever_ingested(monkeypatch):
+    from app_pages import analytics
+
+    st_stub = _stub_streamlit(monkeypatch, analytics)
+    monkeypatch.setattr(
+        analytics.db, 'get_live_data_optimized', lambda *a, **k: (None, {}, None))
+    monkeypatch.setattr(
+        analytics.db, 'get_historical_data', lambda *a, **k: (None, {}, None))
+
+    analytics.show()
+
+    assert 'No data available. Please refresh.' in _texts(st_stub.info)

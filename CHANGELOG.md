@@ -14,9 +14,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole regions blacked out for a refresh at a time. Observed live: 101 buses across 7 regions
   while Rapid Bus KL, the largest network, showed "No valid data". The window is now anchored to
   wall-clock time and vehicle ages are clamped at zero, so no feed's clock can move it
-- During an ingestion outage longer than the fetch window, the app previously reported "No data —
-  click Refresh", which reads as *nothing was ever ingested*. It now still reports when data was
-  last seen, so a stale feed is distinguishable from an empty database
+- **An ingestion outage now names when data was last seen, on screen.** Previously the app reported
+  "No data. Click 'Refresh Data' to fetch." — which reads as *nothing was ever ingested*. The
+  database layer was fixed to keep reporting a sync time through an empty window, but both pages
+  early-returned on the empty frame *before* the banner, so the user still saw the old string. The
+  Live Map and Analytics now distinguish "stale — data last seen at HH:MM:SS" from "nothing ingested
+  yet", with the window wording derived from `LIVE_HIDDEN_SECONDS`
+- **"Total Active Buses" no longer reads 0 above a map full of buses.** Manual refresh is the
+  default, so 60 seconds after a fetch every vehicle fell out of the fresh-only headline count while
+  the map still drew all of them — a screen showing *Total Active Buses 0*, a caption saying 101
+  were dimmed, and a footer reading "Showing 101 active vehicles". The headline metric now counts
+  what is drawn, with a separate **Stale** metric beside it, and "active" means the same thing in
+  the header and in the caption under the map
+- The Live Map's stale caption claimed network-wide vehicles were "shown dimmed on the map" while
+  the map shows one region — "47 vehicles shown dimmed" over two dimmed buses. The header metrics
+  are now labelled as network-wide, and the per-region dimmed count is reported in the caption under
+  the map, where it can be checked against the dots on screen
+- Analytics' **Moving Vehicles** counted every row of the live frame. That frame widened from 60
+  seconds to 15 minutes in this release, so the metric had silently become "moved at some point in
+  the last 15 minutes". It counts fresh rows only again
+- A region with no rows inside the fetch window showed the bare "No valid data for {region}" — the
+  original bug report's symptom, with no explanation. It now distinguishes "nothing reported in the
+  last 15 minutes" from "reported, but with unusable coordinates"
 - **A `config.py` predating this release no longer loses every one of its settings.** The new
   `LIVE_*` knobs were added to the existing all-or-nothing `from config import (...)` tuples in
   `utils/db.py` and `app_pages/live_map.py`, so a config file without them raised `ImportError` for
@@ -43,13 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing install's config will not have these. It does not need them — each new knob now falls
   back to its default on its own, leaving every setting you *did* customise intact. Copy the three
   `LIVE_*` lines from `config.example.py` only if you want to tune the freshness tiers
-- A **Stale** count beside the existing Live Map metrics
+- A **Stale** metric beside the existing Live Map metrics, as the design spec asked for — a fourth
+  header metric, not a caption
 
 ### Changed
 - The live window widened from 60 seconds to 5 minutes of drawn vehicles, so a bus that reported
   90 seconds ago is now visible (marked stale) instead of disappearing
-- `get_live_data_optimized`'s metrics gain `stale` and `hidden` counts. `total` still counts only
-  vehicles reporting within 60s, so it stays comparable to previous releases
+- `get_live_data_optimized`'s metrics gain `fresh`, `stale` and `hidden` counts, and **`total`
+  changed meaning**: it now counts the drawn set (fresh + stale, i.e. everything on the map) rather
+  than fresh rows only. `fresh` + `stale` = `total`. The previous number is not comparable to the
+  old pre-2.4.0 headline either way — that one meant "within 60s *of the newest row in the table*",
+  which under manual refresh was always populated, whereas a fresh count is measured against
+  wall-clock now and decays to zero between refreshes. Read `metrics['fresh']` for the
+  reporting-right-now count
 
 ### Notes
 - Measured while diagnosing this: the Rapid Bus MRT Feeder feed published a timestamp of

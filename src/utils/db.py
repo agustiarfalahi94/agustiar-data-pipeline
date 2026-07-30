@@ -187,11 +187,12 @@ def get_live_data_optimized():
               carrying 'age_seconds' and 'freshness' ('fresh'/'stale'/'hidden').
               Rows are never dropped for staleness; the caller decides what to
               draw.
-            - metrics_dict: {'total': int, 'stale': int, 'hidden': int,
-              'regions': int, 'busiest': str}. 'total' counts fresh rows only
-              (kept for backward compatibility with the old headline number);
-              'regions'/'busiest' are computed over fresh + stale rows only,
-              i.e. what is actually drawn on the map.
+            - metrics_dict: {'total': int, 'fresh': int, 'stale': int,
+              'hidden': int, 'regions': int, 'busiest': str}. 'total' is the
+              drawn set (fresh + stale) so the headline number always matches
+              the map; 'fresh' and 'stale' split it, and they sum to 'total'.
+              'regions'/'busiest' are likewise computed over the drawn rows.
+              All are network-wide, across every region.
             - sync_time_string: Formatted timestamp of the most recent row in
               the whole table, even when the window itself is empty - this is
               what lets the page report "data last seen 20 minutes ago" during
@@ -248,11 +249,14 @@ def get_live_data_optimized():
         df, now, fresh_seconds=LIVE_FRESH_SECONDS, stale_seconds=LIVE_STALE_SECONDS
     )
 
-    # Drawn on the map = fresh + stale. 'total' keeps its old meaning of
-    # "reporting right now" so the headline number stays comparable.
+    # 'total' counts exactly what the map draws (fresh + stale), so the headline
+    # metric can never read 0 above a map full of buses. It used to count fresh
+    # rows only, which in manual-refresh mode went to zero 60 seconds after the
+    # last fetch while the map still drew every one of them.
     drawn = df[df['freshness'] != 'hidden']
     metrics = {
-        'total': int((df['freshness'] == 'fresh').sum()),
+        'total': int(len(drawn)),
+        'fresh': int((df['freshness'] == 'fresh').sum()),
         'stale': int((df['freshness'] == 'stale').sum()),
         'hidden': int((df['freshness'] == 'hidden').sum()),
         'regions': len(drawn['region'].unique()),

@@ -25,6 +25,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation
+- **Header metrics** — **Active Buses** (everything drawn: fresh + stale), **Stale** (the dimmed
+  share of it), **Regions Monitored** and **Busiest Region**. All four are network-wide; the caption
+  under the map reports the same counts for the selected region
 - **Dark/Light map themes**
 
 ### 📊 Data Table
@@ -38,7 +41,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Speed Distribution** — histogram of average speeds per vehicle
 - **Regional Distribution** — pie chart
 - **Speed Analysis by Region** — box plot comparing regions
-- **Summary Statistics** — total vehicles, moving vehicles, max/min/avg/median speed
+- **Summary Statistics** — total vehicles, moving vehicles (non-zero speed among vehicles that
+  reported in the last 60s), max/min/avg/median speed
 
 ### 📡 Network Health
 - **Per-region reliability scorecards** — composite score (0–100) for each of the 14 transit regions

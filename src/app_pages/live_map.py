@@ -81,24 +81,45 @@ def show():
     # Get data - single optimized query for current state
     df_live, metrics, actual_sync_time = db.get_live_data_optimized()
 
+    window_label = data_processor.format_duration(LIVE_HIDDEN_SECONDS)
+    drawn_label = data_processor.format_duration(LIVE_STALE_SECONDS)
+    fresh_label = data_processor.format_duration(LIVE_FRESH_SECONDS)
+
     if df_live is None or df_live.empty:
-        st.info("🛰️ No data. Click 'Refresh Data' to fetch.")
+        # An outage and an empty database look identical from an empty frame, so
+        # say which one it is. actual_sync_time survives an empty window
+        # precisely so this branch can name when data was last seen.
+        if actual_sync_time:
+            st.warning(
+                f"⏳ No vehicle has reported in the last {window_label}. "
+                f"The feed looks stale — data was last seen at {actual_sync_time}."
+            )
+        else:
+            st.info("🛰️ No data. Click 'Refresh Data' to fetch.")
         return
 
     # Show sync time
     if actual_sync_time:
         st.success(f"Data updated: {actual_sync_time}")
 
-    # Metrics (Total Active Buses, Regions Monitored, and Busiest Region for Live Map)
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Active Buses", metrics['total'])
-    col2.metric("Regions Monitored", metrics['regions'])
-    col3.metric("Busiest Region", metrics['busiest'])
-    if metrics.get('stale'):
-        st.caption(
-            f"⏳ {metrics['stale']} vehicle(s) last reported over "
-            f"{LIVE_FRESH_SECONDS}s ago — shown dimmed on the map."
-        )
+    # Metrics. All four are network-wide, across every region — the map below
+    # shows one region. "Active" means the same here as in the caption under the
+    # map: reporting within LIVE_STALE_SECONDS, i.e. everything that gets drawn.
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(
+        "Active Buses", metrics['total'],
+        help=f"Reported within the last {drawn_label} — every vehicle drawn on the map.",
+    )
+    col2.metric(
+        "Stale", metrics['stale'],
+        help=f"Of those, the ones last reporting over {fresh_label} ago. Drawn dimmed.",
+    )
+    col3.metric("Regions Monitored", metrics['regions'])
+    col4.metric("Busiest Region", metrics['busiest'])
+    st.caption(
+        f"Network-wide across all regions. Active = reported within the last {drawn_label}; "
+        f"the map below shows the selected region only."
+    )
 
     # Hardcoded region list to prevent dropdown changes during auto-refresh
     try:
@@ -206,10 +227,22 @@ def show():
                     st.rerun()
 
     # Filter and process data
+    region_row_count = int((df_live['region'] == selected_region).sum())
     df_map = data_processor.prepare_map_data(df_live, selected_region)
 
     if df_map.empty:
-        st.warning(f"No valid data for {selected_region}")
+        # "No valid data" was the original bug report's symptom and explains
+        # nothing. Separate "the region reported nothing" from "it reported, but
+        # the coordinates were unusable" — different causes, different fixes.
+        if region_row_count == 0:
+            st.warning(
+                f"No vehicle in {selected_region} has reported in the last {window_label}."
+            )
+        else:
+            st.warning(
+                f"{region_row_count} vehicle(s) reported for {selected_region}, but none "
+                "carried usable coordinates."
+            )
         return
 
     # Hidden vehicles are counted but not drawn — a 7-day retention window would
@@ -222,8 +255,7 @@ def show():
     if df_map.empty:
         st.warning(
             f"No recent data for {selected_region} — "
-            f"{hidden_count} vehicle(s) last reported over "
-            f"{LIVE_STALE_SECONDS // 60} minutes ago."
+            f"{hidden_count} vehicle(s) last reported over {drawn_label} ago."
         )
         return
 
@@ -231,9 +263,19 @@ def show():
     df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
     df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
 
+    # One fallback for a frame that never carried the freshness columns (an
+    # older cached frame, or a caller that skipped classify_freshness): treat
+    # every row as fresh and full-strength.
+    freshness_col = df_map.get('freshness', pd.Series('fresh', index=df_map.index))
+    age_col = df_map.get('age_seconds', pd.Series(0, index=df_map.index))
+
+    # Counted here, before any route search narrows df_map, so the caption under
+    # the map describes the region rather than the search result.
+    region_stale_count = int((freshness_col == 'stale').sum())
+
     # Stale vehicles keep their colour but drop to ~35% alpha, so they read as
     # present-but-uncertain rather than as a different kind of thing.
-    is_stale = df_map.get('freshness', pd.Series('fresh', index=df_map.index)) == 'stale'
+    is_stale = freshness_col == 'stale'
     df_map['dot_color'] = [
         [51, 153, 255, 90] if s else [51, 153, 255, 255] for s in is_stale
     ]
@@ -243,10 +285,7 @@ def show():
 
     df_map['freshness_display'] = [
         f"{int(a)}s ago" if f == 'fresh' else f"⚠️ last update {int(a) // 60}m {int(a) % 60}s ago"
-        for a, f in zip(
-            df_map.get('age_seconds', pd.Series(0, index=df_map.index)),
-            df_map.get('freshness', pd.Series('fresh', index=df_map.index)),
-        )
+        for a, f in zip(age_col, freshness_col)
     ]
 
     # Resolve human-readable route names from GTFS Static for all unique route_ids
@@ -417,12 +456,22 @@ def show():
     # restate the same number as though it were the whole region.
     if hidden_count:
         st.caption(
-            f"🚫 {hidden_count} vehicle(s) hidden — no update in over "
-            f"{LIVE_STALE_SECONDS // 60} minutes."
+            f"🚫 {hidden_count} vehicle(s) in {selected_region} hidden — "
+            f"no update in over {drawn_label}."
         )
 
     if not filter_active:
-        st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
+        # "active" here means what it means in the header metric: reported
+        # within LIVE_STALE_SECONDS, i.e. drawn. The stale share is counted from
+        # this region's frame, not network-wide, so it matches the dimmed dots
+        # actually on screen.
+        stale_note = (
+            f" — {region_stale_count} of them dimmed, last reporting over {fresh_label} ago"
+            if region_stale_count else ""
+        )
+        st.caption(
+            f"Showing {len(df_map)} active vehicles in {selected_region}{stale_note}"
+        )
 
     # ===== ROUTE VIEWER SECTION =====
     # Maps selected_region display names to GTFS static agency slugs
