@@ -128,3 +128,31 @@ def filter_by_route(df, query):
     needle = query.strip().lower()
     mask = df['route_display'].fillna('').astype(str).str.lower().str.contains(needle, regex=False)
     return df[mask].copy()
+
+def classify_freshness(df, now, fresh_seconds=60, stale_seconds=300):
+    """
+    Tag each vehicle with how stale its position is.
+
+    Adds two columns:
+      age_seconds  int, clamped at 0 — a future-dated timestamp reads as age 0
+                   rather than a negative age, so a feed whose clock runs fast
+                   is treated as current instead of being discarded.
+      freshness    'fresh'  (age <= fresh_seconds)
+                   'stale'  (fresh_seconds < age <= stale_seconds)
+                   'hidden' (age > stale_seconds)
+
+    Rows are never dropped — the caller counts the hidden ones for its caption.
+    A frame that is empty, or has no 'timestamp' column, is returned unchanged.
+    """
+    if df.empty or 'timestamp' not in df.columns:
+        return df
+
+    out = df.copy()
+    ts = pd.to_numeric(out['timestamp'], errors='coerce')
+    out['age_seconds'] = (now - ts).clip(lower=0).fillna(stale_seconds + 1).astype(int)
+    out['freshness'] = pd.cut(
+        out['age_seconds'],
+        bins=[-1, fresh_seconds, stale_seconds, float('inf')],
+        labels=['fresh', 'stale', 'hidden'],
+    ).astype(str)
+    return out

@@ -642,3 +642,58 @@ def test_write_quality_log_migrates_existing_table(tmp_path, monkeypatch):
         con.close()
     assert rows['NEW'] == 'NO_FEED'
     assert rows['OLD'] is None      # pre-existing row keeps NULL
+
+
+# ── classify_freshness ────────────────────────────────────────────────────────
+
+def test_classify_freshness_assigns_three_tiers():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['fresh', 'stale', 'hidden'],
+        'timestamp': [now - 10, now - 120, now - 600],
+    })
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['freshness']) == ['fresh', 'stale', 'hidden']
+    assert list(out['age_seconds']) == [10, 120, 600]
+
+
+def test_classify_freshness_boundaries_are_inclusive():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['at_fresh_edge', 'just_past', 'at_stale_edge', 'just_past_stale'],
+        'timestamp': [now - 60, now - 61, now - 300, now - 301],
+    })
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['freshness']) == ['fresh', 'stale', 'stale', 'hidden']
+
+
+def test_classify_freshness_clamps_future_timestamps_to_fresh():
+    now = 1_800_000_000
+    df = pd.DataFrame({'vehicle_id': ['ahead'], 'timestamp': [now + 250]})
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['age_seconds']) == [0]
+    assert list(out['freshness']) == ['fresh']
+
+
+def test_classify_freshness_never_drops_rows():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['a', 'b', 'c'],
+        'timestamp': [now - 5, now - 400, now - 800],
+    })
+    assert len(data_processor.classify_freshness(df, now)) == 3
+
+
+def test_classify_freshness_handles_empty_and_missing_column():
+    now = 1_800_000_000
+    assert data_processor.classify_freshness(pd.DataFrame(), now).empty
+    df = pd.DataFrame({'vehicle_id': ['a']})
+    out = data_processor.classify_freshness(df, now)
+    assert 'freshness' not in out.columns
+
+
+def test_classify_freshness_respects_custom_bounds():
+    now = 1_800_000_000
+    df = pd.DataFrame({'vehicle_id': ['a'], 'timestamp': [now - 30]})
+    out = data_processor.classify_freshness(df, now, fresh_seconds=10, stale_seconds=20)
+    assert list(out['freshness']) == ['hidden']
