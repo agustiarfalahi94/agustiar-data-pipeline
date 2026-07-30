@@ -804,3 +804,80 @@ def test_live_data_reports_sync_time_during_outage(tmp_path, monkeypatch):
     assert df.empty
     assert metrics == {}
     assert sync_time_str is not None
+
+
+# ── config fallback ───────────────────────────────────────────────────────────
+
+def _reload_with_config(monkeypatch, module_name, fake_config, names):
+    """
+    Reload *module_name* with *fake_config* standing in for `config`, snapshot
+    *names* off it, then restore the module so later tests see the real state.
+
+    Returns a plain dict — `importlib.reload` mutates the module object in
+    place, so the restoring reload would otherwise overwrite what we read.
+    """
+    import importlib
+    import types
+
+    fake = types.ModuleType('config')
+    for key, value in fake_config.items():
+        setattr(fake, key, value)
+
+    module = importlib.import_module(module_name)
+    monkeypatch.setitem(sys.modules, 'config', fake)
+    try:
+        reloaded = importlib.reload(module)
+        return {name: getattr(reloaded, name) for name in names}
+    finally:
+        monkeypatch.undo()
+        importlib.reload(module)
+
+
+def test_db_config_knobs_fall_back_individually(monkeypatch):
+    """
+    A config.py written before the LIVE_* knobs existed must keep every setting
+    it *does* define. These names used to sit in one all-or-nothing tuple
+    import, so a config missing them raised ImportError and silently reverted
+    DATABASE_NAME, TIMEZONE and friends to the hardcoded defaults.
+    """
+    names = [
+        'DATABASE_NAME', 'DATABASE_TABLE', 'TIMEZONE', 'UTC_OFFSET_HOURS',
+        'DATA_RETENTION_DAYS', 'LIVE_FRESH_SECONDS', 'LIVE_STALE_SECONDS',
+        'LIVE_HIDDEN_SECONDS',
+    ]
+    values = _reload_with_config(monkeypatch, 'utils.db', {
+        'DATABASE_NAME': 'custom_transit.duckdb',
+        'DATABASE_TABLE': 'custom_buses',
+        'TIMEZONE': 'Asia/Tokyo',
+        'UTC_OFFSET_HOURS': 9,
+        'DATA_RETENTION_DAYS': 30,
+        # No LIVE_FRESH_SECONDS / LIVE_STALE_SECONDS / LIVE_HIDDEN_SECONDS.
+    }, names)
+
+    # The user's settings survive...
+    assert values['DATABASE_NAME'] == 'custom_transit.duckdb'
+    assert values['DATABASE_TABLE'] == 'custom_buses'
+    assert values['TIMEZONE'] == 'Asia/Tokyo'
+    assert values['UTC_OFFSET_HOURS'] == 9
+    assert values['DATA_RETENTION_DAYS'] == 30
+    # ...and only the genuinely missing knobs fall back.
+    assert values['LIVE_FRESH_SECONDS'] == 60
+    assert values['LIVE_STALE_SECONDS'] == 300
+    assert values['LIVE_HIDDEN_SECONDS'] == 900
+
+
+def test_db_config_knobs_are_honoured_when_present(monkeypatch):
+    values = _reload_with_config(monkeypatch, 'utils.db', {
+        'DATABASE_NAME': 'custom_transit.duckdb',
+        'DATABASE_TABLE': 'custom_buses',
+        'TIMEZONE': 'Asia/Tokyo',
+        'UTC_OFFSET_HOURS': 9,
+        'DATA_RETENTION_DAYS': 30,
+        'LIVE_FRESH_SECONDS': 45,
+        'LIVE_STALE_SECONDS': 200,
+        'LIVE_HIDDEN_SECONDS': 800,
+    }, ['LIVE_FRESH_SECONDS', 'LIVE_STALE_SECONDS', 'LIVE_HIDDEN_SECONDS'])
+
+    assert values['LIVE_FRESH_SECONDS'] == 45
+    assert values['LIVE_STALE_SECONDS'] == 200
+    assert values['LIVE_HIDDEN_SECONDS'] == 800

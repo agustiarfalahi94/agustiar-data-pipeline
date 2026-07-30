@@ -148,6 +148,10 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 | `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
 | `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
 
+The three `LIVE_*` knobs are optional and are read one at a time: a `config.py` copied from an
+earlier release simply falls back to the default for each one it lacks, and keeps every setting it
+does define. Copy them in from `config.example.py` only if you want to tune the freshness tiers.
+
 ### Streamlit Cloud Secrets (TOML)
 
 ```toml

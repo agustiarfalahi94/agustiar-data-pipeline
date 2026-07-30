@@ -8,12 +8,23 @@ from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 
 try:
-    from config import DEFAULT_ZOOM, ARROW_SIZE, LIVE_FRESH_SECONDS, LIVE_STALE_SECONDS
+    from config import DEFAULT_ZOOM, ARROW_SIZE
 except ImportError:
     DEFAULT_ZOOM = 13
     ARROW_SIZE = 0.001
-    LIVE_FRESH_SECONDS = 60
-    LIVE_STALE_SECONDS = 300
+
+# Read individually, not through the tuple import above: a config.py copied from
+# config.example.py before these knobs existed lacks them, and naming them there
+# would fail the whole import and throw away the user's DEFAULT_ZOOM/ARROW_SIZE
+# along with them. See the same note in utils/db.py.
+try:
+    import config as _config
+except ImportError:
+    _config = None
+
+LIVE_FRESH_SECONDS = getattr(_config, 'LIVE_FRESH_SECONDS', 60)
+LIVE_STALE_SECONDS = getattr(_config, 'LIVE_STALE_SECONDS', 300)
+LIVE_HIDDEN_SECONDS = getattr(_config, 'LIVE_HIDDEN_SECONDS', 900)
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
