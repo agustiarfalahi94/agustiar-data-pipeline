@@ -189,7 +189,9 @@ def _write_quality_log(stats_list):
                  s['vehicles_rejected'], s['vehicles_inserted'],
                  s['avg_data_lag_seconds'], s['max_data_lag_seconds'],
                  bool(s['total_dropout']), s['fetch_duration_ms'],
-                 s.get('fetch_status', 'OK')]
+                 # Matches _build_quality_stats: an unknown status is recorded
+                 # as ERROR rather than fabricated as healthy.
+                 s.get('fetch_status', 'ERROR')]
             )
 
         try:

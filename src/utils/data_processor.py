@@ -105,6 +105,7 @@ def format_display_dataframe(df):
 
     return display_df.reset_index(drop=True)
 
+
 def filter_by_route(df, query):
     """
     Filter vehicles to those whose route matches *query* (case-insensitive substring).
@@ -114,6 +115,11 @@ def filter_by_route(df, query):
 
     Returns df unchanged for an empty/whitespace query or when route_display
     is absent, so callers can pass user input straight through.
+
+    `regex=False` is load-bearing, not defensive: a query of "." would otherwise
+    match every vehicle. The returned frame is a copy because callers assign
+    derived columns onto it (e.g. live_map's arrow_path), which on a slice
+    raises SettingWithCopyWarning on pandas 2.x.
     """
     if not query or not query.strip():
         return df
@@ -121,4 +127,4 @@ def filter_by_route(df, query):
         return df
     needle = query.strip().lower()
     mask = df['route_display'].fillna('').astype(str).str.lower().str.contains(needle, regex=False)
-    return df[mask]
+    return df[mask].copy()

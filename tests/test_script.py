@@ -3,6 +3,7 @@ import pytest
 import sys
 import os
 import time
+import warnings
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -481,6 +482,31 @@ def test_filter_by_route_no_match_returns_empty_with_columns():
 def test_filter_by_route_missing_column_returns_unchanged():
     df = pd.DataFrame({'vehicle_id': ['A', 'B']})
     assert len(data_processor.filter_by_route(df, 'T580')) == 2
+
+
+def test_filter_by_route_treats_regex_metacharacters_literally():
+    """The query is user input, so `regex=False` is load-bearing, not
+    defensive: as a regex, "." matches every vehicle in the region."""
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B', 'C'],
+        'route_display': ['T580 — Awan Besar', 'U6000 — Klang', 'No.7 — Shuttle'],
+    })
+    out = data_processor.filter_by_route(df, '.')
+    assert list(out['vehicle_id']) == ['C']
+
+
+def test_filter_by_route_returns_a_copy_not_a_slice():
+    """Callers assign derived columns onto the result (live_map's arrow_path);
+    on a slice that raises SettingWithCopyWarning on pandas 2.x."""
+    df = pd.DataFrame({
+        'vehicle_id': ['A', 'B'],
+        'route_display': ['T580 — Awan Besar', 'U6000 — Klang'],
+    })
+    out = data_processor.filter_by_route(df, 'T580')
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out['derived'] = 1
+    assert 'derived' not in df.columns
 
 
 # ── fetch status classification ──────────────────────────────────────────────

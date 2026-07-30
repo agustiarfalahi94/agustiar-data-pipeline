@@ -213,8 +213,9 @@ def show():
         df_map['route_display'] = df_map.get('route_id', '—').fillna('—')
 
     # Filter to the searched route. Applied after route_display is resolved and
-    # before layers are built, so layers, centring, the caption and the Route
-    # Viewer all reflect the filtered set.
+    # before layers are built, so the layers, the view centring below, the
+    # caption and the Route Viewer all reflect the filtered set.
+    filter_active = False
     if route_query and route_query.strip():
         df_filtered = data_processor.filter_by_route(df_map, route_query)
         if df_filtered.empty:
@@ -223,6 +224,7 @@ def show():
             st.warning(f"No live vehicles found on '{route_query.strip()}' right now.")
         else:
             df_map = df_filtered
+            filter_active = True
             matched = sorted(df_map['route_display'].unique())
             matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
             st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")
@@ -269,8 +271,16 @@ def show():
             'pitch': 0,
         }
     
-    # Only update view state if region changed
-    if st.session_state.selected_region != st.session_state.get('last_viewed_region', None):
+    # Re-centre on a *change of what is being shown* — a different region, or a
+    # different route search — and only then, so auto-refresh never yanks the
+    # viewport away from wherever the user panned. Without the search half, a
+    # search made while parked elsewhere in the region filtered the layers but
+    # left the camera behind, i.e. a "Showing 3 vehicle(s)" banner over a map
+    # with nothing on it.
+    current_query = (route_query or '').strip().lower()
+    region_changed = st.session_state.selected_region != st.session_state.get('last_viewed_region', None)
+    query_changed = current_query != st.session_state.get('last_route_query', '')
+    if region_changed or query_changed:
         st.session_state.map_view_state = {
             'latitude': df_map['latitude'].mean(),
             'longitude': df_map['longitude'].mean(),
@@ -278,6 +288,7 @@ def show():
             'pitch': 0,
         }
         st.session_state.last_viewed_region = st.session_state.selected_region
+        st.session_state.last_route_query = current_query
     
     view_state = pdk.ViewState(
         latitude=st.session_state.map_view_state['latitude'],
@@ -346,7 +357,11 @@ def show():
         )
     )
 
-    st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
+    # While a search is filtering the frame, len(df_map) is the match count, not
+    # the region total — the success banner above already states it, so don't
+    # restate the same number as though it were the whole region.
+    if not filter_active:
+        st.caption(f"Showing {len(df_map)} active vehicles in {selected_region}")
 
     # ===== ROUTE VIEWER SECTION =====
     # Maps selected_region display names to GTFS static agency slugs
