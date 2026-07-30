@@ -21,6 +21,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Hover tooltips** — vehicle ID, speed (km/h), and bearing
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
+- **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it. Not available for KTM Berhad, whose realtime feed carries no route ID
 - **Dark/Light map themes**
 
 ### 📊 Data Table
@@ -42,6 +43,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **24h sparklines** — at-a-glance trend per region
 - **Region drill-down** — reliability score over time, vehicles received vs. rejected per cycle, data lag trend
 - **Raw Fetch Log** — every API fetch event with full quality metadata, CSV export
+- **Honest scoring** — feeds withdrawn upstream (HTTP 404) and self-inflicted rate limiting (HTTP 429) are excluded from reliability scores rather than blamed on the agency; a healthy feed reporting no vehicles out of service hours is not counted as an outage
 
 ### ⚙️ Settings & Controls
 - **Manual or Auto refresh** (20-second interval)
@@ -242,6 +244,7 @@ One row per region per fetch cycle. Powers the Network Health page.
 | `max_data_lag_seconds` | DOUBLE | Worst lag observed in this fetch |
 | `total_dropout` | BOOLEAN | True if API returned zero vehicles for this region |
 | `fetch_duration_ms` | INTEGER | Wall-clock time for this region's HTTP fetch |
+| `fetch_status` | VARCHAR | `OK`, `EMPTY`, `NO_FEED` (404), `THROTTLED` (429) or `ERROR` |
 
 ---
 
@@ -371,7 +374,7 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 - [x] Audit timestamps (`created_at`)
 - [x] Network Health page — per-region reliability scores and fetch quality log
 - [x] dbt analytics layer — bronze/silver/gold models, data tests, CI
-- [ ] Search by route name — type a route (e.g. `T580`) and see every vehicle on that
+- [x] Search by route name — type a route (e.g. `T580`) and see every vehicle on that
       route live on the map, instead of looking up an opaque vehicle ID
 
 > **Not planned: a full route planner.** Origin→destination journey planning is well served

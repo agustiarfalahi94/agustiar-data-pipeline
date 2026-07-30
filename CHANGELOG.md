@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-07-30
+
+### Added
+- **Route name search on the Live Map** — type a route (e.g. `T580`) to show only the vehicles running it. Matches the route number or any part of its name (`awan besar` works), case-insensitively, within the selected region. Hidden for KTM Berhad, whose realtime feed carries no `route_id`
+- `data_processor.filter_by_route` — pure, testable route filtering
+- `fetch_status` column on `fetch_quality_log`, classifying every fetch as `OK`, `EMPTY`, `NO_FEED` (HTTP 404), `THROTTLED` (HTTP 429) or `ERROR`, with an additive migration for existing databases
+- `mart_network_health` gains `scoreable_fetches` and `feed_unavailable`
+
+### Changed
+- **Reliability scores now reflect the agency, not the plumbing.** `NO_FEED` and `THROTTLED` fetches are excluded from scoring, and `EMPTY` (feed healthy, no service running) no longer counts as an outage. Availability is now `1 − errors ÷ scoreable fetches`. The `reliability_score` formula itself is unchanged — only which rows feed it
+- Regions whose feed has been withdrawn upstream render a neutral "Feed unavailable" card and a ⚫ No Feed count, instead of a misleading low score
+- `_fetch_endpoint` returns `(vehicles, duration_ms, status)`; `_build_quality_stats` takes `status_by_region`
+- `fetch_quality_log` inserts now name their columns explicitly rather than relying on positional order
+
+### Fixed
+- A fetch cycle in which every region fails now writes a quality-log row explaining why, instead of returning silently
+
+### Notes
+- Observed upstream: `prasarana?category=rapid-bus-kuantan` returns HTTP 404 (*"feed does not exist"*), which is why that region previously scored 20. It is still listed in the provider's documentation and may return
+- Rows written before this migration have `fetch_status = NULL`, which the staging model coalesces to `OK`. For a historical row that had `total_dropout = true`, the old scoring counted it as a dropout-driven outage; the new scoring does not, since a coalesced `OK` is never `ERROR`. Such rows therefore score **higher** retroactively than they did before the migration — this is an intentional side effect of no longer treating a bare dropout as proof of an outage, not a bug, and it is self-limiting: those rows age out of the 7-day retention window within a week of this release
+- Known limitation: because `EMPTY` is treated as healthy, an outage where a feed responds but returns nothing during service hours no longer reduces the score. Separating that from "no service scheduled" needs GTFS `calendar.txt`
+
 ## [2.2.1] - 2026-07-30
 
 ### Changed
