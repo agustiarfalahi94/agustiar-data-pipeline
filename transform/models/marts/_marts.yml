@@ -35,7 +35,11 @@ models:
         tests:
           - accepted_range: {min_value: 0, max_value: 1}
       - name: availability
-        description: Share of fetch cycles in the window that were not total dropouts.
+        description: >
+          Share of scoreable fetches (excludes NO_FEED/THROTTLED) that were not
+          ERROR. total_dropout does NOT count against this - an EMPTY fetch (feed
+          answered, zero vehicles running) is not an error. NULL when
+          feed_unavailable (no scoreable fetches in the window).
       - name: avg_data_lag_seconds
         description: Mean data lag across the window's fetch cycles, in seconds.
       - name: last_fetch_timestamp
@@ -43,7 +47,8 @@ models:
       - name: reliability_score
         description: >
           Composite 0-100 score - 40% reporting rate, 40% availability, 20% data
-          freshness. Computed by the shared `reliability_score` macro.
+          freshness. Computed by the shared `reliability_score` macro. NULL when
+          feed_unavailable (no scoreable fetches in the window to score).
         tests:
           - accepted_range: {min_value: 0, max_value: 100}
 
@@ -76,7 +81,11 @@ models:
       - name: total_dropout
         description: True when the API returned zero vehicles for the region in this cycle.
       - name: reliability_score
-        description: Composite 0-100 score for this single fetch cycle.
+        description: >
+          Composite 0-100 score for this single fetch cycle - 40% reporting rate,
+          40% availability (ERROR = 0, otherwise 1, including EMPTY), 20% data
+          freshness. NULL when the row isn't scoreable (NO_FEED/THROTTLED), so
+          it's absent from the trend line rather than plotted as a zero.
         tests:
           - accepted_range: {min_value: 0, max_value: 100}
 

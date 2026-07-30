@@ -13,8 +13,9 @@ agg as (
         coalesce(avg(case when vehicles_received > 0
             then vehicles_inserted::double / vehicles_received end), 0) as reporting_rate,
         -- Only a genuine ERROR counts against availability. EMPTY means the feed
-        -- answered correctly and no service was running.
-        sum(case when is_scoreable and fetch_status = 'ERROR' then 1 else 0 end) as error_count,
+        -- answered correctly and no service was running. (ERROR is always
+        -- scoreable by construction, so no extra is_scoreable guard is needed.)
+        sum(case when fetch_status = 'ERROR' then 1 else 0 end) as error_count,
         coalesce(avg(avg_data_lag_seconds), 0)                as avg_data_lag_seconds,
         max(fetch_timestamp)                                  as last_fetch_timestamp
     from q

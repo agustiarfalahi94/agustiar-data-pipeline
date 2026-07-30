@@ -131,3 +131,29 @@ def test_ok_region_still_scores_as_before(built_db):
         "WHERE region = 'TestRegion'"
     ).fetchone()[0]
     assert score == 95
+
+
+def test_trend_dead_feed_rows_are_null_not_zero(built_db):
+    """NO_FEED rows aren't scoreable, so the trend line should have no point
+    for them at all - not a zero dragging the chart down."""
+    scores = [
+        r[0] for r in built_db.execute(
+            "SELECT reliability_score FROM main.mart_region_health_trend "
+            "WHERE region = 'DeadFeed'"
+        ).fetchall()
+    ]
+    assert scores == [None, None]
+
+
+def test_trend_quiet_feed_rows_are_not_penalised(built_db):
+    """EMPTY rows are scoreable and healthy (feed answered, no service running),
+    so they must not score 0 like the old total_dropout-based rule would."""
+    scores = [
+        r[0] for r in built_db.execute(
+            "SELECT reliability_score FROM main.mart_region_health_trend "
+            "WHERE region = 'QuietFeed'"
+        ).fetchall()
+    ]
+    assert all(s is not None and s > 0 for s in scores)
+    # reporting 0, availability 1.0 (EMPTY != ERROR), lag 0 -> round((0+0.4+0.2)*100)=60
+    assert scores == [60, 60]
