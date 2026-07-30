@@ -128,3 +128,69 @@ def filter_by_route(df, query):
     needle = query.strip().lower()
     mask = df['route_display'].fillna('').astype(str).str.lower().str.contains(needle, regex=False)
     return df[mask].copy()
+
+def format_duration(seconds):
+    """
+    Human wording for a window length, so UI copy can be derived from the
+    configured knobs instead of hardcoding "5 minutes" next to a 300 that the
+    user is invited to change.
+
+    45 -> '45 seconds', 60 -> '1 minute', 900 -> '15 minutes', 90 -> '1 minute 30 seconds'
+    """
+    total = int(seconds)
+    if total < 0:
+        total = 0
+    minutes, remainder = divmod(total, 60)
+    if minutes == 0:
+        return f"{remainder} second{'' if remainder == 1 else 's'}"
+    label = f"{minutes} minute{'' if minutes == 1 else 's'}"
+    if remainder:
+        label += f" {remainder} second{'' if remainder == 1 else 's'}"
+    return label
+
+
+def classify_freshness(df, now, fresh_seconds=60, stale_seconds=300):
+    """
+    Tag each vehicle with how stale its position is.
+
+    Adds two columns:
+      age_seconds  int, clamped at 0 — a future-dated timestamp reads as age 0
+                   rather than a negative age, so a feed whose clock runs fast
+                   is treated as current instead of being discarded.
+      freshness    'fresh'  (age <= fresh_seconds)
+                   'stale'  (fresh_seconds < age <= stale_seconds)
+                   'hidden' (age > stale_seconds)
+
+    Both bounds are user-tunable config knobs, so they can arrive equal (or
+    inverted). That leaves no room for a 'stale' band: rather than raising
+    "Bin edges must be unique" out of pd.cut, the middle tier is dropped and
+    rows are split into 'fresh' and 'hidden' at the wider of the two bounds.
+
+    A row whose timestamp is missing or non-numeric is aged past every bound,
+    so it lands in 'hidden' rather than being presented as current.
+
+    Rows are never dropped — the caller counts the hidden ones for its caption.
+    A frame that is empty, or has no 'timestamp' column, is returned unchanged.
+    """
+    if df.empty or 'timestamp' not in df.columns:
+        return df
+
+    fresh_edge = int(fresh_seconds)
+    stale_edge = int(stale_seconds)
+    if stale_edge > fresh_edge:
+        bins = [-1, fresh_edge, stale_edge, float('inf')]
+        labels = ['fresh', 'stale', 'hidden']
+    else:
+        bins = [-1, max(fresh_edge, stale_edge), float('inf')]
+        labels = ['fresh', 'hidden']
+
+    out = df.copy()
+    ts = pd.to_numeric(out['timestamp'], errors='coerce')
+    hidden_floor = max(fresh_edge, stale_edge) + 1
+    out['age_seconds'] = (now - ts).clip(lower=0).fillna(hidden_floor).astype(int)
+    out['freshness'] = pd.cut(
+        out['age_seconds'],
+        bins=bins,
+        labels=labels,
+    ).astype(str)
+    return out

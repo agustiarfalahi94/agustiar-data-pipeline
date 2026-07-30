@@ -3,6 +3,17 @@ import plotly.express as px
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
 
+# Read individually: a config.py copied from config.example.py before these
+# knobs existed lacks them, and an all-or-nothing tuple import would fail
+# entirely rather than falling back one knob at a time. See utils/db.py.
+try:
+    import config as _config
+except ImportError:
+    _config = None
+
+LIVE_FRESH_SECONDS = getattr(_config, 'LIVE_FRESH_SECONDS', 60)
+LIVE_HIDDEN_SECONDS = getattr(_config, 'LIVE_HIDDEN_SECONDS', 900)
+
 
 def show():
     # Refresh behaviour
@@ -24,8 +35,26 @@ def show():
     # Get ALL historical data for charts and speed statistics
     df_historical, _, _ = db.get_historical_data()
 
-    if df_live is None or df_live.empty or df_historical is None or df_historical.empty:
-        st.info("🛰️ No data available. Please refresh.")
+    live_empty = df_live is None or df_live.empty
+    historical_empty = df_historical is None or df_historical.empty
+
+    if live_empty or historical_empty:
+        # An outage and an empty database both produce an empty live frame. The
+        # sync time survives an empty window precisely so this branch can say
+        # which one it is instead of implying nothing was ever ingested.
+        if not actual_sync_time:
+            st.info("🛰️ No data available. Please refresh.")
+        elif live_empty:
+            st.warning(
+                f"⏳ No vehicle has reported in the last "
+                f"{data_processor.format_duration(LIVE_HIDDEN_SECONDS)}. "
+                f"The feed looks stale — data was last seen at {actual_sync_time}."
+            )
+        else:
+            st.info(
+                "🛰️ No history inside the retention window yet, so the charts have "
+                f"nothing to plot. Data was last seen at {actual_sync_time}."
+            )
         return
 
     # Convert speed using helper function
@@ -139,9 +168,22 @@ def show():
         total_unique_vehicles = df_historical['vehicle_id'].nunique()
         st.metric("Total Vehicles", total_unique_vehicles)
         
-        # Moving vehicles from LIVE data (speed > 0, distinct vehicle_id)
-        moving_count = len(df_live[df_live['speed'] > 0])
-        st.metric("Moving Vehicles", moving_count)
+        # Moving vehicles from LIVE data (speed > 0), fresh rows only. The live
+        # frame widened to LIVE_HIDDEN_SECONDS in 2.4.0 and now carries stale and
+        # hidden rows too; counting all of them would silently turn this metric
+        # into "moved at some point in the last 15 minutes".
+        df_moving_source = (
+            df_live[df_live['freshness'] == 'fresh']
+            if 'freshness' in df_live.columns else df_live
+        )
+        moving_count = int((df_moving_source['speed'] > 0).sum())
+        st.metric(
+            "Moving Vehicles", moving_count,
+            help=(
+                "Vehicles reporting a non-zero speed in their latest position, "
+                f"within the last {data_processor.format_duration(LIVE_FRESH_SECONDS)}."
+            ),
+        )
 
     with stats_col2:
         # All speed stats from HISTORICAL moving vehicles (excludes stopped buses)

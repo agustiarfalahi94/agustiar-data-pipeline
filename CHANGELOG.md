@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-30
+
+### Fixed
+- **Regions no longer vanish from the Live Map.** The freshness window was anchored to the newest
+  timestamp anywhere in the table, and ingestion accepts timestamps up to 5 minutes in the future —
+  so a single vehicle with a fast clock shifted the window past every bus reporting honestly, and
+  whole regions blacked out for a refresh at a time. Observed live: 101 buses across 7 regions
+  while Rapid Bus KL, the largest network, showed "No valid data". The window is now anchored to
+  wall-clock time and vehicle ages are clamped at zero, so no feed's clock can move it
+- **An ingestion outage now names when data was last seen, on screen.** Previously the app reported
+  "No data. Click 'Refresh Data' to fetch." — which reads as *nothing was ever ingested*. The
+  database layer was fixed to keep reporting a sync time through an empty window, but both pages
+  early-returned on the empty frame *before* the banner, so the user still saw the old string. The
+  Live Map and Analytics now distinguish "stale — data last seen at HH:MM:SS" from "nothing ingested
+  yet", with the window wording derived from `LIVE_HIDDEN_SECONDS`
+- **"Total Active Buses" no longer reads 0 above a map full of buses.** Manual refresh is the
+  default, so 60 seconds after a fetch every vehicle fell out of the fresh-only headline count while
+  the map still drew all of them — a screen showing *Total Active Buses 0*, a caption saying 101
+  were dimmed, and a footer reading "Showing 101 active vehicles". The headline metric now counts
+  what is drawn, with a separate **Stale** metric beside it, and "active" means the same thing in
+  the header and in the caption under the map
+- The Live Map's stale caption claimed network-wide vehicles were "shown dimmed on the map" while
+  the map shows one region — "47 vehicles shown dimmed" over two dimmed buses. The header metrics
+  are now labelled as network-wide, and the per-region dimmed count is reported in the caption under
+  the map, where it can be checked against the dots on screen
+- Analytics' **Moving Vehicles** counted every row of the live frame. That frame widened from 60
+  seconds to 15 minutes in this release, so the metric had silently become "moved at some point in
+  the last 15 minutes". It counts fresh rows only again
+- The "Data updated:" banner is clamped to now. It was fed by `MAX(timestamp)`, and ingestion
+  accepts timestamps up to `DATA_FUTURE_TOLERANCE` (300s) ahead, so a feed with a fast clock could
+  make the app claim its data arrived up to five minutes in the future
+- A region with no rows inside the fetch window showed the bare "No valid data for {region}" — the
+  original bug report's symptom, with no explanation. It now distinguishes "nothing reported in the
+  last 15 minutes" from "reported, but with unusable coordinates"
+- **A `config.py` predating this release no longer loses every one of its settings.** The new
+  `LIVE_*` knobs were added to the existing all-or-nothing `from config import (...)` tuples in
+  `utils/db.py` and `app_pages/live_map.py`, so a config file without them raised `ImportError` for
+  the *whole* tuple and the app silently fell back to hardcoded defaults for `DATABASE_NAME`,
+  `DATABASE_TABLE`, `TIMEZONE`, `UTC_OFFSET_HOURS`, `DATA_RETENTION_DAYS`, `DEFAULT_ZOOM` and
+  `ARROW_SIZE` — pointing a customised install at a different DuckDB file with no error. Knobs
+  added after `config.example.py` was last copied are now read one at a time via `getattr`, so a
+  missing one falls back alone
+- `classify_freshness` no longer raises `ValueError: Bin edges must be unique` when
+  `LIVE_FRESH_SECONDS` and `LIVE_STALE_SECONDS` are set equal (or inverted). Both are documented as
+  user-tunable, and equal bounds simply mean "no stale band" — the tiers degrade to fresh/hidden
+  instead of taking the page down. A row whose timestamp is missing or unparseable is aged past
+  every bound, so it lands in `hidden` rather than being drawn as current
+
+### Added
+- **Vehicle freshness tiers on the Live Map.** Vehicles reporting within 60s are drawn as before;
+  those between 60s and 5 minutes are drawn dimmed with a "last update" line in their tooltip; those
+  older than 5 minutes are hidden but reported in a caption rather than silently dropped
+- `data_processor.classify_freshness` — pure, testable tier assignment
+- `data_processor.format_duration` — turns a configured window into UI wording, so the Live Map's
+  copy tracks the `LIVE_*` knobs instead of hardcoding "5 minutes" beside a value the user can change
+- `LIVE_FRESH_SECONDS` (60), `LIVE_STALE_SECONDS` (300) and `LIVE_HIDDEN_SECONDS` (900) config knobs.
+  **Upgrading:** `config.py` is gitignored and generated by copying `config.example.py`, so an
+  existing install's config will not have these. It does not need them — each new knob now falls
+  back to its default on its own, leaving every setting you *did* customise intact. Copy the three
+  `LIVE_*` lines from `config.example.py` only if you want to tune the freshness tiers
+- A **Stale** metric beside the existing Live Map metrics, as the design spec asked for — a fourth
+  header metric, not a caption
+
+### Changed
+- The live window widened from 60 seconds to 5 minutes of drawn vehicles, so a bus that reported
+  90 seconds ago is now visible (marked stale) instead of disappearing
+- `get_live_data_optimized`'s metrics gain `fresh`, `stale` and `hidden` counts, and **`total`
+  changed meaning**: it now counts the drawn set (fresh + stale, i.e. everything on the map) rather
+  than fresh rows only. `fresh` + `stale` = `total`. The previous number is not comparable to the
+  old pre-2.4.0 headline either way — that one meant "within 60s *of the newest row in the table*",
+  which under manual refresh was always populated, whereas a fresh count is measured against
+  wall-clock now and decays to zero between refreshes. Read `metrics['fresh']` for the
+  reporting-right-now count
+
+### Docs
+- The README pipeline diagram still labelled the Live Map "last 60s" — it is now 15 minutes fetched
+  and 5 minutes drawn. It sits one screen above the Key Design Decisions table this release updated,
+  so the contradiction was visible at a glance. The table gains a row spelling out the three
+  windows, and the two "sub-minute freshness" asides now say what the direct query actually buys
+  (up-to-the-second positions and ages), rather than describing the pre-2.4.0 window
+
+### Notes
+- Measured while diagnosing this: the Rapid Bus MRT Feeder feed published a timestamp of
+  `1886017556` — roughly the year 2029. Ingestion rejects it, but `myBAS Kuching` and `myBAS Melaka`
+  were simultaneously reporting +3s and +10s, so mildly future-dated timestamps are routine in
+  these feeds rather than exotic
+- `DATA_FUTURE_TOLERANCE` is deliberately unchanged. Clamping ages at zero removes its ability to
+  distort the window, so tightening it would treat a symptom that is already fixed and would start
+  rejecting real data from feeds whose clocks run slightly fast
+- Verified by the automated test suite and parse checks; not yet exercised in a running browser.
+  The outage banner and the "no rows in the window" message are now covered by page-level tests that
+  drive `live_map.show()` / `analytics.show()` against a stubbed Streamlit — the previous db-layer
+  test asserted only that `sync_time_str` was not `None`, which passed while the user-visible string
+  was still the old one
+
 ## [2.3.1] - 2026-07-30
 
 ### Fixed

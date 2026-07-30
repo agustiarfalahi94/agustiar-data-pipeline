@@ -22,6 +22,12 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. Not available for KTM Berhad, whose realtime feed carries no route ID
+- **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
+  are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
+  nothing disappears without explanation
+- **Header metrics** — **Active Buses** (everything drawn: fresh + stale), **Stale** (the dimmed
+  share of it), **Regions Monitored** and **Busiest Region**. All four are network-wide; the caption
+  under the map reports the same counts for the selected region
 - **Dark/Light map themes**
 
 ### 📊 Data Table
@@ -35,7 +41,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Speed Distribution** — histogram of average speeds per vehicle
 - **Regional Distribution** — pie chart
 - **Speed Analysis by Region** — box plot comparing regions
-- **Summary Statistics** — total vehicles, moving vehicles, max/min/avg/median speed
+- **Summary Statistics** — total vehicles, moving vehicles (non-zero speed among vehicles that
+  reported in the last 60s), max/min/avg/median speed
 
 ### 📡 Network Health
 - **Per-region reliability scorecards** — composite score (0–100) for each of the 14 transit regions
@@ -141,6 +148,13 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 | `ARROW_SIZE` | `0.001` | Vehicle arrow size multiplier |
 | `DATA_MAX_AGE` | `3600` | Max record age accepted (seconds) |
 | `DATA_FUTURE_TOLERANCE` | `300` | Max future timestamp tolerance (seconds) |
+| `LIVE_FRESH_SECONDS` | `60` | Vehicles at or under this age are drawn solid |
+| `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
+| `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
+
+The three `LIVE_*` knobs are optional and are read one at a time: a `config.py` copied from an
+earlier release simply falls back to the default for each one it lacks, and keeps every setting it
+does define. Copy them in from `config.example.py` only if you want to tune the freshness tiers.
 
 ### Streamlit Cloud Secrets (TOML)
 
@@ -187,7 +201,9 @@ GTFS Realtime API
   ┌────┴──────────┬──────────┴──────┬──────────────┐
   ▼               ▼                 ▼               ▼
 Live Map      Data Table        Analytics     Network Health
-(last 60s)   (7-day history)  (7-day history) (fetch_quality_log)
+(last 15 min  (7-day history)  (7-day history) (fetch_quality_log)
+ fetched;
+ 5 min drawn)
 ```
 
 ### Key Design Decisions
@@ -203,7 +219,9 @@ Live Map      Data Table        Analytics     Network Health
 | **`streamlit-js-eval` for geolocation** | `components.html()` is one-way only; `streamlit-js-eval` provides the two-way JS bridge needed to return browser GPS coordinates to Python |
 | **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout, and the fetch's `fetch_status` (`OK` / `EMPTY` / `NO_FEED` / `THROTTLED` / `ERROR`), which is what lets the score distinguish an agency outage from a withdrawn feed or our own rate limiting. Powers the Network Health page without touching `live_buses` |
 | **Fetch guard (3s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
-| **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query for sub-minute freshness |
+| **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query, so positions and their per-second ages are always current |
+| **Live window anchored to wall-clock now** | Anchoring to `MAX(timestamp)` let one feed with a fast clock drag the window into the future and black out regions reporting honestly. Ages are clamped at zero so a fast clock reads as current rather than being discarded |
+| **15 min fetched, 5 min drawn, 60s solid** | `LIVE_HIDDEN_SECONDS` bounds the query, `LIVE_STALE_SECONDS` bounds what is drawn, `LIVE_FRESH_SECONDS` bounds what is drawn solid. A vehicle between the last two is dimmed rather than deleted, so a 90-second gap in one feed no longer looks like the bus vanished |
 
 ### Route Viewer — How It Works
 
@@ -251,8 +269,8 @@ One row per region per fetch cycle. Powers the Network Health page.
 ### Data Modeling (dbt)
 
 Analytical transformations live in a dbt project (`transform/`, dbt-duckdb adapter) as a
-bronze → silver → gold medallion model. The live-map path stays on direct DuckDB queries for
-sub-minute freshness; only the analytical pages read dbt marts.
+bronze → silver → gold medallion model. The live-map path stays on direct DuckDB queries so
+positions and their per-second ages are always current; only the analytical pages read dbt marts.
 
 | Layer | Model | Grain | Feeds |
 |---|---|---|---|

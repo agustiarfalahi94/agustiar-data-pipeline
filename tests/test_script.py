@@ -642,3 +642,468 @@ def test_write_quality_log_migrates_existing_table(tmp_path, monkeypatch):
         con.close()
     assert rows['NEW'] == 'NO_FEED'
     assert rows['OLD'] is None      # pre-existing row keeps NULL
+
+
+# ── classify_freshness ────────────────────────────────────────────────────────
+
+def test_classify_freshness_assigns_three_tiers():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['fresh', 'stale', 'hidden'],
+        'timestamp': [now - 10, now - 120, now - 600],
+    })
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['freshness']) == ['fresh', 'stale', 'hidden']
+    assert list(out['age_seconds']) == [10, 120, 600]
+
+
+def test_classify_freshness_boundaries_are_inclusive():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['at_fresh_edge', 'just_past', 'at_stale_edge', 'just_past_stale'],
+        'timestamp': [now - 60, now - 61, now - 300, now - 301],
+    })
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['freshness']) == ['fresh', 'stale', 'stale', 'hidden']
+
+
+def test_classify_freshness_clamps_future_timestamps_to_fresh():
+    now = 1_800_000_000
+    df = pd.DataFrame({'vehicle_id': ['ahead'], 'timestamp': [now + 250]})
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['age_seconds']) == [0]
+    assert list(out['freshness']) == ['fresh']
+
+
+def test_classify_freshness_never_drops_rows():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['a', 'b', 'c'],
+        'timestamp': [now - 5, now - 400, now - 800],
+    })
+    assert len(data_processor.classify_freshness(df, now)) == 3
+
+
+def test_classify_freshness_handles_empty_and_missing_column():
+    now = 1_800_000_000
+    assert data_processor.classify_freshness(pd.DataFrame(), now).empty
+    df = pd.DataFrame({'vehicle_id': ['a']})
+    out = data_processor.classify_freshness(df, now)
+    assert 'freshness' not in out.columns
+
+
+def test_classify_freshness_respects_custom_bounds():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['fresh', 'at_fresh_edge', 'stale', 'at_stale_edge', 'hidden'],
+        'timestamp': [now - 5, now - 10, now - 15, now - 20, now - 30],
+    })
+    out = data_processor.classify_freshness(df, now, fresh_seconds=10, stale_seconds=20)
+    assert list(out['freshness']) == ['fresh', 'fresh', 'stale', 'stale', 'hidden']
+
+
+def test_classify_freshness_survives_equal_bounds():
+    """
+    Both bounds are user-tunable, so they can be set equal. pd.cut raises
+    "Bin edges must be unique" on duplicate edges — the tiers degrade to
+    fresh/hidden instead of the page crashing.
+    """
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['under', 'at_edge', 'over'],
+        'timestamp': [now - 30, now - 60, now - 61],
+    })
+    out = data_processor.classify_freshness(df, now, fresh_seconds=60, stale_seconds=60)
+    assert list(out['freshness']) == ['fresh', 'fresh', 'hidden']
+    assert 'stale' not in set(out['freshness'])
+
+
+def test_classify_freshness_survives_inverted_bounds():
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['under', 'over'],
+        'timestamp': [now - 30, now - 120],
+    })
+    out = data_processor.classify_freshness(df, now, fresh_seconds=60, stale_seconds=20)
+    assert list(out['freshness']) == ['fresh', 'hidden']
+
+
+def test_classify_freshness_puts_unparseable_timestamps_in_hidden():
+    """A row with no usable timestamp must not be presented as current."""
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['good', 'garbage', 'missing'],
+        'timestamp': [now - 10, 'not-a-timestamp', None],
+    })
+    out = data_processor.classify_freshness(df, now)
+    assert list(out['freshness']) == ['fresh', 'hidden', 'hidden']
+    assert out['age_seconds'].tolist() == [10, 301, 301]
+
+
+def test_classify_freshness_unparseable_timestamp_hidden_under_custom_bounds():
+    now = 1_800_000_000
+    df = pd.DataFrame({'vehicle_id': ['garbage'], 'timestamp': ['n/a']})
+    out = data_processor.classify_freshness(df, now, fresh_seconds=600, stale_seconds=900)
+    assert list(out['freshness']) == ['hidden']
+
+
+# ── format_duration ───────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("seconds,expected", [
+    (0, '0 seconds'),
+    (1, '1 second'),
+    (45, '45 seconds'),
+    (60, '1 minute'),
+    (90, '1 minute 30 seconds'),
+    (300, '5 minutes'),
+    (900, '15 minutes'),
+])
+def test_format_duration(seconds, expected):
+    assert data_processor.format_duration(seconds) == expected
+
+
+def test_live_window_ignores_future_dated_rows_from_other_regions(tmp_path, monkeypatch):
+    """
+    A single future-dated vehicle must not black out regions reporting honestly.
+
+    This is the 2.4.0 bug: the window used to anchor to MAX(timestamp), so one
+    row timestamped now+250 shifted the window to [now+190, now+250] and every
+    normally-timestamped bus fell outside it.
+    """
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "live.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    # An honest bus reporting 10 seconds ago...
+    con.execute(
+        "INSERT INTO live_buses VALUES ('Rapid Bus KL','KL1',3.14,101.68,90,10.0,?, 'T1','T5800',?,current_timestamp)",
+        [now - 10, now - 10])
+    # ...and a vehicle in ANOTHER region whose clock runs 250s fast.
+    con.execute(
+        "INSERT INTO live_buses VALUES ('myBAS Melaka','MK1',2.19,102.25,90,5.0,?, 'M1','M100',?,current_timestamp)",
+        [now + 250, now])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    df, metrics, _ = db_mod.get_live_data_optimized()
+
+    regions = set(df['region'])
+    assert 'Rapid Bus KL' in regions, "honest bus was excluded by another region's fast clock"
+    assert 'myBAS Melaka' in regions
+    assert metrics['total'] == 2   # both drawn; the future-dated one clamps to age 0
+
+    # Ages must be measured from wall-clock now, not from the future-dated
+    # MAX(timestamp). Re-anchoring to MAX(timestamp) would age the honest bus by
+    # a further 250s and demote it to 'stale' — still drawn, so the drawn count
+    # alone no longer catches the revert. These two assertions do.
+    assert metrics['fresh'] == 2, "an honest bus was aged by another region's fast clock"
+    honest_age = int(df[df['vehicle_id'] == 'KL1'].iloc[0]['age_seconds'])
+    assert honest_age < 60, f"honest bus aged {honest_age}s — window is not anchored to now"
+
+
+def test_live_metrics_split_fresh_from_stale(tmp_path, monkeypatch):
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "tiers.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    for vid, age in [('f1', 10), ('f2', 30), ('s1', 120), ('h1', 600)]:
+        con.execute(
+            "INSERT INTO live_buses VALUES ('Rapid Bus KL',?,3.14,101.68,90,10.0,?, 'T1','T5800',?,current_timestamp)",
+            [vid, now - age, now - age])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    df, metrics, _ = db_mod.get_live_data_optimized()
+
+    # 'total' is what the map draws: fresh + stale. It must never read 0 above a
+    # map still drawing buses, which is what a fresh-only count did 60 seconds
+    # after the last manual refresh.
+    assert metrics['total'] == 3
+    assert metrics['fresh'] == 2
+    assert metrics['stale'] == 1
+    assert metrics['fresh'] + metrics['stale'] == metrics['total']
+    assert metrics['hidden'] == 1
+    assert len(df) == 4             # all four returned; the caller decides what to draw
+
+
+def test_live_total_counts_every_drawn_vehicle_after_the_fresh_window():
+    """
+    The manual-refresh case: data fetched 90 seconds ago is stale but still
+    drawn. The headline metric must agree with the map, not report zero.
+    """
+    now = 1_800_000_000
+    df = pd.DataFrame({
+        'vehicle_id': ['a', 'b', 'c'],
+        'region': ['Rapid Bus KL'] * 3,
+        'timestamp': [now - 90, now - 91, now - 92],
+    })
+    classified = data_processor.classify_freshness(df, now)
+    drawn = classified[classified['freshness'] != 'hidden']
+
+    assert (classified['freshness'] == 'fresh').sum() == 0   # nothing is fresh...
+    assert len(drawn) == 3                                   # ...but all three are drawn
+
+
+def test_live_data_reports_sync_time_during_outage(tmp_path, monkeypatch):
+    """
+    An outage (no rows within the window) must still report when data was
+    last seen, not go silent with sync_time_str=None.
+
+    Regression guard: the empty-window early return used to fire before
+    MAX(timestamp) was ever queried, so a table with only stale rows (older
+    than LIVE_HIDDEN_SECONDS) returned an empty frame AND sync_time_str=None -
+    indistinguishable from "nothing has ever been ingested".
+    """
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "outage.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    # Only row is well outside the live window - ingestion has been down.
+    stale_ts = now - db_mod.LIVE_HIDDEN_SECONDS - 3600
+    con.execute(
+        "INSERT INTO live_buses VALUES ('Rapid Bus KL','KL1',3.14,101.68,90,10.0,?, 'T1','T5800',?,current_timestamp)",
+        [stale_ts, stale_ts])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    df, metrics, sync_time_str = db_mod.get_live_data_optimized()
+
+    assert df.empty
+    assert metrics == {}
+    assert sync_time_str is not None
+
+
+# ── config fallback ───────────────────────────────────────────────────────────
+
+def _reload_with_config(monkeypatch, module_name, fake_config, names):
+    """
+    Reload *module_name* with *fake_config* standing in for `config`, snapshot
+    *names* off it, then restore the module so later tests see the real state.
+
+    Returns a plain dict — `importlib.reload` mutates the module object in
+    place, so the restoring reload would otherwise overwrite what we read.
+    """
+    import importlib
+    import types
+
+    fake = types.ModuleType('config')
+    for key, value in fake_config.items():
+        setattr(fake, key, value)
+
+    module = importlib.import_module(module_name)
+    monkeypatch.setitem(sys.modules, 'config', fake)
+    try:
+        reloaded = importlib.reload(module)
+        return {name: getattr(reloaded, name) for name in names}
+    finally:
+        monkeypatch.undo()
+        importlib.reload(module)
+
+
+def test_db_config_knobs_fall_back_individually(monkeypatch):
+    """
+    A config.py written before the LIVE_* knobs existed must keep every setting
+    it *does* define. These names used to sit in one all-or-nothing tuple
+    import, so a config missing them raised ImportError and silently reverted
+    DATABASE_NAME, TIMEZONE and friends to the hardcoded defaults.
+    """
+    names = [
+        'DATABASE_NAME', 'DATABASE_TABLE', 'TIMEZONE', 'UTC_OFFSET_HOURS',
+        'DATA_RETENTION_DAYS', 'LIVE_FRESH_SECONDS', 'LIVE_STALE_SECONDS',
+        'LIVE_HIDDEN_SECONDS',
+    ]
+    values = _reload_with_config(monkeypatch, 'utils.db', {
+        'DATABASE_NAME': 'custom_transit.duckdb',
+        'DATABASE_TABLE': 'custom_buses',
+        'TIMEZONE': 'Asia/Tokyo',
+        'UTC_OFFSET_HOURS': 9,
+        'DATA_RETENTION_DAYS': 30,
+        # No LIVE_FRESH_SECONDS / LIVE_STALE_SECONDS / LIVE_HIDDEN_SECONDS.
+    }, names)
+
+    # The user's settings survive...
+    assert values['DATABASE_NAME'] == 'custom_transit.duckdb'
+    assert values['DATABASE_TABLE'] == 'custom_buses'
+    assert values['TIMEZONE'] == 'Asia/Tokyo'
+    assert values['UTC_OFFSET_HOURS'] == 9
+    assert values['DATA_RETENTION_DAYS'] == 30
+    # ...and only the genuinely missing knobs fall back.
+    assert values['LIVE_FRESH_SECONDS'] == 60
+    assert values['LIVE_STALE_SECONDS'] == 300
+    assert values['LIVE_HIDDEN_SECONDS'] == 900
+
+
+def test_db_config_knobs_are_honoured_when_present(monkeypatch):
+    values = _reload_with_config(monkeypatch, 'utils.db', {
+        'DATABASE_NAME': 'custom_transit.duckdb',
+        'DATABASE_TABLE': 'custom_buses',
+        'TIMEZONE': 'Asia/Tokyo',
+        'UTC_OFFSET_HOURS': 9,
+        'DATA_RETENTION_DAYS': 30,
+        'LIVE_FRESH_SECONDS': 45,
+        'LIVE_STALE_SECONDS': 200,
+        'LIVE_HIDDEN_SECONDS': 800,
+    }, ['LIVE_FRESH_SECONDS', 'LIVE_STALE_SECONDS', 'LIVE_HIDDEN_SECONDS'])
+
+    assert values['LIVE_FRESH_SECONDS'] == 45
+    assert values['LIVE_STALE_SECONDS'] == 200
+    assert values['LIVE_HIDDEN_SECONDS'] == 800
+
+
+# ── outage messaging (page level) ─────────────────────────────────────────────
+
+class _SessionState(dict):
+    """Minimal stand-in for st.session_state: attribute *and* item access."""
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+
+def _stub_streamlit(monkeypatch, module):
+    """Replace a page module's `st` with a recorder and stop it fetching."""
+    st_stub = MagicMock()
+    st_stub.session_state = _SessionState(auto_refresh=False)
+    st_stub.button.return_value = False        # no refresh click
+    monkeypatch.setattr(module, 'st', st_stub)
+    monkeypatch.setattr(module, 'fetch_and_store_transit_data', lambda *a, **k: None)
+    return st_stub
+
+
+def _texts(mock_method):
+    return " ".join(str(call.args[0]) for call in mock_method.call_args_list if call.args)
+
+
+def test_live_map_names_last_seen_time_during_an_outage(monkeypatch):
+    """
+    The empty-frame early return used to fire *before* the sync banner, so a
+    >15-minute outage rendered "No data. Click 'Refresh Data' to fetch." —
+    exactly the string that reads as "nothing was ever ingested".
+    """
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (pd.DataFrame(), {}, '30 Jul 2026 21:04:11'),
+    )
+
+    live_map.show()
+
+    said = _texts(st_stub.warning) + _texts(st_stub.info)
+    assert '30 Jul 2026 21:04:11' in said, "outage banner did not say when data was last seen"
+    assert "Click 'Refresh Data' to fetch" not in said
+    # Wording is derived from LIVE_HIDDEN_SECONDS, not hardcoded.
+    assert data_processor.format_duration(live_map.LIVE_HIDDEN_SECONDS) in said
+
+
+def test_live_map_still_says_no_data_when_nothing_was_ever_ingested(monkeypatch):
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized', lambda *a, **k: (None, {}, None))
+
+    live_map.show()
+
+    assert "Click 'Refresh Data' to fetch" in _texts(st_stub.info)
+    assert _texts(st_stub.warning) == ""
+
+
+def test_analytics_names_last_seen_time_during_an_outage(monkeypatch):
+    from app_pages import analytics
+
+    st_stub = _stub_streamlit(monkeypatch, analytics)
+    monkeypatch.setattr(
+        analytics.db, 'get_live_data_optimized',
+        lambda *a, **k: (pd.DataFrame(), {}, '30 Jul 2026 21:04:11'),
+    )
+    monkeypatch.setattr(
+        analytics.db, 'get_historical_data', lambda *a, **k: (pd.DataFrame(), {}, None))
+
+    analytics.show()
+
+    said = _texts(st_stub.warning) + _texts(st_stub.info)
+    assert '30 Jul 2026 21:04:11' in said
+    assert 'No data available. Please refresh.' not in said
+    assert data_processor.format_duration(analytics.LIVE_HIDDEN_SECONDS) in said
+
+
+def test_analytics_still_says_no_data_when_nothing_was_ever_ingested(monkeypatch):
+    from app_pages import analytics
+
+    st_stub = _stub_streamlit(monkeypatch, analytics)
+    monkeypatch.setattr(
+        analytics.db, 'get_live_data_optimized', lambda *a, **k: (None, {}, None))
+    monkeypatch.setattr(
+        analytics.db, 'get_historical_data', lambda *a, **k: (None, {}, None))
+
+    analytics.show()
+
+    assert 'No data available. Please refresh.' in _texts(st_stub.info)
+
+
+def test_sync_time_is_never_in_the_future(tmp_path, monkeypatch):
+    """
+    Ingestion accepts timestamps up to DATA_FUTURE_TOLERANCE (300s) ahead, so
+    MAX(timestamp) can sit in the future. "Data updated: <future time>" is never
+    a true statement — the banner is clamped to now.
+    """
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "future.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    con.execute(
+        "INSERT INTO live_buses VALUES ('myBAS Melaka','MK1',2.19,102.25,90,5.0,?, 'M1','M100',?,current_timestamp)",
+        [now + 280, now])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+
+    _, _, live_sync = db_mod.get_live_data_optimized()
+    _, _, historical_sync = db_mod.get_historical_data()
+
+    assert live_sync == db_mod._format_sync_time(now)
+    assert live_sync != db_mod._format_sync_time(now + 280)
+    assert historical_sync == db_mod._format_sync_time(now)
