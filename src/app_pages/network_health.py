@@ -92,7 +92,9 @@ def show():
     col2.metric("🟢 Reliable",     healthy)
     col3.metric("🟡 Degraded",     degraded)
     col4.metric("🔴 Unreliable",   unreliable)
-    col6.metric("⚫ No Feed",      unavailable)
+    # "Not scored" rather than "No Feed": this bucket also holds regions we
+    # rate-limited ourselves, which have a feed. Each card names its own cause.
+    col6.metric("⚫ Not scored",   unavailable)
     if pd.notna(last_ts):
         dt = datetime.fromtimestamp(int(last_ts), tz=timezone.utc) + timedelta(hours=UTC_OFFSET_HOURS)
         col5.metric("Last Fetch", dt.strftime('%H:%M:%S'))

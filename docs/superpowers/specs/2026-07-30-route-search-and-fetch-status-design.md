@@ -220,3 +220,30 @@ demonstrate an orchestrated pipeline without provisioning anything.
   genuine in-service outage
 - **Re-check withdrawn feeds** — `rapid-bus-kuantan` is still listed in the provider's
   documentation despite returning 404; it may return
+
+### Carried over from the 2.3.0 review (fixed in 2.3.1)
+
+- ~~No-match search recentred the map~~ — fixed: the camera now follows what is displayed.
+- ~~"⚫ No Feed" summary label covered throttled regions too~~ — fixed: renamed "⚫ Not scored".
+
+### Still open
+
+- **`_marts.yml` overstates mart agreement.** The `availability` description says the two marts
+  "agree". They share one scoring rule, which is the property that matters, but they are not
+  identical in general: a region with one `OK` cycle at reporting 0.5 (lag 0) plus one `EMPTY`
+  cycle yields aggregate 80 against trend `[80, 100]`, mean 90. The direction is now benign — the
+  card reads conservatively relative to the sparkline — but the description should be qualified.
+- **`EMPTY` cycles feed a fabricated `avg_data_lag_seconds = 0`** into the freshness term of both
+  marts. That is the same "a lag it never measured" objection used to exclude `NO_FEED`, so the
+  rationale is asymmetric. Applied consistently across both marts, so there is no user-visible
+  disagreement; it is what makes an all-quiet region land on exactly 100.
+- **An all-quiet region scores 100 "Reliable"** with no on-card statement that the score was
+  computed without any reporting-rate evidence. `📶 N/A` and the quiet-cycle count are the only
+  signals. A legibility gap rather than a false claim.
+- **`get_network_health_summary`'s docstring** in `src/utils/db.py` still lists a pre-2.3 column
+  set — no `scoreable_fetches`, `feed_unavailable`, `no_feed_count`, `throttled_count`.
+- **`_SCHEMA_SENTINEL_COLUMNS` is hand-maintained.** If a `dbt run` ever succeeded without
+  producing them, `ensure_dbt_models` would reset its failure counter and re-run dbt on every
+  fetch with no cooldown. Low likelihood, since the model SQL ships with the repo.
+- **Search recentring keeps `DEFAULT_ZOOM = 13`.** Matches spread across a wide area are centred
+  but may not all be in frame; no fit-to-bounds heuristic exists.

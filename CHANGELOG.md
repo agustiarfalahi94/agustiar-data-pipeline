@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-07-30
+
+### Fixed
+- A route search that matched nothing no longer recentres the map. The camera now follows what is
+  actually displayed: it moves for a search that filtered the map, and for a search cleared or
+  mistyped back to an unfiltered view, but a typo no longer jumps the viewport to the region mean
+- Renamed the Network Health summary metric from **⚫ No Feed** to **⚫ Not scored**. That bucket is
+  `scoreable_fetches = 0`, which also holds regions we rate-limited ourselves — those do have a
+  feed. The per-region cards already named their own cause; only the roll-up label overclaimed
+
 ## [2.3.0] - 2026-07-30
 
 ### Added
@@ -17,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Reliability scores now reflect the agency, not the plumbing.** `NO_FEED` and `THROTTLED` fetches are excluded from scoring, and `EMPTY` (feed healthy, no service running) no longer counts as an outage. Availability is now `1 − errors ÷ scoreable fetches`. The `reliability_score` formula itself is unchanged — only which rows feed it
-- Regions with no scoreable fetch render a neutral "Feed unavailable" card and a ⚫ No Feed count, instead of a misleading low score. The card names the actual cause from `no_feed_count`/`throttled_count` — "withdrawn upstream" is claimed only for a feed that really did return 404, never for one we rate-limited ourselves
+- Regions with no scoreable fetch render a neutral "Feed unavailable" card and a ⚫ Not scored count, instead of a misleading low score. The card names the actual cause from `no_feed_count`/`throttled_count` — "withdrawn upstream" is claimed only for a feed that really did return 404, never for one we rate-limited ourselves
 - **The scorecard and its sparkline now agree.** Both marts score a cycle that received nothing on the terms that apply, renormalised, instead of the aggregate skipping the undefined reporting rate while the trend substituted a zero. A region with one `OK` and one `EMPTY` cycle previously read aggregate **100** above a sparkline dipping to **60** — the same region, window and macro telling two stories, most visibly on KTM Berhad's alternating in-service/out-of-service pattern
 - `dropout_count` and `avg_data_lag_seconds` are computed over scoreable fetches only, so neither can contradict the score printed beside it. `dropout_count` is also relabelled on the card as *quiet cycles* — it has not been a scoring input since this release, and a bare 🚫 count next to a green score read as a bug
 - The drill-down shows a "not scored" note instead of a titled, axis-labelled, entirely blank chart when a region has no scoreable fetch in the window

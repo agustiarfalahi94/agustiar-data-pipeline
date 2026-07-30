@@ -277,7 +277,11 @@ def show():
     # search made while parked elsewhere in the region filtered the layers but
     # left the camera behind, i.e. a "Showing 3 vehicle(s)" banner over a map
     # with nothing on it.
-    current_query = (route_query or '').strip().lower()
+    # A search that matched nothing leaves df_map unfiltered, so recentring on it
+    # would jump the camera to the region mean for what is usually a typo — the
+    # opposite of the sticky-viewport intent. Only a search that actually filtered
+    # the map is worth moving for.
+    current_query = (route_query or '').strip().lower() if filter_active else ''
     region_changed = st.session_state.selected_region != st.session_state.get('last_viewed_region', None)
     query_changed = current_query != st.session_state.get('last_route_query', '')
     if region_changed or query_changed:
