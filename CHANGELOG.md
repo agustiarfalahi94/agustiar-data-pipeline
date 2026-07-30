@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Analytics' **Moving Vehicles** counted every row of the live frame. That frame widened from 60
   seconds to 15 minutes in this release, so the metric had silently become "moved at some point in
   the last 15 minutes". It counts fresh rows only again
+- The "Data updated:" banner is clamped to now. It was fed by `MAX(timestamp)`, and ingestion
+  accepts timestamps up to `DATA_FUTURE_TOLERANCE` (300s) ahead, so a feed with a fast clock could
+  make the app claim its data arrived up to five minutes in the future
 - A region with no rows inside the fetch window showed the bare "No valid data for {region}" — the
   original bug report's symptom, with no explanation. It now distinguishes "nothing reported in the
   last 15 minutes" from "reported, but with unusable coordinates"

@@ -210,8 +210,15 @@ def get_live_data_optimized():
         # Computed before the empty-window check below so that an outage
         # (no rows within the window) still reports when data was last seen,
         # instead of the sync time silently going to None.
+        #
+        # Clamped to now: ingestion accepts timestamps up to
+        # DATA_FUTURE_TOLERANCE (300s) ahead, so MAX(timestamp) alone could
+        # render "Data updated:" as a time five minutes in the future.
         max_timestamp_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
-        sync_time_str = _format_sync_time(int(max_timestamp_raw)) if max_timestamp_raw is not None else None
+        sync_time_str = (
+            _format_sync_time(min(int(max_timestamp_raw), now))
+            if max_timestamp_raw is not None else None
+        )
 
         query = f"""
         SELECT * FROM (
@@ -340,8 +347,13 @@ def get_historical_data():
         if df.empty:
             return df, {}, None
 
+        # Clamped to now for the same reason as in get_live_data_optimized:
+        # a mildly future-dated feed must not make the banner claim the data
+        # arrived in the future.
         max_ts_raw = con.execute(f"SELECT MAX(timestamp) FROM {DATABASE_TABLE}").fetchone()[0]
-        sync_time_str = _format_sync_time(int(max_ts_raw)) if max_ts_raw else None
+        sync_time_str = (
+            _format_sync_time(min(int(max_ts_raw), int(time.time()))) if max_ts_raw else None
+        )
 
     finally:
         con.close()

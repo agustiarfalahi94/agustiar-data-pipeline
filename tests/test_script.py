@@ -1065,3 +1065,37 @@ def test_analytics_still_says_no_data_when_nothing_was_ever_ingested(monkeypatch
     analytics.show()
 
     assert 'No data available. Please refresh.' in _texts(st_stub.info)
+
+
+def test_sync_time_is_never_in_the_future(tmp_path, monkeypatch):
+    """
+    Ingestion accepts timestamps up to DATA_FUTURE_TOLERANCE (300s) ahead, so
+    MAX(timestamp) can sit in the future. "Data updated: <future time>" is never
+    a true statement — the banner is clamped to now.
+    """
+    import duckdb
+    from utils import db as db_mod
+
+    now = int(time.time())
+    dbfile = tmp_path / "future.duckdb"
+    con = duckdb.connect(str(dbfile))
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, vehicle_id VARCHAR, latitude DOUBLE, longitude DOUBLE,
+            bearing DOUBLE, speed DOUBLE, timestamp BIGINT, trip_id VARCHAR,
+            route_id VARCHAR, insert_timestamp BIGINT, created_at TIMESTAMP
+        )
+    """)
+    con.execute(
+        "INSERT INTO live_buses VALUES ('myBAS Melaka','MK1',2.19,102.25,90,5.0,?, 'M1','M100',?,current_timestamp)",
+        [now + 280, now])
+    con.close()
+
+    monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+
+    _, _, live_sync = db_mod.get_live_data_optimized()
+    _, _, historical_sync = db_mod.get_historical_data()
+
+    assert live_sync == db_mod._format_sync_time(now)
+    assert live_sync != db_mod._format_sync_time(now + 280)
+    assert historical_sync == db_mod._format_sync_time(now)
