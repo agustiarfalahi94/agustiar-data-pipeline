@@ -11,20 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Route name search on the Live Map** — type a route (e.g. `T580`) to show only the vehicles running it. Matches the route number or any part of its name (`awan besar` works), case-insensitively, within the selected region. Hidden for KTM Berhad, whose realtime feed carries no `route_id`
 - `data_processor.filter_by_route` — pure, testable route filtering
 - `fetch_status` column on `fetch_quality_log`, classifying every fetch as `OK`, `EMPTY`, `NO_FEED` (HTTP 404), `THROTTLED` (HTTP 429) or `ERROR`, with an additive migration for existing databases
-- `mart_network_health` gains `scoreable_fetches` and `feed_unavailable`
+- `mart_network_health` gains `scoreable_fetches`, `feed_unavailable`, `no_feed_count` and `throttled_count`
+- `reliability_score_without_reporting` dbt macro — the score with the reporting-rate term dropped and the remaining weights renormalised, for a fetch cycle that received nothing and therefore has no reporting rate to score
+- **Raw Fetch Log now shows `fetch_status`** as a `Status` column, and exports it. Without it the one screen built for forensic drill-down showed `Dropout: true` with no reason, contradicting the "Feed unavailable" card above it
 
 ### Changed
 - **Reliability scores now reflect the agency, not the plumbing.** `NO_FEED` and `THROTTLED` fetches are excluded from scoring, and `EMPTY` (feed healthy, no service running) no longer counts as an outage. Availability is now `1 − errors ÷ scoreable fetches`. The `reliability_score` formula itself is unchanged — only which rows feed it
-- Regions whose feed has been withdrawn upstream render a neutral "Feed unavailable" card and a ⚫ No Feed count, instead of a misleading low score
+- Regions with no scoreable fetch render a neutral "Feed unavailable" card and a ⚫ No Feed count, instead of a misleading low score. The card names the actual cause from `no_feed_count`/`throttled_count` — "withdrawn upstream" is claimed only for a feed that really did return 404, never for one we rate-limited ourselves
+- **The scorecard and its sparkline now agree.** Both marts score a cycle that received nothing on the terms that apply, renormalised, instead of the aggregate skipping the undefined reporting rate while the trend substituted a zero. A region with one `OK` and one `EMPTY` cycle previously read aggregate **100** above a sparkline dipping to **60** — the same region, window and macro telling two stories, most visibly on KTM Berhad's alternating in-service/out-of-service pattern
+- `dropout_count` and `avg_data_lag_seconds` are computed over scoreable fetches only, so neither can contradict the score printed beside it. `dropout_count` is also relabelled on the card as *quiet cycles* — it has not been a scoring input since this release, and a bare 🚫 count next to a green score read as a bug
+- The drill-down shows a "not scored" note instead of a titled, axis-labelled, entirely blank chart when a region has no scoreable fetch in the window
+- Searching a route now recentres the map on the matches. Previously the view was recomputed only on a region change, so a search made while panned elsewhere filtered the layers but left the camera behind — a "Showing 3 vehicle(s)" banner over an empty map. The viewport stays sticky across auto-refresh, as before
+- The caption under the map no longer reports a filtered match count as the region total while a search is active
 - `_fetch_endpoint` returns `(vehicles, duration_ms, status)`; `_build_quality_stats` takes `status_by_region`
 - `fetch_quality_log` inserts now name their columns explicitly rather than relying on positional order
 
 ### Fixed
 - A fetch cycle in which every region fails now writes a quality-log row explaining why, instead of returning silently
+- **The new marts now actually take effect on an existing database.** Marts are views, so a database that had already run 2.2.x kept the previous release's SQL while `dbt_runner.ensure_dbt_models` returned early on their mere presence: `fetch_status` was written faithfully and then ignored, and Kuantan kept scoring 20. The bootstrap now probes `mart_network_health` for this release's columns and re-runs dbt when they are missing. The never-raise guarantee and the failure cooldown are unchanged
+- `data_processor.filter_by_route` returns a copy rather than a slice — the live map assigns `arrow_path` onto the result, which raises `SettingWithCopyWarning` on pandas 2.x
+- The quality-log insert defaulted a missing `fetch_status` to `OK` while `_build_quality_stats` defaulted the same unknown to `ERROR`; both now record `ERROR` rather than fabricating health
+
+### Documentation
+- README: the Network Health score breakdown said "reporting rate, dropout count, average data lag". Dropout count stopped being a scoring input in this release — the breakdown is reporting rate (40%), availability (40%), data lag (20%)
+- README: the `fetch_quality_log` design-decision row did not mention `fetch_status`, the column the whole honest-scoring change rests on; the schema table already listed it
+- README: documented the two-macro score, the mart-currency check in the bootstrap, and that route search recentres the map
+- Design spec: the "Integration point" section claimed automatic view centring followed from filtering before the layers are built. It does not — centring is deliberately sticky and needed its own trigger. Corrected, along with the mart column list and the unavailable-card copy
 
 ### Notes
 - Observed upstream: `prasarana?category=rapid-bus-kuantan` returns HTTP 404 (*"feed does not exist"*), which is why that region previously scored 20. It is still listed in the provider's documentation and may return
 - Rows written before this migration have `fetch_status = NULL`, which the staging model coalesces to `OK`. For a historical row that had `total_dropout = true`, the old scoring counted it as a dropout-driven outage; the new scoring does not, since a coalesced `OK` is never `ERROR`. Such rows therefore score **higher** retroactively than they did before the migration — this is an intentional side effect of no longer treating a bare dropout as proof of an outage, not a bug, and it is self-limiting: those rows age out of the 7-day retention window within a week of this release
+- Dropping the reporting term for cycles that received nothing raises the score of a region that was quiet for the whole window (e.g. an all-`EMPTY` 24h now scores 100 rather than 60). That is the same judgement the release already makes — a feed that answers correctly with no service running is healthy — applied consistently to the window as well as to the individual cycle
 - Known limitation: because `EMPTY` is treated as healthy, an outage where a feed responds but returns nothing during service hours no longer reduces the score. Separating that from "no service scheduled" needs GTFS `calendar.txt`
 
 ## [2.2.1] - 2026-07-30

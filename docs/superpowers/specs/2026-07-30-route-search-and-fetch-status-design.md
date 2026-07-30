@@ -74,9 +74,19 @@ A search box sits under the existing region dropdown in `src/app_pages/live_map.
 
 `live_map.py` already resolves route names for every mapped vehicle into `df_map['route_display']`
 (added in 2.1.2 for tooltips), immediately after `prepare_map_data`. The filter is applied
-**after** `route_display` is populated and **before** the pydeck layers are built. Everything
-downstream — the arrow/scatter layers, automatic view centring, the vehicle-count caption, and the
-Route Viewer's vehicle dropdown — then reflects the filtered set with no further changes.
+**after** `route_display` is populated and **before** the pydeck layers are built, so the
+arrow/scatter layers and the Route Viewer's vehicle dropdown reflect the filtered set with no
+further changes.
+
+View centring does **not** follow for free. The viewport is deliberately sticky — it is
+recomputed only on a *change of what is being shown*, so auto-refresh never yanks the camera away
+from wherever the user panned. Region change was originally the only such trigger, which left a
+search made while parked elsewhere in the region filtering the layers but not moving the camera.
+The search query is therefore tracked in session state alongside the region, and the view
+recentres on the filtered frame's mean latitude/longitude when either changes.
+
+The vehicle-count caption below the map states the region total, so it is suppressed while a
+search is filtering — the match count is already reported by the search banner above the map.
 
 ### New unit
 
@@ -129,15 +139,30 @@ those with status `OK`, `EMPTY`, or `ERROR` (or `NULL`, treated as `OK`).
 - `NO_FEED` and `THROTTLED` are excluded from both numerator and denominator
 - A region whose entire window is `NO_FEED` produces **no score**
 
-`mart_network_health` gains two columns: `scoreable_fetches` and `feed_unavailable` (boolean —
-true when the window contains no scoreable fetches).
+A fetch cycle that received nothing has **no reporting rate at all** — it is undefined, not zero.
+Both marts therefore drop that term for such a cycle and renormalise the remaining weights
+(`0.4·availability + 0.2·freshness) ÷ 0.6`), via the `reliability_score_without_reporting` macro.
+This is what the aggregate already did implicitly, since `avg()` skips a NULL; stating it
+explicitly is what keeps the aggregate scorecard and the per-cycle sparkline beneath it from
+describing the same window differently. `dropout_count` and `avg_data_lag_seconds` are likewise
+computed over scoreable rows only, so nothing printed on a card contradicts the score beside it.
+
+`mart_network_health` gains four columns: `scoreable_fetches`, `feed_unavailable` (boolean — true
+when the window contains no scoreable fetches), `no_feed_count` and `throttled_count`.
 
 ### Network Health page
 
 When `feed_unavailable` is true, the region renders a neutral grey card reading
-**"Feed unavailable upstream"** with no numeric score, instead of a red 20. The reliability
-formula and the `reliability_score` macro are otherwise unchanged — this changes *which rows feed
-the formula*, not the formula itself.
+**"Feed unavailable"** with no numeric score, instead of a red 20. The cause line is driven by
+`no_feed_count` / `throttled_count`: "withdrawn upstream" is asserted only for a feed that
+actually returned 404, never for one we rate-limited ourselves. The reliability formula and the
+`reliability_score` macro are otherwise unchanged — this changes *which rows feed the formula*,
+not the formula itself.
+
+The Raw Fetch Log shows `fetch_status` as a **Status** column (and exports it), since a dropout
+row without its reason is exactly the ambiguity this part of the release removes. A region with
+no scoreable fetch in the window has no score series to plot, so the drill-down shows the
+not-scored note in place of an empty chart.
 
 ### Expected outcome
 

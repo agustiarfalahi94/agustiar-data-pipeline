@@ -21,7 +21,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Hover tooltips** — vehicle ID, speed (km/h), and bearing
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
-- **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it. Not available for KTM Berhad, whose realtime feed carries no route ID
+- **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. Not available for KTM Berhad, whose realtime feed carries no route ID
 - **Dark/Light map themes**
 
 ### 📊 Data Table
@@ -39,11 +39,11 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 
 ### 📡 Network Health
 - **Per-region reliability scorecards** — composite score (0–100) for each of the 14 transit regions
-- **Score breakdown** — reporting rate, dropout count, average data lag
-- **24h sparklines** — at-a-glance trend per region
-- **Region drill-down** — reliability score over time, vehicles received vs. rejected per cycle, data lag trend
-- **Raw Fetch Log** — every API fetch event with full quality metadata, CSV export
-- **Honest scoring** — feeds withdrawn upstream (HTTP 404) and self-inflicted rate limiting (HTTP 429) are excluded from reliability scores rather than blamed on the agency; a healthy feed reporting no vehicles out of service hours is not counted as an outage
+- **Score breakdown** — reporting rate (40%), availability (40%), average data lag (20%). The count of *quiet cycles* (feed answered, no vehicles running) is shown alongside as context — it is not an input to the score
+- **24h sparklines** — at-a-glance trend per region, computed by the same rule as the score above it
+- **Region drill-down** — reliability score over time, vehicles received vs. rejected per cycle, data lag trend. A region with no scoreable fetch in the window shows a "not scored" note rather than an empty chart
+- **Raw Fetch Log** — every API fetch event with full quality metadata **including its `fetch_status`**, CSV export
+- **Honest scoring** — feeds withdrawn upstream (HTTP 404) and self-inflicted rate limiting (HTTP 429) are excluded from reliability scores rather than blamed on the agency; a healthy feed reporting no vehicles out of service hours is not counted as an outage. Such a region's card says which of the two happened instead of asserting a cause
 
 ### ⚙️ Settings & Controls
 - **Manual or Auto refresh** (20-second interval)
@@ -77,7 +77,7 @@ agustiar-data-pipeline/
 │   ├── dbt_project.yml
 │   ├── profiles.yml
 │   ├── macros/
-│   │   ├── reliability_score.sql # Single definition of the 0–100 score formula
+│   │   ├── reliability_score.sql # Single definition of the 0–100 score formula (+ its no-reporting variant)
 │   │   ├── test_accepted_range.sql            # Generic test: value within [min, max]
 │   │   └── test_unique_combination_of_columns.sql # Generic test: composite-key uniqueness
 │   ├── models/
@@ -201,7 +201,7 @@ Live Map      Data Table        Analytics     Network Health
 | **Hardcoded region dropdown** | Prevents dropdown re-ordering during auto-refresh |
 | **GTFS Static 24h cache** | Static schedules change daily at most — avoids hammering the API |
 | **`streamlit-js-eval` for geolocation** | `components.html()` is one-way only; `streamlit-js-eval` provides the two-way JS bridge needed to return browser GPS coordinates to Python |
-| **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout. Powers the Network Health page without touching `live_buses` |
+| **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout, and the fetch's `fetch_status` (`OK` / `EMPTY` / `NO_FEED` / `THROTTLED` / `ERROR`), which is what lets the score distinguish an agency outage from a withdrawn feed or our own rate limiting. Powers the Network Health page without touching `live_buses` |
 | **Fetch guard (3s window)** | DuckDB only supports one writer at a time; the guard prevents concurrent write collisions when multiple users trigger refresh simultaneously |
 | **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query for sub-minute freshness |
 
@@ -263,7 +263,16 @@ sub-minute freshness; only the analytical pages read dbt marts.
 | mart (gold) | `mart_region_vehicle_counts` | region | Analytics bar + pie |
 
 The reliability-score formula is a single dbt macro (`reliability_score`) shared by the two
-health marts. Data quality is enforced by dbt tests — region `accepted_values`, 0–100 score
+health marts, with a companion `reliability_score_without_reporting` for a fetch cycle that
+received nothing — its reporting rate is undefined rather than zero, so that term is dropped and
+the remaining weights renormalised. Both marts apply that rule, which is what keeps a region's
+scorecard and the sparkline beneath it from telling different stories about the same window.
+
+The marts are **views**, so an app upgraded against an existing database would otherwise keep the
+previous release's SQL. `dbt_runner.ensure_dbt_models` therefore checks not just that the marts
+exist but that they carry the current schema, and re-runs dbt when they do not.
+
+Data quality is enforced by dbt tests — region `accepted_values`, 0–100 score
 range, 0–1 rate range, and key uniqueness including the trend mart's `region + fetch_timestamp`
 grain — which CI runs via `dbt build`. `fetch_quality_log` also declares a freshness policy,
 checked by a separate `dbt source freshness` step in CI (`dbt build` does not run freshness);
