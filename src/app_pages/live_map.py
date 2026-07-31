@@ -379,6 +379,7 @@ def show():
     # Create bus icon layer
     icon_layer = pdk.Layer(
         "ScatterplotLayer",
+        id="vehicles",
         data=df_map,
         get_position=['longitude', 'latitude'],
         get_fill_color='dot_color',
@@ -493,7 +494,7 @@ def show():
         else:
             layers.append(user_marker)
 
-    st.pydeck_chart(
+    selection = st.pydeck_chart(
         pdk.Deck(
             map_style=map_style,
             initial_view_state=view_state,
@@ -502,8 +503,63 @@ def show():
                 "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°<br/><b>Updated:</b> {freshness_display}",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
-        )
+        ),
+        selection_mode="single-object",
+        on_select="rerun",
+        key="live_map_deck",
     )
+
+    # Secondary view: one tapped vehicle, against the user's nearest stop on
+    # its own trip. Re-resolved from the current frame every render, so
+    # auto-refresh advances the bus without dropping the selection.
+    picked = None
+    try:
+        objects = selection.selection.objects.get("vehicles", [])
+        picked = objects[0].get("vehicle_id") if objects else None
+    except (AttributeError, KeyError, IndexError, TypeError):
+        picked = None
+
+    if picked:
+        row = df_map[df_map['vehicle_id'] == picked]
+        if row.empty:
+            st.info(f"Vehicle {picked} is no longer reporting.")
+        elif not st.session_state.get('user_location'):
+            st.info("Tap **📍 Locate Me** to see when this bus reaches you.")
+        else:
+            loc = st.session_state['user_location']
+            v = row.iloc[0].to_dict()
+            stops = gtfs_static.get_trip_stops(agency_slug, str(v.get('trip_id') or ''))
+            if not stops:
+                st.info(
+                    f"Vehicle {picked} has no timetable entry for its current trip, "
+                    f"so its arrival cannot be estimated."
+                )
+            else:
+                nearby = [dict(s, distance_m=eta.haversine_m(
+                    loc['lat'], loc['lon'], s['stop_lat'], s['stop_lon'])) for s in stops]
+                arrivals, _ = eta.arrivals_for_stops(
+                    [v], nearby,
+                    lambda t: stops, int(time.time()), UTC_OFFSET_HOURS,
+                    headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
+                )
+                best = None
+                for s in sorted(nearby, key=lambda s: s['distance_m']):
+                    rows = arrivals.get(s['stop_id'], [])
+                    if rows:
+                        best = (s, rows[0])
+                        break
+                if best is None:
+                    st.info(
+                        f"Vehicle {picked} has already passed the stops nearest you."
+                    )
+                else:
+                    s, a = best
+                    mins = max(1, round(a['eta_seconds'] / 60))
+                    st.success(
+                        f"**{a['route_display']}** reaches **{s['stop_name']}** in "
+                        f"~{mins} min — ~{int(s['distance_m'])} m from you "
+                        f"(~{eta.walking_minutes(s['distance_m'])} min walk)."
+                    )
 
     # While a search is filtering the frame, len(df_map) is the match count, not
     # the region total — the success banner above already states it, so don't
@@ -558,7 +614,7 @@ def show():
                 for stop in nearby:
                     walk = eta.walking_minutes(stop['distance_m'])
                     st.markdown(
-                        f"**{stop['stop_name']}** · {int(stop['distance_m'])} m "
+                        f"**{stop['stop_name']}** · ~{int(stop['distance_m'])} m "
                         f"· ~{walk} min walk"
                     )
                     rows = arrivals.get(stop['stop_id'], [])
