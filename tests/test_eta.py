@@ -747,3 +747,89 @@ def test_arrivals_carry_route_id():
     v['route_id'] = 'S6060'
     arrivals, _ = eta.arrivals_for_stops([v], nearby, lambda t: stops, now, 8)
     assert arrivals[stops[2]['stop_id']][0]['route_id'] == 'S6060'
+
+
+def test_arrivals_coerces_a_nan_route_id_to_empty_string():
+    """
+    A pandas frame carries a missing route_id as float NaN, and str(NaN) is the
+    plausible-looking route_id 'nan' that no timetable contains. It must be
+    coerced to empty string, just like trip_id does, so downstream checks like
+    if arrival['route_id']: work correctly.
+    """
+    import pandas as pd
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    # Create a vehicle via DataFrame.to_dict('records') like live_map.py does,
+    # so missing route_id becomes float NaN, not an absent key.
+    df = pd.DataFrame([{
+        'vehicle_id': 'NAN_ROUTE',
+        'latitude': 3.10,
+        'longitude': 101.70,
+        'timestamp': now,
+        'trip_id': 'TRIP1',
+        'route_display': 'T580',
+        'route_id': float('nan'),  # Missing route_id from the feed
+    }])
+    vehicles = df.to_dict('records')
+
+    arrivals, _ = eta.arrivals_for_stops(vehicles, nearby, lambda t: stops, now, 8)
+    assert arrivals[stops[2]['stop_id']][0]['route_id'] == '', \
+        "NaN route_id must be coerced to empty string, not 'nan'"
+
+
+def test_arrivals_route_id_missing_key_becomes_empty_string():
+    """
+    A vehicle with no route_id key at all must also produce an empty string,
+    not raise. This covers the case where a feed simply doesn't provide
+    route_id in the vehicle record.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    # Build a vehicle without route_id key
+    v = _vehicle('NO_ROUTE_KEY', 3.10, 101.70, now)
+    # Ensure route_id key is absent
+    v.pop('route_id', None)
+
+    arrivals, _ = eta.arrivals_for_stops([v], nearby, lambda t: stops, now, 8)
+    assert arrivals[stops[2]['stop_id']][0]['route_id'] == ''
+
+
+def test_get_route_parts_short_circuits_on_empty_route_id(tmp_path, monkeypatch):
+    """
+    get_route_parts should return the empty dict immediately when route_id is
+    empty, before reading the ZIP. This guards the loop and makes the contract
+    explicit: only non-empty ids are looked up.
+    """
+    calls = {'n': 0}
+
+    def counting_load_zip(slug):
+        calls['n'] += 1
+        raise RuntimeError("should not have been called")
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', counting_load_zip)
+    result = gtfs_static.get_route_parts('any', '')
+    assert result == {'short': '', 'long': ''}
+    assert calls['n'] == 0, "empty route_id should short-circuit without loading ZIP"
+
+
+def test_get_route_parts_unknown_route_in_valid_feed(tmp_path, monkeypatch):
+    """
+    When the feed loads fine but has no row for the requested route_id,
+    the function should return the empty dict, not raise.
+    """
+    import zipfile
+    p = tmp_path / "routes.zip"
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('routes.txt',
+                    "route_id,route_short_name,route_long_name\n"
+                    "R1,Route One,From A to B\n"
+                    "R2,Route Two,From C to D\n")
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(p))
+    parts = gtfs_static.get_route_parts('any', 'UNKNOWN_ROUTE')
+    assert parts == {'short': '', 'long': ''}

@@ -170,6 +170,14 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             skipped['no_trip_id'] += 1
             continue
 
+        raw_route_id = v.get('route_id')
+        # Same NaN guard as trip_id: a float NaN route_id from a pandas frame
+        # stringifies to 'nan', a plausible-looking bogus id. Guard it the same way.
+        if isinstance(raw_route_id, float) and not math.isfinite(raw_route_id):
+            route_id_str = ''
+        else:
+            route_id_str = str(raw_route_id or '').strip()
+
         stops = trip_stops_lookup(trip_id)
         if not stops:
             skipped['trip_not_in_schedule'] += 1
@@ -238,7 +246,7 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             arrivals[sid].append({
                 'vehicle_id': v.get('vehicle_id', ''),
                 'route_display': v.get('route_display', ''),
-                'route_id': str(v.get('route_id') or ''),
+                'route_id': route_id_str,
                 'headsign': headsign,
                 'eta_seconds': secs,
                 'delay_seconds': reported_delay,
