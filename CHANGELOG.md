@@ -11,20 +11,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"Nothing inbound" no longer hides a bus that is on its way.** Nearby stops were truncated to
   the five closest *before* any arrival was computed. Measured from the reported location: 15 stops
   sit within 800 m, and the only one with a bus inbound ranked 9th at 585 m — so every stop on
-  screen reported nothing while a bus was en route to one the panel never evaluated. Every stop in
-  range is now evaluated, and those with a bus coming are shown first
+  screen reported nothing while a bus was en route to one the panel never evaluated. The nearest 40
+  stops in range are now evaluated rather than the nearest 5, and those with a bus coming are shown
+  first. Forty is a bound on work, not a claim of completeness — the largest 800 m neighbourhood in
+  the network is 41 stops and the median is 13, so it covers every real case but one, and the
+  README and the code now say so instead of claiming every stop is evaluated
+- **Nearby stops with a bus coming are no longer dropped in silence.** At most five stops are
+  listed, and a neighbourhood with more than five served stops is ordinary — the median holds 13
+  stops in total. The panel now says how many further stops also have buses coming. A stop the app
+  evaluated, found a bus inbound for, and then never mentioned is the original bug in miniature
 - The wording said "nothing inbound right now", which reads as *no bus ever serves this stop*. It
   now says "no bus currently en route to this stop", and the panel-level message names the radius
+- **"Nothing is coming" is no longer claimed on the evidence of one route.** The arrivals panel
+  reads the same frame the map draws, which a route search narrows to the searched route. Someone
+  searching T580 was then told "no buses are currently en route to any stop within 800 m of you" —
+  a statement about every route, made from evidence about one, and quite possibly untrue. With a
+  search active both the per-stop and the panel-level wording now name the route being searched
+  and say that other routes are hidden
 - **The tapped-bus panel is legible.** It ran six facts into one sentence, and the staleness note
   welded itself onto the stop name — *"position 1 min old, so less certain at KL2324 LRT AWAN
   BESAR"*. Route, path, arrival, walk and staleness are now labelled lines
+- **The tapped-bus panel no longer drops the lateness or the destination.** Rebuilding it as
+  labelled lines quietly lost both. Only Rapid Bus KL runs to a headway; twelve of the thirteen
+  agency feeds publish no `frequencies.txt` at all, so lateness is a real, knowable number for
+  roughly 18,500 trips — KTM, myBAS Johor, MRT Feeder, Penang. Outside KL the stop list showed a
+  bus as six minutes late while the tapped panel, for the same bus, showed it as merely due. Both
+  panels state the same facts again, each in the shape that fits it, and a delay that is genuinely
+  not knowable is still rendered as nothing at all — never as zero, never as "on time"
+- **The test guarding the headway-honesty rule was vacuous.** It asserted that the tapped panel
+  says nothing about lateness on a headway trip — but that panel had lost the ability to say
+  anything about lateness at all, so the assertion passed unconditionally and would have kept
+  passing with the frequency-suppression logic deleted outright. Nothing anywhere asserted the
+  positive rendering either. `format_arrival` is now tested directly on all three cases: a measured
+  delay renders "6 min late", an unknowable one renders no lateness text, and a sub-minute one is
+  treated as noise and stays silent
+- **`get_route_parts` re-opened a 1.7 MB ZIP on every render** — every 20 seconds with a bus
+  selected and auto-refresh on. `routes.txt` is now parsed once per agency and kept, the same way
+  this module already treats its trip and route-name indexes. A failed read is deliberately not
+  cached, so one feed outage cannot blank every route name until the process restarts
 
 ### Added
 - Nearby stops are drawn on the map beneath the vehicles, so their position is visible rather than
   only named
 - Stop names link to Google Maps for walking directions, which this app deliberately does not
   compute itself
-- `gtfs_static.get_route_parts` — a route's short and long names kept separate
+- `gtfs_static.get_route_parts` — a route's short and long names kept separate. `get_route_name` is
+  a strict subset of it and is now expressed in terms of it, so the two can never disagree about a
+  route and both share the one parse of `routes.txt`
 
 ### Known Limitations
 - **Nearby-stop markers have no hover tooltip.** The layer is deliberately `pickable=False` — hover

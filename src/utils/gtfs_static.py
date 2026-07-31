@@ -189,28 +189,47 @@ def get_route_name(agency_slug: str, route_id: str) -> str:
 
     Combines route_short_name and route_long_name from routes.txt.
     Returns an empty string if not found or on any error.
-    """
-    if not route_id:
-        return ''
 
+    A strict subset of `get_route_parts`, and expressed in terms of it so the
+    two can never disagree about a route and so both share its cache — this is
+    called once per unique route_id on every render of the map.
+    """
+    parts = get_route_parts(agency_slug, route_id)
+    short, long_ = parts['short'], parts['long']
+    if short and long_:
+        return f"{short} — {long_}"
+    return short or long_
+
+
+# agency slug -> {route_id: {'short': ..., 'long': ...}}. Populated lazily and
+# kept for the life of the process, exactly like _ROUTE_REGION_INDEX below and
+# for the same reason: both read routes.txt, and re-reading it per lookup meant
+# opening a 1.7 MB ZIP on every render — every 20 seconds with auto-refresh on.
+# A failed read is deliberately not cached, so one outage cannot blank every
+# route name until the process restarts.
+_ROUTE_PARTS_INDEX = {}
+
+
+def _route_parts_index(agency_slug: str) -> dict:
+    """
+    {route_id: {'short', 'long'}} for one agency. Empty dict on any error.
+
+    First row wins for a duplicated route_id, matching the scan this replaced.
+    routes.txt keys on route_id, so a duplicate is malformed data either way.
+    """
+    index = {}
     try:
         with _load_zip(agency_slug) as zf:
-            routes = _read_csv_from_zip(zf, 'routes.txt')
-            if not routes:
-                return ''
-
-            for row in routes:
-                if row.get('route_id', '').strip() == route_id.strip():
-                    short = row.get('route_short_name', '').strip()
-                    long_ = row.get('route_long_name', '').strip()
-                    if short and long_:
-                        return f"{short} — {long_}"
-                    return short or long_
-
+            for row in _read_csv_from_zip(zf, 'routes.txt') or []:
+                rid = (row.get('route_id') or '').strip()
+                if rid and rid not in index:
+                    index[rid] = {
+                        'short': (row.get('route_short_name') or '').strip(),
+                        'long': (row.get('route_long_name') or '').strip(),
+                    }
     except Exception:
-        return ''
-
-    return ''
+        return {}
+    return index
 
 
 def get_route_parts(agency_slug: str, route_id: str) -> dict:
@@ -222,21 +241,23 @@ def get_route_parts(agency_slug: str, route_id: str) -> dict:
     and the long name is the path between two places, one of which is that
     same place. Joined, it looks like the name was printed twice. Returned
     separately, the UI can label which is which.
+
+    Never raises: an unknown route or an unavailable feed both come back as
+    {'short': '', 'long': ''}. The returned dict is a copy, so a caller that
+    mutates it cannot poison the cached index.
     """
     empty = {'short': '', 'long': ''}
     if not route_id:
         return empty
-    try:
-        with _load_zip(agency_slug) as zf:
-            for row in _read_csv_from_zip(zf, 'routes.txt') or []:
-                if (row.get('route_id') or '').strip() == route_id.strip():
-                    return {
-                        'short': (row.get('route_short_name') or '').strip(),
-                        'long': (row.get('route_long_name') or '').strip(),
-                    }
-    except Exception:
-        return empty
-    return empty
+
+    index = _ROUTE_PARTS_INDEX.get(agency_slug)
+    if not index:
+        index = _route_parts_index(agency_slug)
+        if index:
+            _ROUTE_PARTS_INDEX[agency_slug] = index
+
+    parts = index.get(route_id.strip())
+    return dict(parts) if parts else empty
 
 
 # ---------------------------------------------------------------------------

@@ -33,9 +33,15 @@ UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
 # from the number actually applied.
 NEARBY_STOP_RADIUS_M = 800
 
-# Evaluate every stop in range, then show the useful ones. Truncating by
-# distance first hid a stop that had a bus inbound behind five closer stops
-# that had none.
+# Evaluate the nearest NEARBY_STOP_SCAN_LIMIT stops in range, then show the
+# useful ones. Truncating by distance first hid a stop that had a bus inbound
+# behind five closer stops that had none.
+#
+# The scan cap is a bound on work, not a claim of completeness: measured
+# against the real feed, the largest 800 m neighbourhood in the whole Rapid KL
+# network is 41 stops and the median is 13, so 40 covers effectively every real
+# case — but "effectively every" is not "every", and in that one neighbourhood
+# the farthest stop is never looked at. Nothing in the UI may say otherwise.
 NEARBY_STOP_SCAN_LIMIT = 40     # candidates evaluated
 NEARBY_STOP_DISPLAY = 5         # stops rendered
 NEARBY_STOP_MIN_SHOWN = 3       # filled with unserved stops when few are served
@@ -73,13 +79,22 @@ def format_route_heading(parts, fallback=''):
 
 def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
     """
-    One arrival as a single line, rendered identically wherever it appears.
+    One arrival as a single line, under a stop heading in the "Arrivals near
+    you" panel.
 
     Both the stop-centric panel and the tap-a-bus panel show the same estimate
-    for the same bus, so they must qualify it identically. They previously did
-    not: the primary panel carried the delay, the position's age and the
-    one-stop caveat, while the secondary rendered a bare green box — a
-    four-minute-old position reading as a confident "~6 min".
+    for the same bus, so they must state the same facts about it — where it is
+    going, when it gets there, how late it is, how old its position is, and the
+    one-stop caveat — and qualify them identically. Only the shape differs:
+    here they are one line beneath the stop's name, because the stop is already
+    the heading; the tap-a-bus panel says the same things as labelled lines,
+    because there the bus is the subject and the stop is one of the facts.
+
+    They have twice drifted apart. The secondary first rendered a bare green
+    box — a four-minute-old position reading as a confident "~6 min" — and
+    then, once rebuilt as labelled lines, silently dropped the lateness and the
+    destination, so a bus shown as 6 minutes late in one panel was shown as
+    merely due in the other.
 
     A delay of None means "not knowable" — the trip runs to a headway rather
     than to the clock — and is stated as nothing at all, never as zero.
@@ -410,6 +425,12 @@ def show():
     # before layers are built, so the layers, the view centring below, the
     # caption and the Route Viewer all reflect the filtered set.
     filter_active = False
+    # What the user typed, in their own case, kept for the copy that has to
+    # narrow its claims to the filtered frame. `current_query` below is the
+    # same value lower-cased for a session-state comparison; echoing "t580"
+    # back at someone who typed "T580" is a small wrongness this copy does not
+    # need to make.
+    filter_label = ''
     if route_query and route_query.strip():
         df_filtered = data_processor.filter_by_route(df_map, route_query)
         if df_filtered.empty:
@@ -446,6 +467,7 @@ def show():
         else:
             df_map = df_filtered
             filter_active = True
+            filter_label = route_query.strip()
             matched = sorted(df_map['route_display'].unique())
             matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
             st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")
@@ -766,8 +788,21 @@ def show():
                             parts, fallback=a.get('route_display', ''))
                         mins = max(1, round(a['eta_seconds'] / 60))
                         body = list(heading)
-                        body.append(
-                            f"**Arrives** {s['stop_name']} in **~{mins} min**")
+                        # Same facts as format_arrival, in the shape that fits
+                        # this panel. The headsign belongs with the route — it
+                        # is where this bus is going — and the lateness with
+                        # the arrival it qualifies. Dropping either made the
+                        # two panels contradict each other about the same bus.
+                        if a.get('headsign'):
+                            body.append(f"**Towards:** {a['headsign']}")
+                        arrives = f"**Arrives** {s['stop_name']} in **~{mins} min**"
+                        # None means "not knowable" — a headway trip has no
+                        # published start time to be late against. It is never
+                        # zero and never "on time"; it is silence.
+                        delay = a.get('delay_seconds')
+                        if delay is not None and delay >= 60:
+                            arrives += f" · {round(delay / 60)} min late"
+                        body.append(arrives)
                         body.append(
                             f"That stop is ~{int(s['distance_m'])} m from you "
                             f"(~{eta.walking_minutes(s['distance_m'])} min walk)")
@@ -851,13 +886,33 @@ def show():
                     )
                     rows = arrivals.get(stop['stop_id'], [])
                     if not rows:
-                        st.caption("  no bus currently en route to this stop")
+                        # A route search narrowed df_map before this panel ever
+                        # looked, so with one active the only honest claim is
+                        # about the route searched. "No bus is coming here" on
+                        # the evidence of one route may be flatly untrue.
+                        st.caption(
+                            f"  no bus matching '{filter_label}' currently en "
+                            f"route to this stop"
+                            if filter_active else
+                            "  no bus currently en route to this stop"
+                        )
                         continue
                     any_arrival = True
                     for a in rows[:3]:
                         st.caption("  " + format_arrival(a))
 
                 st.caption(ARRIVAL_ACCURACY_NOTE)
+                # A stop the app evaluated, found a bus inbound for, and then
+                # did not show is the reported bug in miniature — the median
+                # 800 m neighbourhood here holds 13 stops, so overflowing the
+                # display cap is ordinary rather than exceptional. Say how many
+                # were left out; silence is what made the original bug invisible.
+                if len(served) > NEARBY_STOP_DISPLAY:
+                    st.caption(
+                        f"{len(served) - NEARBY_STOP_DISPLAY} more nearby stop(s) "
+                        f"also have buses coming — only the {NEARBY_STOP_DISPLAY} "
+                        f"nearest of them are listed."
+                    )
                 # skipped has three keys — no_trip_id, trip_not_in_schedule and
                 # bad_position. Report every non-zero one; a vehicle omitted
                 # without explanation is indistinguishable from one that simply
@@ -875,10 +930,20 @@ def show():
                             f"{skipped['bad_position']} with unusable telemetry")
                     st.caption("Not shown: " + ", ".join(reasons) + ".")
                 if not any_arrival:
-                    st.caption(
-                        f"No buses are currently en route to any stop within "
-                        f"{NEARBY_STOP_RADIUS_M} m of you."
-                    )
+                    # Same rule as the per-stop line above: the claim may only
+                    # be as wide as the evidence behind it.
+                    if filter_active:
+                        st.caption(
+                            f"No buses matching '{filter_label}' are currently "
+                            f"en route to any stop within {NEARBY_STOP_RADIUS_M} m "
+                            f"of you. Other routes are hidden while the route "
+                            f"search is active."
+                        )
+                    else:
+                        st.caption(
+                            f"No buses are currently en route to any stop within "
+                            f"{NEARBY_STOP_RADIUS_M} m of you."
+                        )
 
     with st.expander("🚌 Route Viewer", expanded=False):
         vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())

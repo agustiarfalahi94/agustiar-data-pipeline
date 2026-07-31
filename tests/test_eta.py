@@ -726,6 +726,9 @@ def test_get_route_parts_splits_short_from_long(tmp_path, monkeypatch):
                     "route_id,route_short_name,route_long_name\n"
                     "S6060,PAVILION BUKIT JALIL (PAVBJ),Stesen LRT Awan Besar ~ Pavilion Bukit Jalil\n")
     monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(p))
+    # routes.txt is parsed once per agency and kept, like the trip indexes
+    # above — a test that swaps the feed must drop the previous parse with it.
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
     parts = gtfs_static.get_route_parts('any', 'S6060')
     assert parts['short'] == 'PAVILION BUKIT JALIL (PAVBJ)'
     assert parts['long'] == 'Stesen LRT Awan Besar ~ Pavilion Bukit Jalil'
@@ -735,6 +738,7 @@ def test_get_route_parts_is_empty_for_unknown_or_failed(monkeypatch):
     import zipfile
     monkeypatch.setattr(gtfs_static, '_load_zip',
                         lambda slug: (_ for _ in ()).throw(OSError('feed down')))
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
     assert gtfs_static.get_route_parts('any', 'S6060') == {'short': '', 'long': ''}
 
 
@@ -831,5 +835,6 @@ def test_get_route_parts_unknown_route_in_valid_feed(tmp_path, monkeypatch):
                     "R1,Route One,From A to B\n"
                     "R2,Route Two,From C to D\n")
     monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(p))
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
     parts = gtfs_static.get_route_parts('any', 'UNKNOWN_ROUTE')
     assert parts == {'short': '', 'long': ''}

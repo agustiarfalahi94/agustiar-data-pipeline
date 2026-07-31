@@ -1425,6 +1425,14 @@ def test_a_frequency_based_trip_shows_no_lateness_clause(monkeypatch):
     and arrivals_for_stops reports delay_seconds as None. The renderer guarded
     only on `>= 60`, which raises TypeError on None -- the panel must instead
     say nothing at all about lateness.
+
+    This assertion was vacuous for a while: the tapped panel had lost the
+    ability to state a lateness at all, so it passed unconditionally and would
+    have kept passing with the frequency suppression deleted outright. The
+    fixture is built to bite -- the vehicle is a measured +3,600s against the
+    template, which the same panel renders as "60 min late" the moment the
+    suppression stops working (verified by flipping is_frequency_based to
+    False, which fails this test).
     """
     selection = SimpleNamespace(
         selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
@@ -1450,6 +1458,9 @@ def test_a_frequency_based_trip_shows_no_lateness_clause(monkeypatch):
     said = _texts(st_stub.info)
     assert 'Nearby Stop' in said, f"the arrival itself must still render: {said!r}"
     assert 'late' not in said, f"no lateness may be claimed on a headway trip: {said!r}"
+    # Not knowable is not zero and not "on time" -- it is silence.
+    assert '0 min late' not in said, said
+    assert 'on time' not in said, said
 
 
 def test_tapped_vehicle_with_no_selection_renders_nothing(monkeypatch):
@@ -1876,3 +1887,274 @@ def test_nearby_stops_layer_is_a_hollow_ring_not_a_filled_dot(monkeypatch):
         "stop markers must be outlined (stroked=True) to read as rings"
     assert made_kwargs.get('filled') is False, \
         "stop markers must not be filled, or they read as small bus dots"
+
+
+# ---------------------------------------------------------------------------
+# Final whole-branch review fixes
+#
+# F1/F2: the tapped-bus panel must state the same facts as the stop-centric
+# panel -- including the lateness clause and the destination, both of which the
+# hand-built body silently dropped -- and the headway-honesty rule must be
+# guarded by tests that can actually fail.
+# ---------------------------------------------------------------------------
+
+def test_the_tapped_panel_states_the_lateness_and_the_destination(monkeypatch):
+    """
+    Only Rapid Bus KL is headway-based. Twelve of the thirteen agency feeds
+    ship no frequencies.txt at all, so delay_seconds is a real number for
+    roughly 18,500 trips -- KTM, myBAS Johor, MRT Feeder, Penang. Outside KL
+    the stop panel said a bus was 6 minutes late while the tapped panel, for
+    the very same bus, said nothing. The destination went the same way.
+    """
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    # Timetabled at the bus's current position six minutes ago, and the bus is
+    # only reporting there now: a measured +360s.
+    stops = [
+        {'stop_id': 'S0', 'stop_name': 'Origin Stop', 'stop_lat': 3.14, 'stop_lon': 101.68,
+         'arrival_seconds': local_seconds_of_day - 360},
+        {'stop_id': 'S1', 'stop_name': 'Nearby Stop', 'stop_lat': 3.1401, 'stop_lon': 101.6801,
+         'arrival_seconds': local_seconds_of_day - 360 + 300},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+    # No frequencies.txt for this agency, so the delay IS knowable.
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert '6 min late' in said, \
+        f"the tapped panel dropped a lateness the stop panel would have shown: {said!r}"
+    assert 'Terminal X' in said, \
+        f"the tapped panel dropped the destination the stop panel would have shown: {said!r}"
+
+
+def test_format_arrival_states_a_measured_lateness():
+    from app_pages import live_map
+    line = live_map.format_arrival({
+        'route_display': 'T580', 'headsign': 'Terminal X',
+        'eta_seconds': 300, 'delay_seconds': 360, 'age_seconds': 5,
+    })
+    assert '6 min late' in line, line
+
+
+def test_format_arrival_claims_no_lateness_when_it_is_not_knowable():
+    """
+    delay_seconds is None on a headway trip: there is no published start time
+    to be late against. That is "not knowable", never zero and never "on time".
+    """
+    from app_pages import live_map
+    line = live_map.format_arrival({
+        'route_display': 'T580', 'headsign': 'Terminal X',
+        'eta_seconds': 300, 'delay_seconds': None, 'age_seconds': 5,
+    })
+    assert 'late' not in line, line
+    assert '0 min' not in line, line
+
+
+def test_format_arrival_says_nothing_about_a_sub_minute_delay():
+    """Under the 60-second floor the delay is noise, not news."""
+    from app_pages import live_map
+    line = live_map.format_arrival({
+        'route_display': 'T580', 'headsign': 'Terminal X',
+        'eta_seconds': 300, 'delay_seconds': 30, 'age_seconds': 5,
+    })
+    assert 'late' not in line, line
+    assert '0 min' not in line, line
+
+
+# ---------------------------------------------------------------------------
+# F3: a universal claim may only be made on universal evidence
+#
+# The arrivals panel is fed from df_map, which a route search narrows to one
+# route. "No buses are currently en route to any stop within 800 m of you" is
+# then a claim about every route made from evidence about one.
+# ---------------------------------------------------------------------------
+
+def _arrivals_panel_with_nothing_inbound(monkeypatch, route_query):
+    """Render the arrivals panel with one stop in range and no bus reaching it."""
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.text_input.return_value = route_query
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # Keep route_display off the live feed: 'T5800' then contains the searched
+    # 'T580', so the search filters rather than falling through to the
+    # "route not in this region" branch.
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_name', lambda *a, **k: '')
+    monkeypatch.setattr(
+        live_map.gtfs_static, 'get_stops_near',
+        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'A STOP',
+                          'stop_lat': 3.14, 'stop_lon': 101.68, 'distance_m': 50.0}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+    live_map.show()
+    return st_stub
+
+
+def test_nothing_inbound_names_the_route_when_a_search_is_filtering(monkeypatch):
+    """
+    A user searching T580 who is told "no buses are en route to any stop within
+    800 m" reads it as "nothing is coming", which may be flatly untrue -- every
+    other route was filtered out of the frame before the panel looked.
+    """
+    st_stub = _arrivals_panel_with_nothing_inbound(monkeypatch, 'T580')
+
+    said = _texts(st_stub.caption)
+    assert "No buses matching 'T580' are currently en route" in said, \
+        f"the panel-level claim was not narrowed to the searched route: {said!r}"
+    assert "no bus matching 'T580' currently en route to this stop" in said, \
+        f"the per-stop claim was not narrowed to the searched route: {said!r}"
+    assert 'No buses are currently en route to any stop' not in said, \
+        f"the unqualified universal claim survived an active search: {said!r}"
+
+
+def test_nothing_inbound_stays_unqualified_with_no_search(monkeypatch):
+    """Without a filter the frame IS every route, so the plain wording is
+    correct and must not grow a qualifier it has not earned."""
+    st_stub = _arrivals_panel_with_nothing_inbound(monkeypatch, '')
+
+    said = _texts(st_stub.caption)
+    assert 'No buses are currently en route to any stop within 800 m of you.' in said, said
+    assert 'no bus currently en route to this stop' in said, said
+    assert 'matching' not in said, \
+        f"unfiltered copy must not name a route: {said!r}"
+
+
+# ---------------------------------------------------------------------------
+# F4: stops evaluated, found to have a bus coming, and then not shown
+# ---------------------------------------------------------------------------
+
+def test_served_stops_beyond_the_display_cap_are_counted_not_dropped(monkeypatch):
+    """
+    The median 800 m neighbourhood in this feed holds 13 stops, so more than
+    five stops with buses coming is ordinary. Cutting them silently is the
+    reported bug in miniature: a stop the app evaluated, found a bus inbound
+    for, and then never mentioned.
+    """
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    df = pd.DataFrame([{
+        'region': 'Rapid Bus KL', 'vehicle_id': 'V1',
+        'latitude': 3.10, 'longitude': 101.68, 'bearing': 90.0, 'speed': 10.0,
+        'timestamp': int(time.time()), 'trip_id': 'T1', 'route_id': 'T5800',
+        'freshness': 'fresh', 'age_seconds': 5,
+    }])
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection, df=df)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+
+    # Seven stops in range, every one of them with this bus still to come.
+    near = [{'stop_id': f'S{i}', 'stop_name': f'STOP {i}',
+             'stop_lat': 3.14 + i * 0.0002, 'stop_lon': 101.68,
+             'distance_m': 20.0 * (i + 1)} for i in range(7)]
+    trip = [{'stop_id': 'ORIGIN', 'stop_name': 'ORIGIN',
+             'stop_lat': 3.10, 'stop_lon': 101.68,
+             'arrival_seconds': local_seconds_of_day}]
+    trip += [dict(s, arrival_seconds=local_seconds_of_day + 60 * (i + 1))
+             for i, s in enumerate(near)]
+
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: near)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: trip)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+
+    live_map.show()
+
+    said = _texts(st_stub.caption)
+    assert '2 more nearby stop(s) also have buses coming' in said, \
+        f"seven served stops, five shown, and the other two vanished silently: {said!r}"
+
+
+# ---------------------------------------------------------------------------
+# F5: get_route_parts re-parsed a 1.7 MB ZIP on every render
+# ---------------------------------------------------------------------------
+
+def test_get_route_parts_reads_routes_txt_once_per_agency(tmp_path, monkeypatch):
+    """
+    With a bus selected and auto-refresh on, this runs every 20 seconds. The
+    module already memoises its other routes.txt lookup for exactly this
+    reason; this one opened the ZIP every time.
+    """
+    import zipfile
+    from utils import gtfs_static
+
+    z = _make_static_zip(tmp_path, 'kl', [
+        ('T5800', 'T580', 'Awan Besar ~ TPM'),
+        ('S6060', '', 'Stesen LRT Awan Besar ~ Pavilion Bukit Jalil'),
+    ])
+    opens = []
+
+    def fake_load(slug):
+        opens.append(slug)
+        return zipfile.ZipFile(z)
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', fake_load)
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+
+    for _ in range(5):
+        assert gtfs_static.get_route_parts('kl', 'T5800') == {
+            'short': 'T580', 'long': 'Awan Besar ~ TPM'}
+        assert gtfs_static.get_route_parts('kl', 'S6060')['short'] == ''
+    assert len(opens) == 1, f"routes.txt was re-read {len(opens)} times"
+
+
+def test_get_route_parts_is_empty_for_an_unknown_route(tmp_path, monkeypatch):
+    import zipfile
+    from utils import gtfs_static
+
+    z = _make_static_zip(tmp_path, 'kl', [('T5800', 'T580', 'Awan Besar ~ TPM')])
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(z))
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+
+    assert gtfs_static.get_route_parts('kl', 'NOPE') == {'short': '', 'long': ''}
+    assert gtfs_static.get_route_parts('kl', '') == {'short': '', 'long': ''}
+
+
+def test_get_route_parts_survives_a_dead_feed_and_recovers(tmp_path, monkeypatch):
+    """Never raises on an unavailable feed -- and must not cache that failure,
+    or one outage would blank every route name for the life of the process."""
+    import zipfile
+    from utils import gtfs_static
+
+    z = _make_static_zip(tmp_path, 'kl', [('T5800', 'T580', 'Awan Besar ~ TPM')])
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+
+    def boom(slug):
+        raise OSError("feed withdrawn")
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', boom)
+    assert gtfs_static.get_route_parts('kl', 'T5800') == {'short': '', 'long': ''}
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(z))
+    assert gtfs_static.get_route_parts('kl', 'T5800')['short'] == 'T580'
+
+
+def test_get_route_name_still_joins_the_two_parts(tmp_path, monkeypatch):
+    """get_route_name is a strict subset of get_route_parts and now shares its
+    cache. Its contract is unchanged: joined when both parts exist, whichever
+    one exists otherwise, empty string when the route or the feed is missing."""
+    import zipfile
+    from utils import gtfs_static
+
+    z = _make_static_zip(tmp_path, 'kl', [
+        ('T5800', 'T580', 'Awan Besar ~ TPM'),
+        ('S6060', '', 'Awan Besar ~ Pavilion'),
+        ('X1', 'X1', ''),
+    ])
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(z))
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+
+    assert gtfs_static.get_route_name('kl', 'T5800') == 'T580 — Awan Besar ~ TPM'
+    assert gtfs_static.get_route_name('kl', 'S6060') == 'Awan Besar ~ Pavilion'
+    assert gtfs_static.get_route_name('kl', 'X1') == 'X1'
+    assert gtfs_static.get_route_name('kl', 'NOPE') == ''
+    assert gtfs_static.get_route_name('kl', '') == ''

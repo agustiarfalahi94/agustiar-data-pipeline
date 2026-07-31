@@ -23,14 +23,19 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
-- **📍 Arrivals near you** — with your location set, see the stops within 800 m and the next buses
-  to each, with an estimated arrival for every one. Stops with a bus inbound are shown first, and
-  each nearby stop is also drawn on the map as a hollow gold ring so its position is visible, not
-  just its name; every stop name in the panel links to Google Maps for walking directions. Tap a
-  bus on the map to see when that specific vehicle reaches your nearest stop. Lateness is shown
+- **📍 Arrivals near you** — with your location set, see nearby stops within 800 m and the next
+  buses to each, with an estimated arrival for every bus listed. Up to five stops are shown, those
+  with a bus inbound first; if more than five have buses coming, the panel says how many were left
+  out rather than dropping them silently. Each nearby stop is also drawn on the map as a hollow
+  gold ring so its position is visible, not just its name; every stop name in the panel links to
+  Google Maps for walking directions. Tap a bus on the map to see when that specific vehicle
+  reaches your nearest stop — the tapped panel states the same facts as the stop list for the same
+  bus (destination, arrival, lateness, position age), only as labelled lines. Lateness is shown
   only where the feed actually publishes a timetabled start time — almost every Rapid Bus KL trip
   runs to a headway instead, and for those no lateness is claimed (see *No lateness on a headway
-  service* under Design Decisions)
+  service* under Design Decisions). While a route search is active the panel names the searched
+  route in its "nothing inbound" wording, because with the map filtered to one route it has no
+  evidence about the others
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation
@@ -235,7 +240,7 @@ Live Map      Data Table        Analytics     Network Health
 | **15 min fetched, 5 min drawn, 60s solid** | `LIVE_HIDDEN_SECONDS` bounds the query, `LIVE_STALE_SECONDS` bounds what is drawn, `LIVE_FRESH_SECONDS` bounds what is drawn solid. A vehicle between the last two is dimmed rather than deleted, so a 90-second gap in one feed no longer looks like the bus vanished |
 | **ETAs from the timetable, not from speed** | The provider publishes no trip updates, so arrivals are derived by joining each vehicle's live `trip_id` to `stop_times.txt`, shifted by its measured delay where one can be measured (see the next row). Instantaneous speed is a poor predictor — a bus at a red light reports 0 km/h |
 | **No lateness on a headway service** | 2,099 of the 2,102 Rapid Bus KL trips appear in `frequencies.txt` with `exact_times=0`, so their `stop_times.txt` rows are a travel-time template repeated across an operating window, not scheduled wall-clock times. There is no published start time to be late against, so the delay is reported as unknown rather than computed. The arrival is unaffected — it uses only the *differences* between stop times, which is exactly what a headway template encodes |
-| **Nearby stops ranked by usefulness** | Truncating to the closest few stops before computing arrivals hid a stop that had a bus inbound behind five that did not. Every stop within the radius is evaluated, then those with a bus coming are shown first |
+| **Nearby stops ranked by usefulness** | Truncating to the closest few stops before computing arrivals hid a stop that had a bus inbound behind five that did not. The nearest 40 stops within the radius are now evaluated (`NEARBY_STOP_SCAN_LIMIT`), then those with a bus coming are shown first, at most five of them (`NEARBY_STOP_DISPLAY`). The 40 is a bound on work, not a claim of completeness: measured against the feed, the largest 800 m neighbourhood in the Rapid KL network is 41 stops and the median is 13, so the cap bites in exactly one place on the network. Any served stops past the five shown are counted in the panel rather than dropped in silence |
 
 ### Route Viewer — How It Works
 
