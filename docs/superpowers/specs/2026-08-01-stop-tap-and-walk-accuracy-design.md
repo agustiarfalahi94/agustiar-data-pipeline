@@ -146,6 +146,31 @@ namespace the cache — stop ids are unique within an agency but may collide acr
 feeds. The module knows nothing about Streamlit, GTFS, or arrivals; it is unit-testable without a
 network or a browser.
 
+**The caller resolves the key; the module only receives it.** `walk_times` never reads
+configuration. This keeps the module Streamlit-free and makes every test a pure function call.
+
+This matters more than it looks. `src/config.py` is gitignored, so it does not exist on Streamlit
+Cloud — and **no code in the repository currently reads `st.secrets`**, despite the README
+documenting it as the cloud configuration mechanism (a past refactor replaced those reads with
+hardcoded defaults). A key placed in Secrets today would be silently ignored. `live_map.py`, which
+already imports Streamlit, therefore gains:
+
+```python
+def _ors_api_key():
+    """config.py for local dev, Streamlit Secrets for cloud. None when unset."""
+    key = getattr(_config, 'ORS_API_KEY', None)
+    if key:
+        return key
+    try:
+        return st.secrets['routing']['api_key'] or None
+    except Exception:
+        return None
+```
+
+The broad `except` is deliberate: Streamlit raises varied exception types when no secrets file
+exists at all, which is the normal case for a fresh clone, and a missing optional key must never
+break a render.
+
 ### Routed path
 
 One POST to `https://api.openrouteservice.org/v2/matrix/foot-walking`, one origin, N destinations,
@@ -201,14 +226,18 @@ works offline.
 Module-level dict, following the `_TRIP_INDEX_MTIME` / `_ROUTE_PARTS_MTIME` pattern already in
 `gtfs_static.py`. The repo uses no Streamlit caching and this introduces none.
 
-- Key: `(snapped_lat, snapped_lon, agency_slug)` where coordinates are snapped to a **0.0005°
-  grid (~55 m)**. GPS jitter while standing still resolves to the same cell, so auto-refresh costs
-  nothing. A 55 m cell bounds the induced error at roughly one minute of walking — below the
-  resolution the UI displays.
+- Key: `(snapped_lat, snapped_lon, agency_slug, stop_id)` where coordinates are snapped to a
+  **0.0005° grid (~55 m)**. GPS jitter while standing still resolves to the same cell, so
+  auto-refresh costs nothing. A 55 m cell bounds the induced error at roughly one minute of
+  walking — below the resolution the UI displays.
+- **Keyed per stop, not per stop set.** Two different sets are looked up from the same location:
+  the nearby stops, and the trip stops of a tapped bus. A set-keyed cache would answer one from
+  the other's entry and leave every stop it had not seen on the fallback indefinitely. Per-stop
+  keying also means a request asks only for the stops not already known.
 - TTL 24h. Footpaths do not move.
-- Only `routed=True` results are cached. Caching a fallback would pin a degraded answer in place
-  for a day after a transient blip.
-- `_clear_caches()` for tests, mirroring the existing `_clear_indexes()`.
+- Only routed results are cached. Caching a fallback would pin a degraded answer in place for a
+  day after a transient blip.
+- `_clear_cache()` for tests, mirroring the existing `_clear_indexes()`.
 
 ### What does not change
 
