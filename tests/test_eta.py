@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -49,13 +50,28 @@ def test_walking_minutes_rounds_up_and_has_a_floor():
     assert eta.walking_minutes(240) == 3
 
 
+def test_walking_minutes_honours_a_non_default_pace():
+    """
+    Every assertion above holds for a function that ignored pace_m_per_min
+    and hardcoded 80, so the parameter needs one case of its own.
+    """
+    assert eta.walking_minutes(240, pace_m_per_min=40) == 6      # half the pace
+    assert eta.walking_minutes(240, pace_m_per_min=120) == 2     # 1.5x the pace
+    assert eta.walking_minutes(240) == 3                          # default unchanged
+
+
 import zipfile
 
 from utils import gtfs_static
 
 
-def _make_gtfs_zip(tmp_path, name='feed'):
-    """A tiny but structurally real GTFS feed: 3 stops, 1 trip, late-night times."""
+def _make_gtfs_zip(tmp_path, name='feed', frequencies=None):
+    """A tiny but structurally real GTFS feed: 3 stops, 1 trip, late-night times.
+
+    Pass *frequencies* as the body rows of a frequencies.txt to publish TRIP1
+    (or any trip) as a headway service, the way 2,099 of the 2,102 Rapid Bus KL
+    trips actually are.
+    """
     p = tmp_path / f"{name}.zip"
     stops = (
         "stop_id,stop_name,stop_desc,stop_lat,stop_lon\n"
@@ -77,13 +93,23 @@ def _make_gtfs_zip(tmp_path, name='feed'):
         zf.writestr('stops.txt', stops)
         zf.writestr('stop_times.txt', stop_times)
         zf.writestr('trips.txt', trips)
+        if frequencies is not None:
+            zf.writestr(
+                'frequencies.txt',
+                "trip_id,start_time,end_time,headway_secs,exact_times\n" + frequencies)
     return str(p)
+
+
+def _clear_indexes():
+    gtfs_static._TRIP_STOPS_INDEX.clear()
+    gtfs_static._TRIP_HEADSIGN_INDEX.clear()
+    gtfs_static._TRIP_FREQUENCY_INDEX.clear()
+    gtfs_static._TRIP_INDEX_MTIME.clear()
 
 
 def _use_fake_feed(monkeypatch, zip_path):
     monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(zip_path))
-    gtfs_static._TRIP_STOPS_INDEX.clear()
-    gtfs_static._TRIP_HEADSIGN_INDEX.clear()
+    _clear_indexes()
 
 
 def test_parse_gtfs_time_handles_hours_past_midnight():
@@ -114,9 +140,76 @@ def test_get_trip_stops_is_empty_when_the_feed_fails(monkeypatch):
     def boom(slug):
         raise OSError('feed down')
     monkeypatch.setattr(gtfs_static, '_load_zip', boom)
-    gtfs_static._TRIP_STOPS_INDEX.clear()
-    gtfs_static._TRIP_HEADSIGN_INDEX.clear()
+    _clear_indexes()
     assert gtfs_static.get_trip_stops('any', 'TRIP1') == []
+
+
+def test_a_transient_feed_failure_is_not_cached_forever(tmp_path, monkeypatch):
+    """
+    The failure path used to write an empty dict into the index, and
+    get_trip_stops only rebuilt when the slug was absent. One network blip
+    therefore cached "this agency has no timetable" for the life of the
+    process: every vehicle counted as not in the schedule, the panel stuck on
+    "nothing inbound", permanently. get_stops_near already returns [] without
+    caching; this must match.
+    """
+    calls = {'n': 0}
+    zip_path = _make_gtfs_zip(tmp_path)
+
+    def flaky(slug):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise OSError('transient feed failure')
+        return zipfile.ZipFile(zip_path)
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', flaky)
+    _clear_indexes()
+
+    assert gtfs_static.get_trip_stops('any', 'TRIP1') == []
+    assert 'any' not in gtfs_static._TRIP_STOPS_INDEX, \
+        "an empty result from a failed build must not be cached"
+
+    # The very next call retries and succeeds.
+    stops = gtfs_static.get_trip_stops('any', 'TRIP1')
+    assert [s['stop_id'] for s in stops] == ['S1', 'S2', 'S3']
+    assert gtfs_static.get_trip_headsign('any', 'TRIP1') == 'GAMMA TERMINAL'
+
+
+def test_the_trip_index_is_rebuilt_when_the_cached_zip_changes(tmp_path, monkeypatch):
+    """
+    The 24-hour ZIP cache refreshes; a new static release brings new trip_ids.
+    Keyed on the slug alone, a process served a superseded timetable
+    indefinitely and every vehicle on a new trip_id silently counted as "not
+    in the schedule". The index is keyed on the cached ZIP's mtime instead.
+    """
+    cache_path = tmp_path / 'cache.zip'
+    first = _make_gtfs_zip(tmp_path, name='first')
+    cache_path.write_bytes(open(first, 'rb').read())
+
+    monkeypatch.setattr(gtfs_static, 'get_cached_path', lambda slug: str(cache_path))
+    monkeypatch.setattr(
+        gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(str(cache_path)))
+    _clear_indexes()
+
+    assert [s['stop_id'] for s in gtfs_static.get_trip_stops('any', 'TRIP1')] == \
+        ['S1', 'S2', 'S3']
+    assert gtfs_static.get_trip_stops('any', 'TRIP2') == []
+
+    # A new static release lands in the same cache path, renaming the trip.
+    second = tmp_path / 'second.zip'
+    with zipfile.ZipFile(second, 'w') as zf:
+        zf.writestr('stops.txt',
+                    "stop_id,stop_name,stop_lat,stop_lon\nS1,ALPHA,3.10,101.70\n")
+        zf.writestr('stop_times.txt',
+                    "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+                    "TRIP2,06:00:00,06:00:00,S1,1\n")
+        zf.writestr('trips.txt',
+                    "route_id,service_id,trip_id,trip_headsign\nR1,weekday,TRIP2,ALPHA\n")
+    cache_path.write_bytes(second.read_bytes())
+    os.utime(cache_path, (time.time() + 10, time.time() + 10))
+
+    assert [s['stop_id'] for s in gtfs_static.get_trip_stops('any', 'TRIP2')] == ['S1'], \
+        "a refreshed ZIP must invalidate the memoised trip index"
 
 
 def test_get_stops_near_returns_closest_first_within_radius(tmp_path, monkeypatch):
@@ -140,6 +233,25 @@ def test_get_trip_headsign(tmp_path, monkeypatch):
     _use_fake_feed(monkeypatch, _make_gtfs_zip(tmp_path))
     assert gtfs_static.get_trip_headsign('any', 'TRIP1') == 'GAMMA TERMINAL'
     assert gtfs_static.get_trip_headsign('any', 'NOPE') == ''
+
+
+def test_is_frequency_based_reads_frequencies_txt(tmp_path, monkeypatch):
+    """
+    A trip listed in frequencies.txt runs to a headway, so stop_times.txt is a
+    travel-time template rather than a wall clock and no lateness can be
+    measured against it.
+    """
+    _use_fake_feed(monkeypatch, _make_gtfs_zip(
+        tmp_path, frequencies="TRIP1,09:40:00,17:00:00,2400,0\n"))
+    assert gtfs_static.is_frequency_based('any', 'TRIP1') is True
+    assert gtfs_static.is_frequency_based('any', 'NOPE') is False
+    assert gtfs_static.is_frequency_based('any', '') is False
+
+
+def test_is_frequency_based_is_false_without_a_frequencies_file(tmp_path, monkeypatch):
+    """A feed with no frequencies.txt publishes real scheduled times."""
+    _use_fake_feed(monkeypatch, _make_gtfs_zip(tmp_path))
+    assert gtfs_static.is_frequency_based('any', 'TRIP1') is False
 
 
 def _timed_stops():
@@ -191,6 +303,25 @@ def test_compute_eta_is_negative_once_the_bus_has_passed():
     assert eta.compute_eta_seconds(stops, 2, 0, now, day) < 0
 
 
+def test_the_rollover_survives_end_to_end_from_the_feed(tmp_path, monkeypatch):
+    """
+    The 25:30:00 rollover asserted end-to-end, from get_trip_stops through
+    compute_eta_seconds, as the design's Testing section asks.
+
+    Halves that only meet in a fixture prove each side in isolation; a
+    formatter creeping into the parse (or a wrap back to 05:30) would pass
+    both and still break every late-night arrival.
+    """
+    _use_fake_feed(monkeypatch, _make_gtfs_zip(tmp_path))
+    stops = gtfs_static.get_trip_stops('any', 'TRIP1')
+
+    day = 1785427200
+    now = day + 85800                     # 23:50, at the first stop
+    # S3 is published as 25:30:00 -- 01:30 the next day, i.e. 100 minutes out.
+    assert stops[2]['arrival_seconds'] == 91800
+    assert eta.compute_eta_seconds(stops, 2, 0, now, day) == 6000
+
+
 def test_compute_eta_survives_a_past_midnight_schedule():
     """A 25:30:00 stop is 01:30 next day — not 01:30 today, and not an error."""
     stops = _stops((3.10, 101.70), (3.20, 101.70))
@@ -199,6 +330,36 @@ def test_compute_eta_survives_a_past_midnight_schedule():
     day = 1785427200
     now = day + 85800                     # 23:50
     assert eta.compute_eta_seconds(stops, 1, 0, now, day) == 6000   # 100 minutes
+
+
+def test_the_service_day_epoch_cancels_out_of_the_arrival():
+    """
+    The load-bearing invariant of this module, and the reason the ETA survives
+    a feed that is 99% frequency-based.
+
+    compute_eta_seconds(delay=estimate_delay_seconds(...)) expands to
+    arrival[target] - arrival[bus] + bus_timestamp - now: the service-day epoch
+    and the bus's own scheduled time cancel algebraically, so only the
+    *difference* between two stop times is ever used -- which is exactly what a
+    headway template encodes, and why a wrong service day cannot corrupt an
+    arrival even though it does corrupt the delay.
+    """
+    stops = _timed_stops()
+    bus_index, target_index = 0, 2
+    timestamp = 1785427200 + 9 * 3600 + 137     # arbitrary report time
+    now = timestamp + 42
+
+    etas = []
+    # Wildly different (even flatly wrong) service days must all agree.
+    for day in (1785427200, 1785427200 - 86400, 1785427200 + 86400, 0):
+        delay = eta.estimate_delay_seconds(stops, bus_index, timestamp, day)
+        etas.append(eta.compute_eta_seconds(stops, target_index, delay, now, day))
+
+    assert len(set(etas)) == 1, f"day_epoch leaked into the arrival: {etas}"
+    # And it equals the pure travel-time expression, with no epoch anywhere.
+    expected = (stops[target_index]['arrival_seconds']
+                - stops[bus_index]['arrival_seconds'] + timestamp - now)
+    assert etas[0] == expected
 
 
 def test_compute_eta_returns_none_for_an_index_that_does_not_exist():
@@ -291,6 +452,130 @@ def test_arrivals_carries_headsign_and_delay():
     assert a['delay_seconds'] == 180
 
 
+def test_arrivals_report_no_delay_at_all_for_a_frequency_based_trip():
+    """
+    2,099 of the 2,102 Rapid Bus KL trips are published in frequencies.txt with
+    exact_times=0, including weekday_T3018_T301802_3 -- the very trip the design
+    cited as its evidence, with start_time=09:40:00, headway_secs=2400. For
+    those, stop_times.txt is a travel-time template repeated across a window,
+    not a wall clock, so there is no published start time to be late against.
+
+    The delay computed from an absolute scheduled time is pure fiction and
+    grows through the operating day: the same perfectly on-time bus measured
+    "238 min late" at 13:00 and "718 min late" at 21:00. Report None -- unknown
+    -- which is neither zero nor a number.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    # A bus reporting at 13:00 against a 09:00 template: four hours of
+    # fabricated "delay" under the old behaviour.
+    timestamp = day + 13 * 3600
+    bus = _vehicle('HEADWAY', 3.10, 101.70, timestamp)
+
+    arrivals, _ = eta.arrivals_for_stops(
+        [bus], nearby, lambda t: stops, timestamp, 8,
+        frequency_lookup=lambda t: True)
+
+    a = arrivals[stops[2]['stop_id']][0]
+    assert a['delay_seconds'] is None, a['delay_seconds']
+    # The arrival is untouched: 20 minutes of scheduled travel from stop 0 to
+    # stop 2, and the bus is reporting right now.
+    assert a['eta_seconds'] == 1200
+
+
+def test_arrivals_still_report_a_number_for_a_non_frequency_trip():
+    """The companion half: a scheduled trip must keep its measured delay."""
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+    late = _vehicle('SCHEDULED', 3.10, 101.70, day + 9 * 3600 + 180)
+
+    arrivals, _ = eta.arrivals_for_stops(
+        [late], nearby, lambda t: stops, now, 8,
+        frequency_lookup=lambda t: False)
+
+    a = arrivals[stops[2]['stop_id']][0]
+    assert a['delay_seconds'] == 180
+
+
+def test_the_frequency_flag_does_not_disturb_the_arrival():
+    """
+    Withholding the delay must change only what is *reported*. The measured
+    delay is still applied internally, because it is what makes the service-day
+    epoch cancel; dropping it would break the ETA on exactly the 99% of trips
+    this fix is for.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    timestamp = day + 11 * 3600 + 321
+    nearby = [dict(stops[2], distance_m=100.0)]
+    bus = _vehicle('B', 3.10, 101.70, timestamp)
+
+    with_flag, _ = eta.arrivals_for_stops(
+        [bus], nearby, lambda t: stops, timestamp, 8, frequency_lookup=lambda t: True)
+    without, _ = eta.arrivals_for_stops(
+        [bus], nearby, lambda t: stops, timestamp, 8, frequency_lookup=lambda t: False)
+
+    sid = stops[2]['stop_id']
+    assert with_flag[sid][0]['eta_seconds'] == without[sid][0]['eta_seconds']
+
+
+def test_arrivals_list_a_looping_trip_once_at_its_earliest_visit():
+    """
+    1,003 of 2,096 Rapid Bus KL trips (48%) revisit at least one stop_id, up to
+    8 times. One vehicle then matched the same stop at several indexes ahead of
+    it and produced two entries -- "~5 min" and "~48 min" -- reading as two
+    separate services and eating two of the three displayed slots. Keep only
+    the earliest arrival per (vehicle_id, stop_id).
+    """
+    # A loop: A -> B -> A -> B, so stop 'B' is reached twice from the start.
+    loop = [
+        {'stop_id': 'A', 'stop_name': 'A', 'stop_lat': 3.10, 'stop_lon': 101.70,
+         'arrival_seconds': 9 * 3600},
+        {'stop_id': 'B', 'stop_name': 'B', 'stop_lat': 3.20, 'stop_lon': 101.70,
+         'arrival_seconds': 9 * 3600 + 600},
+        {'stop_id': 'A', 'stop_name': 'A', 'stop_lat': 3.10, 'stop_lon': 101.70,
+         'arrival_seconds': 9 * 3600 + 1800},
+        {'stop_id': 'B', 'stop_name': 'B', 'stop_lat': 3.20, 'stop_lon': 101.70,
+         'arrival_seconds': 9 * 3600 + 2880},
+    ]
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [{'stop_id': 'B', 'stop_name': 'B', 'stop_lat': 3.20,
+               'stop_lon': 101.70, 'distance_m': 100.0}]
+    bus = _vehicle('LOOPER', 3.10, 101.70, now)
+
+    arrivals, _ = eta.arrivals_for_stops([bus], nearby, lambda t: loop, now, 8)
+
+    got = arrivals['B']
+    assert len(got) == 1, f"one bus listed {len(got)} times at one stop: {got}"
+    assert got[0]['eta_seconds'] == 600, "kept the later visit instead of the earliest"
+
+
+def test_arrivals_bucket_a_nan_trip_id_as_missing_not_as_unscheduled():
+    """
+    A pandas frame carries a missing trip_id as float NaN, and str(NaN) is the
+    perfectly plausible-looking trip_id 'nan' that no timetable contains. That
+    landed in trip_not_in_schedule, blaming the timetable for a vehicle that
+    never reported a trip at all.
+    """
+    stops = _timed_stops()
+    now = 1785427200 + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    def lookup(trip_id):
+        assert trip_id != 'nan', "the string 'nan' reached the timetable lookup"
+        return stops if trip_id == 'TRIP1' else []
+
+    nan_trip = _vehicle('NAN_TRIP', 3.10, 101.70, now, trip=float('nan'))
+
+    _, skipped = eta.arrivals_for_stops([nan_trip], nearby, lookup, now, 8)
+    assert skipped == {'no_trip_id': 1, 'trip_not_in_schedule': 0, 'bad_position': 0}
+
+
 def test_arrivals_with_no_vehicles_returns_empty_lists_per_stop():
     stops = _timed_stops()
     nearby = [dict(stops[2], distance_m=100.0)]
@@ -325,23 +610,27 @@ def test_arrivals_skips_a_bad_position_without_raising_and_keeps_good_vehicles()
     assert [a['vehicle_id'] for a in got] == ['GOOD']
 
 
-def test_arrivals_skips_an_unparseable_timestamp_without_raising():
+def test_arrivals_blames_the_clock_not_the_timetable_for_a_bad_timestamp():
     """
     A vehicle with a None or non-numeric timestamp must be counted rather
-    than raising or silently vanishing.
+    than raising or silently vanishing -- and counted under the *right*
+    reason. It was reported as 'trip_not_in_schedule', which the UI renders
+    as "on a trip missing from the timetable". The trip is present; the
+    clock is not readable. An omission explained wrongly is worse than an
+    unexplained one, which is the entire premise of these counters.
     """
     stops = _timed_stops()
-    day = 1785427200
-    now = day + 9 * 3600
+    now = 1785427200 + 9 * 3600
     nearby = [dict(stops[2], distance_m=100.0)]
 
     none_ts = _vehicle('NONE_TS', 3.10, 101.70, None)
     junk_ts = _vehicle('JUNK_TS', 3.10, 101.70, 'not-a-timestamp')
 
+    # The lookup resolves the trip, proving the timetable is not the problem.
     arrivals, skipped = eta.arrivals_for_stops(
         [none_ts, junk_ts], nearby, lambda t: stops, now, 8)
 
-    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 2, 'bad_position': 0}
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 2}
     assert arrivals[stops[2]['stop_id']] == []
 
 
