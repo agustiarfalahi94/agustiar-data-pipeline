@@ -167,6 +167,22 @@ def _tip_html(label, value):
     return f"<b>{html.escape(str(label))}:</b> {html.escape(str(value))}"
 
 
+def _picked_stop_id(selection):
+    """
+    The tapped stop's id, or None.
+
+    Mirrors the vehicle path exactly, including coercing to str before the id
+    can meet a pandas comparison and a broad except for a payload that does not
+    match the assumed shape.
+    """
+    try:
+        objects = selection.selection.objects.get("nearby-stops", [])
+        raw = objects[0].get("stop_id") if objects else None
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return None
+    return str(raw) if isinstance(raw, (str, int)) else None
+
+
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
     """
     Generate arrow path geometry for pydeck PathLayer
@@ -665,7 +681,7 @@ def show():
                 get_radius=40,
                 radius_min_pixels=5,
                 radius_max_pixels=10,
-                pickable=False,
+                pickable=True,
             )
 
     # ===== ADD USER LOCATION MARKER TO MAP =====
@@ -772,6 +788,16 @@ def show():
         st.session_state['selected_vehicle_id'] = picked
     else:
         picked = st.session_state.get('selected_vehicle_id')
+
+    # Last tap wins. Without this the slot below the map could hold a bus panel
+    # and a stop panel at once, each answering a question the user did not ask
+    # most recently.
+    picked_stop = _picked_stop_id(selection)
+    if picked is not None:
+        st.session_state['selected_stop_id'] = None
+    elif picked_stop is not None:
+        st.session_state['selected_stop_id'] = picked_stop
+    selected_stop_id = st.session_state.get('selected_stop_id')
 
     if picked:
         if st.button("✕ Clear bus selection", key="clear_vehicle_selection"):
@@ -882,6 +908,51 @@ def show():
                                 f"{round(age / 60)} min ago")
                         st.info("  \n".join(body))
                         st.caption(ARRIVAL_ACCURACY_NOTE)
+
+    loc = st.session_state.get('user_location')
+    if selected_stop_id and _nearby_stops and agency_slug and loc:
+        stop = next((s for s in _nearby_stops
+                     if s['stop_id'] == selected_stop_id), None)
+        if stop is None:
+            # The user walked out of range of a stop they had selected.
+            st.session_state['selected_stop_id'] = None
+        else:
+            walk = walking.walk_times(
+                loc['lat'], loc['lon'], [stop], agency_slug,
+                api_key=_ors_api_key())[stop['stop_id']]
+            body = [f"📍 **{stop['stop_name']}**",
+                    f"~{int(walk['distance_m'])} m · {_walk_label(walk)}"]
+
+            arrivals, _ = eta.arrivals_for_stops(
+                df_map.to_dict('records'), [stop],
+                lambda t: gtfs_static.get_trip_stops(agency_slug, t),
+                int(time.time()), UTC_OFFSET_HOURS,
+                headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
+                frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
+            )
+            rows = arrivals.get(stop['stop_id'], [])
+            if rows:
+                body += [format_arrival(r) for r in rows]
+            else:
+                # A route search narrowed df_map before this panel looked, so
+                # with one active the only honest claim is about that route.
+                body.append(
+                    f"No bus matching '{filter_label}' is currently en route "
+                    f"to this stop"
+                    if filter_active else
+                    "No bus is currently en route to this stop"
+                )
+            st.info("  \n".join(body))
+            st.caption(ARRIVAL_ACCURACY_NOTE)
+            if st.button("Clear stop selection"):
+                st.session_state['selected_stop_id'] = None
+                # Bump the widget key so Streamlit stops handing back the stale
+                # payload. Without it, clearing appears to do nothing whenever
+                # the deck spec is unchanged between renders — the same bug
+                # that made "Clear bus selection" inert.
+                st.session_state['deck_generation'] = (
+                    st.session_state.get('deck_generation', 0) + 1)
+                st.rerun()
 
     # While a search is filtering the frame, len(df_map) is the match count, not
     # the region total — the success banner above already states it, so don't

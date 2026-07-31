@@ -2285,3 +2285,41 @@ def test_tip_html_escapes_a_name_that_would_break_the_markup():
 def test_tip_html_labels_the_value():
     from app_pages import live_map
     assert live_map._tip_html('Stop', 'KL2324') == '<b>Stop:</b> KL2324'
+
+
+class _Sel:
+    """Minimal stand-in for a Streamlit pydeck selection payload."""
+    def __init__(self, objects):
+        self.selection = type('S', (), {'objects': objects})()
+
+
+def test_picked_stop_id_reads_the_stops_layer():
+    from app_pages import live_map
+    sel = _Sel({'nearby-stops': [{'stop_id': 'KL2324'}]})
+    assert live_map._picked_stop_id(sel) == 'KL2324'
+
+
+def test_picked_stop_id_ignores_a_vehicle_pick():
+    from app_pages import live_map
+    sel = _Sel({'vehicles': [{'vehicle_id': 'BUS1'}]})
+    assert live_map._picked_stop_id(sel) is None
+
+
+def test_picked_stop_id_is_none_for_an_empty_selection():
+    from app_pages import live_map
+    assert live_map._picked_stop_id(_Sel({})) is None
+
+
+def test_picked_stop_id_coerces_a_non_string_id():
+    from app_pages import live_map
+    # A non-string id reaching a pandas comparison against an Arrow-backed
+    # column raises NotImplementedError and takes the whole page down.
+    sel = _Sel({'nearby-stops': [{'stop_id': 2324}]})
+    assert live_map._picked_stop_id(sel) == '2324'
+
+
+def test_picked_stop_id_survives_an_unexpected_payload_shape():
+    from app_pages import live_map
+    assert live_map._picked_stop_id(_Sel({'nearby-stops': [{}]})) is None
+    assert live_map._picked_stop_id(_Sel({'nearby-stops': 'not a list'})) is None
+    assert live_map._picked_stop_id(object()) is None
