@@ -1,3 +1,4 @@
+import html
 import time
 import streamlit as st
 import pydeck as pdk
@@ -154,6 +155,16 @@ def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
     if age and age > fresh_seconds:
         line += f" · position {round(age / 60)} min old"
     return line
+
+
+def _tip_html(label, value):
+    """
+    One labelled line of tooltip markup, with the value escaped.
+
+    Stop and route names come from third-party feeds and go straight into HTML
+    the browser renders.
+    """
+    return f"<b>{html.escape(str(label))}:</b> {html.escape(str(value))}"
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
@@ -533,9 +544,19 @@ def show():
     #
     # Hence: stable ids everywhere, and each layer is handed only the columns
     # it actually draws or shows in its tooltip.
+    # Each row carries its own rendered tooltip. A single Deck-level template
+    # can only name fields of one layer, and pydeck prints unmatched keys
+    # literally — so a shared vehicle template made every other layer
+    # unpickable. Per-row markup lets stops be tapped without touching this.
+    df_map['tip_html'] = (
+        df_map['vehicle_id'].map(lambda v: _tip_html('Vehicle', v))
+        + '<br/>' + df_map['route_display'].map(lambda v: _tip_html('Route', v))
+        + '<br/>' + df_map['speed_display'].map(lambda v: _tip_html('Speed', str(v) + ' km/h'))
+        + '<br/>' + df_map['bearing_display'].map(lambda v: _tip_html('Bearing', str(v) + '°'))
+        + '<br/>' + df_map['last_report_display'].map(lambda v: _tip_html('Last reported', v))
+    )
     vehicle_columns = [
-        'longitude', 'latitude', 'dot_color', 'vehicle_id', 'route_display',
-        'speed_display', 'bearing_display', 'last_report_display',
+        'longitude', 'latitude', 'dot_color', 'vehicle_id', 'tip_html',
     ]
     vehicle_data = df_map[[c for c in vehicle_columns if c in df_map.columns]].copy()
 
@@ -627,9 +648,12 @@ def show():
             stops_layer = pdk.Layer(
                 "ScatterplotLayer",
                 id="nearby-stops",
-                data=[{'stop_name': s['stop_name'],
+                data=[{'stop_id': s['stop_id'],
+                       'stop_name': s['stop_name'],
                        'stop_lat': s['stop_lat'],
-                       'stop_lon': s['stop_lon']} for s in _nearby_stops],
+                       'stop_lon': s['stop_lon'],
+                       'tip_html': _tip_html('Stop', s['stop_name'])}
+                      for s in _nearby_stops],
                 get_position=['stop_lon', 'stop_lat'],
                 # Hollow rings, not dots: buses are filled circles, so a stop
                 # must differ in shape and not only in colour — a smaller
@@ -700,7 +724,7 @@ def show():
             initial_view_state=view_state,
             layers=layers,
             tooltip={
-                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°<br/><b>Last reported:</b> {last_report_display}",
+                "html": "{tip_html}",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
         ),

@@ -1574,8 +1574,11 @@ def test_the_deck_data_excludes_columns_recomputed_every_render(monkeypatch):
         "a per-second relative age is back in the deck data"
     assert 'age_seconds' not in columns and 'timestamp' not in columns, \
         f"the deck carries more than the layer draws: {sorted(columns)}"
-    # It still carries what the tooltip actually shows.
-    assert {'vehicle_id', 'route_display', 'last_report_display'} <= columns
+    # It still carries what the tooltip actually shows — now pre-rendered into
+    # one field, per row, shared with every other layer's tooltip.
+    assert {'vehicle_id', 'tip_html'} <= columns
+    assert 'Route' in vehicles.data[0]['tip_html']
+    assert 'Last reported' in vehicles.data[0]['tip_html']
 
 
 def test_tapped_vehicle_filtered_out_is_distinguished_from_genuinely_gone(monkeypatch):
@@ -2267,3 +2270,18 @@ def test_arrival_row_survives_a_missing_route_display():
     from app_pages import live_map
     line = live_map.format_arrival(_arrival(route_display=''))
     assert line.startswith('Route —')
+
+
+def test_tip_html_escapes_a_name_that_would_break_the_markup():
+    # Stop names come from a third-party feed. One containing < or & must not
+    # be able to inject markup into the tooltip.
+    from app_pages import live_map
+    out = live_map._tip_html('Stop', 'A & B <Terminal>')
+    assert '&amp;' in out
+    assert '&lt;Terminal&gt;' in out
+    assert '<Terminal>' not in out
+
+
+def test_tip_html_labels_the_value():
+    from app_pages import live_map
+    assert live_map._tip_html('Stop', 'KL2324') == '<b>Stop:</b> KL2324'
