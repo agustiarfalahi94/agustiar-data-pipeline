@@ -2188,3 +2188,82 @@ def test_get_route_parts_rereads_when_the_zip_is_refreshed(tmp_path, monkeypatch
     current['mtime'] = 2000.0
     assert gtfs_static.get_route_parts('kl', 'T5800')['long'] == (
         'Awan Besar ~ Bandar Malaysia'), "served a superseded routes.txt"
+
+
+def _arrival(**kw):
+    base = {'route_display': 'T580', 'headsign': 'Awan Besar',
+            'eta_seconds': 360, 'delay_seconds': None, 'age_seconds': 0}
+    base.update(kw)
+    return base
+
+
+def test_arrival_row_labels_the_route_so_a_place_name_cannot_be_mistaken():
+    from app_pages import live_map
+    # PAVILION BUKIT JALIL is both a route name and a shopping mall. Without
+    # the word "Route" there is nothing to tell a reader which it is.
+    line = live_map.format_arrival(
+        _arrival(route_display='PAVBJ', headsign='Pavilion Bukit Jalil'))
+    assert line.startswith('Route PAVBJ')
+    assert '→ Pavilion Bukit Jalil' in line
+
+
+def test_arrival_row_states_the_arrival():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(eta_seconds=360))
+    assert 'arrives' in line
+    assert '~6 min' in line
+
+
+def test_arrival_row_is_one_line():
+    from app_pages import live_map
+    line = live_map.format_arrival(
+        _arrival(delay_seconds=120, age_seconds=180))
+    assert '\n' not in line
+
+
+def test_arrival_row_omits_the_headsign_when_there_is_none():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(headsign=''))
+    assert '→' not in line
+    assert line.startswith('Route T580')
+
+
+def test_arrival_row_states_lateness_when_it_is_knowable():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(delay_seconds=120))
+    assert '2 min late' in line
+
+
+def test_arrival_row_says_nothing_at_all_when_lateness_is_unknowable():
+    from app_pages import live_map
+    # None means the trip runs to a headway and has no published start time to
+    # be late against. It is never zero and never "on time"; it is silence.
+    line = live_map.format_arrival(_arrival(delay_seconds=None))
+    assert 'late' not in line
+    assert 'on time' not in line
+    assert '0 min' not in line
+
+
+def test_arrival_row_does_not_call_a_punctual_bus_late():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(delay_seconds=0))
+    assert 'late' not in line
+
+
+def test_arrival_row_flags_a_stale_position_without_hedging_prose():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(age_seconds=180), fresh_seconds=60)
+    assert 'position 3 min old' in line
+    assert 'less certain' not in line
+
+
+def test_arrival_row_stays_quiet_about_a_fresh_position():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(age_seconds=30), fresh_seconds=60)
+    assert 'position' not in line
+
+
+def test_arrival_row_survives_a_missing_route_display():
+    from app_pages import live_map
+    line = live_map.format_arrival(_arrival(route_display=''))
+    assert line.startswith('Route —')

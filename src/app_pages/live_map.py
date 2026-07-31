@@ -136,11 +136,15 @@ def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
 
     A delay of None means "not knowable" — the trip runs to a headway rather
     than to the clock — and is stated as nothing at all, never as zero.
+
+    "Route" is unconditional. Rapid KL names routes after places — PAVILION
+    BUKIT JALIL is a route and a mall — so without the label a reader cannot
+    tell which fact they are looking at.
     """
-    line = f"{arrival.get('route_display') or '—'}"
+    line = f"Route {arrival.get('route_display') or '—'}"
     if arrival.get('headsign'):
         line += f" → {arrival['headsign']}"
-    line += f" · **~{max(1, round(arrival['eta_seconds'] / 60))} min**"
+    line += f" · arrives **~{max(1, round(arrival['eta_seconds'] / 60))} min**"
 
     delay = arrival.get('delay_seconds')
     if delay is not None and delay >= 60:
@@ -148,7 +152,7 @@ def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
 
     age = arrival.get('age_seconds')
     if age and age > fresh_seconds:
-        line += f" · position {round(age / 60)} min old, so less certain"
+        line += f" · position {round(age / 60)} min old"
     return line
 
 
