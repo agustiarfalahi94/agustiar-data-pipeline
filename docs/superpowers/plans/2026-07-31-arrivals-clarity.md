@@ -405,14 +405,17 @@ def format_route_heading(parts, fallback=''):
     answers that; the repetition itself is in the source data and is not ours
     to strip.
 
-    The path line is omitted when it adds nothing, i.e. when it is identical
-    to the short name.
+    The path line is omitted when it adds nothing: when it is identical to the
+    short name, and when there is no short name at all — a feed that sets only
+    route_long_name would otherwise promote it to the Route line and then print
+    it again as the path, which is the very duplication this function exists to
+    remove.
     """
     short = (parts or {}).get('short') or ''
     long_ = (parts or {}).get('long') or ''
     name = short or long_ or fallback or '—'
-    lines = [f"**Route:** {name}"]
-    if long_ and long_ != short:
+    lines = [f"**Route:** {name.replace('~', '↔')}"]
+    if short and long_ and long_ != short:
         lines.append(f"**Runs:** {long_.replace('~', '↔')}")
     return lines
 ```
