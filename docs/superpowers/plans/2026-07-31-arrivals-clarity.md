@@ -123,7 +123,11 @@ def get_route_parts(agency_slug: str, route_id: str) -> dict:
 In `src/utils/eta.py`, inside the dict appended to `arrivals[sid]`, add after the `route_display` entry:
 
 ```python
-                'route_id': str(v.get('route_id') or ''),
+                # Guard NaN as trip_id above does: a pandas NaN is truthy, so
+                # `NaN or ''` is NaN and str(NaN) is 'nan' — a bogus, non-empty
+                # id. df_map.to_dict('records') produces exactly that shape for
+                # a missing value. Mirror trip_id's guard, including .strip().
+                'route_id': <same NaN-guarded coercion trip_id uses>,
 ```
 
 - [ ] **Step 5: Run the tests**
