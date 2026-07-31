@@ -1796,3 +1796,49 @@ def test_format_route_heading_does_not_repeat_a_long_name_with_no_short_name():
         fallback='S6060',
     )
     assert lines == ['**Route:** Stesen LRT Awan Besar ↔ Pavilion Bukit Jalil']
+
+
+def test_nearby_stops_layer_has_a_stable_explicit_id(monkeypatch):
+    """An unnamed pdk.Layer takes a fresh uuid each render, which churns the
+    deck spec hash and breaks map selection. Every layer must be named."""
+    import pydeck as pdk
+    from app_pages import live_map
+
+    made = []
+    real_layer = pdk.Layer
+
+    def recording_layer(*a, **k):
+        made.append(k.get('id'))
+        return real_layer(*a, **k)
+
+    monkeypatch.setattr(live_map.pdk, 'Layer', recording_layer)
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map_mod, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.0586, 'lon': 101.6739,
+                                              'accuracy': 10}
+    monkeypatch.setattr(live_map_mod.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'A STOP',
+                                          'stop_lat': 3.0586, 'stop_lon': 101.6739,
+                                          'distance_m': 50.0}])
+    live_map_mod.show()
+
+    assert None not in made, "a pydeck layer was created without an explicit id"
+    assert 'nearby-stops' in made
+
+
+def test_stop_names_link_to_google_maps(monkeypatch):
+    from app_pages import live_map
+
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map_mod, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.0586, 'lon': 101.6739,
+                                              'accuracy': 10}
+    monkeypatch.setattr(live_map_mod.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'A STOP',
+                                          'stop_lat': 3.058659, 'stop_lon': 101.673981,
+                                          'distance_m': 50.0}])
+    live_map_mod.show()
+
+    said = _texts(st_stub.markdown)
+    assert 'maps.google.com' in said or 'google.com/maps' in said
+    assert '3.058659,101.673981' in said

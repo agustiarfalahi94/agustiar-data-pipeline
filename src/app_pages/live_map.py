@@ -545,8 +545,32 @@ def show():
         pitch=st.session_state.map_view_state['pitch'],
     )
 
+    # Nearby stops, drawn beneath the vehicles. Only static columns reach the
+    # layer: a per-render-volatile field here would churn the deck spec hash
+    # and break map selection, as it did in 2.5.0.
+    stops_layer = None
+    _loc = st.session_state.get('user_location')
+    if _loc and agency_slug:
+        _stops = gtfs_static.get_stops_near(
+            agency_slug, _loc['lat'], _loc['lon'],
+            radius_m=NEARBY_STOP_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
+        if _stops:
+            stops_layer = pdk.Layer(
+                "ScatterplotLayer",
+                id="nearby-stops",
+                data=[{'stop_name': s['stop_name'],
+                       'stop_lat': s['stop_lat'],
+                       'stop_lon': s['stop_lon']} for s in _stops],
+                get_position=['stop_lon', 'stop_lat'],
+                get_fill_color=[255, 200, 60, 180],
+                get_radius=40,
+                radius_min_pixels=4,
+                radius_max_pixels=9,
+                pickable=False,
+            )
+
     # ===== ADD USER LOCATION MARKER TO MAP =====
-    layers = [icon_layer, arrow_layer]
+    layers = ([stops_layer] if stops_layer else []) + [icon_layer, arrow_layer]
     
     if 'user_location' in st.session_state and st.session_state.user_location:
         user_loc = st.session_state.user_location
@@ -805,9 +829,13 @@ def show():
                 any_arrival = bool(served)
                 for stop in shown:
                     walk = eta.walking_minutes(stop['distance_m'])
+                    maps_url = (
+                        "https://www.google.com/maps/search/?api=1&query="
+                        f"{stop['stop_lat']},{stop['stop_lon']}"
+                    )
                     st.markdown(
-                        f"**{stop['stop_name']}** · ~{int(stop['distance_m'])} m "
-                        f"· ~{walk} min walk"
+                        f"**[{stop['stop_name']}]({maps_url})** "
+                        f"· ~{int(stop['distance_m'])} m · ~{walk} min walk"
                     )
                     rows = arrivals.get(stop['stop_id'], [])
                     if not rows:
