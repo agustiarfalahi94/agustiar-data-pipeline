@@ -43,6 +43,28 @@ GRID_DEGREES = 0.0005
 CACHE_TTL_SECONDS = 86400       # footpaths do not move
 REQUEST_TIMEOUT = 5             # this call sits inside a page render
 
+# How long to stop asking after a failed lookup.
+#
+# This is not the negative caching that was deliberately rejected. Caching a
+# *fallback distance* for CACHE_TTL_SECONDS would pin a degraded answer to a
+# stop for a day after one transient blip; that remains forbidden, and no
+# fallback is ever written to _WALK_CACHE. This only suppresses the *request*
+# for a minute, and the fallback is recomputed fresh on every render meanwhile.
+#
+# The alternative to a long negative cache is a short one, not none. With
+# auto-refresh on, a render happens every 20 seconds and issues up to two
+# lookups at REQUEST_TIMEOUT each — so an ORS outage, an exhausted quota, or
+# ordinary mobile flakiness meant up to 10 s of blocking I/O in the Streamlit
+# script thread three times a minute, and a 429 became a tight retry loop
+# against an endpoint that was rate-limiting us precisely to stop that. This
+# app is phone-first on mobile data; that is the common degraded case, not an
+# exotic one. Sixty seconds is short enough that recovery is still felt as
+# immediate and long enough that three renders out of every four cost nothing.
+FAIL_BACKOFF_SECONDS = 60
+
+# Wall-clock time before which no request is attempted. Reset by _clear_cache().
+_FAIL_UNTIL = 0.0
+
 # (snapped_lat, snapped_lon, agency_slug, stop_id) -> (stored_at, routed_m)
 # Module-level dict, following _TRIP_INDEX_MTIME in gtfs_static.py. The repo
 # uses no Streamlit caching and this introduces none.
@@ -55,8 +77,10 @@ _WALK_CACHE = {}
 
 
 def _clear_cache():
-    """Drop every cached lookup. For tests."""
+    """Drop every cached lookup and any failure backoff. For tests."""
+    global _FAIL_UNTIL
     _WALK_CACHE.clear()
+    _FAIL_UNTIL = 0.0
 
 
 def _now():
@@ -89,7 +113,12 @@ def _routed_distances(user_lat, user_lon, stops, agency_slug, api_key):
     purpose — a network error, a rejected key, an exhausted quota, a changed
     response shape and unparseable JSON are all the same event here, and none
     of them may raise into a Streamlit render.
+
+    A failure also stops the next FAIL_BACKOFF_SECONDS of requests; see the
+    constant for why a short suppression is not the negative caching that was
+    rejected.
     """
+    global _FAIL_UNTIL
     glat, glon = _snap(user_lat), _snap(user_lon)
     now = _now()
 
@@ -103,6 +132,11 @@ def _routed_distances(user_lat, user_lon, stops, agency_slug, api_key):
             missing.append(stop)
 
     if not missing or not api_key:
+        return found
+
+    # Still inside the backoff window from a recent failure. Cached stops were
+    # already served above; the rest fall back without touching the network.
+    if now < _FAIL_UNTIL:
         return found
 
     locations = [[user_lon, user_lat]]
@@ -122,14 +156,17 @@ def _routed_distances(user_lat, user_lon, stops, agency_slug, api_key):
             timeout=REQUEST_TIMEOUT,
         )
         if response.status_code != 200:
+            _FAIL_UNTIL = _now() + FAIL_BACKOFF_SECONDS
             return found
         row = response.json()['distances'][0]
     except Exception:
+        _FAIL_UNTIL = _now() + FAIL_BACKOFF_SECONDS
         return found
 
     # Results map back to stops positionally, so a row of the wrong length
     # cannot be trusted at all — discarding it beats guessing an alignment.
     if not isinstance(row, list) or len(row) != len(missing):
+        _FAIL_UNTIL = _now() + FAIL_BACKOFF_SECONDS
         return found
 
     # Only a successful lookup is cached. Caching a fallback would pin a

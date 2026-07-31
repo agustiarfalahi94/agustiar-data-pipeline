@@ -251,7 +251,9 @@ def test_expired_cache_is_refetched(monkeypatch):
 
 def test_a_failed_lookup_is_not_cached(monkeypatch):
     # Caching a fallback would pin a degraded answer in place for a day
-    # after a transient blip.
+    # after a transient blip. The one-minute request backoff below is a
+    # different thing: it suppresses the *request*, not the answer, so once it
+    # lapses the stop is routed properly rather than served a stored estimate.
     calls = {'n': 0}
 
     def flaky(*a, **k):
@@ -261,10 +263,95 @@ def test_a_failed_lookup_is_not_cached(monkeypatch):
     monkeypatch.setattr(walking.requests, 'post', flaky)
     stops = _stops(('a', 60))
     first = walking.walk_times(3.0586, 101.6739, stops, 'slug', api_key='k')
+    monkeypatch.setattr(walking, '_now',
+                        lambda: time.time() + walking.FAIL_BACKOFF_SECONDS + 1)
     second = walking.walk_times(3.0586, 101.6739, stops, 'slug', api_key='k')
     assert first['a']['routed'] is False
     assert second['a']['routed'] is True
     assert calls['n'] == 2
+
+
+# ── failure backoff ─────────────────────────────────────────────────────────
+
+def test_a_failure_stops_the_next_request_but_still_estimates(monkeypatch):
+    # Auto-refresh renders every 20 s and each render can issue two lookups at
+    # REQUEST_TIMEOUT apiece. Retrying immediately through an ORS outage or a
+    # 429 means blocking the script thread for up to 10 s, three times a
+    # minute, against an endpoint that is rate-limiting us to stop exactly
+    # that. The estimate must still come back.
+    calls = {'n': 0}
+
+    def failing(*a, **k):
+        calls['n'] += 1
+        return _Resp(429)
+
+    monkeypatch.setattr(walking.requests, 'post', failing)
+    stops = _stops(('a', 240))
+    walking.walk_times(3.0586, 101.6739, stops, 'slug', api_key='k')
+    out = walking.walk_times(3.0586, 101.6739, stops, 'slug', api_key='k')
+
+    assert calls['n'] == 1, "a second request was made inside the backoff window"
+    assert out['a']['routed'] is False
+    assert out['a']['minutes'] == walking.estimate_minutes(240)
+
+
+def test_the_backoff_applies_to_a_different_place_too(monkeypatch):
+    # The endpoint is down, not the stop. Keying the backoff per location would
+    # let a walk of a few metres restart the retry loop.
+    calls = {'n': 0}
+
+    def failing(*a, **k):
+        calls['n'] += 1
+        raise walking.requests.RequestException('no network')
+
+    monkeypatch.setattr(walking.requests, 'post', failing)
+    walking.walk_times(3.0586, 101.6739, _stops(('a', 240)), 'slug', api_key='k')
+    walking.walk_times(3.0900, 101.7000, _stops(('b', 240)), 'slug', api_key='k')
+    assert calls['n'] == 1
+
+
+def test_the_backoff_lapses_and_routing_is_retried(monkeypatch):
+    # Sixty seconds, not a day: recovery must still feel immediate.
+    calls = {'n': 0}
+
+    def flaky(*a, **k):
+        calls['n'] += 1
+        return _Resp(500) if calls['n'] == 1 else _ok([634.0])
+
+    monkeypatch.setattr(walking.requests, 'post', flaky)
+    stops = _stops(('a', 60))
+    walking.walk_times(3.0586, 101.6739, stops, 'slug', api_key='k')
+    monkeypatch.setattr(walking, '_now',
+                        lambda: time.time() + walking.FAIL_BACKOFF_SECONDS + 1)
+    out = walking.walk_times(3.0586, 101.6739, stops, 'slug', api_key='k')
+
+    assert calls['n'] == 2
+    assert out['a']['routed'] is True
+    assert out['a']['distance_m'] == 634.0
+
+
+def test_cached_stops_are_still_served_during_the_backoff(monkeypatch):
+    # The backoff suppresses requests, not answers. A stop routed before the
+    # outage keeps its real distance throughout it.
+    monkeypatch.setattr(walking.requests, 'post', lambda *a, **k: _ok([634.0]))
+    walking.walk_times(3.0586, 101.6739, _stops(('a', 60)), 'slug', api_key='k')
+
+    calls = {'n': 0}
+
+    def failing(*a, **k):
+        calls['n'] += 1
+        return _Resp(503)
+
+    monkeypatch.setattr(walking.requests, 'post', failing)
+    # 'z' is uncached, so this request is made and fails, arming the backoff.
+    walking.walk_times(3.0586, 101.6739, _stops(('a', 60), ('z', 300)),
+                       'slug', api_key='k')
+    out = walking.walk_times(3.0586, 101.6739, _stops(('a', 60), ('z', 300)),
+                             'slug', api_key='k')
+
+    assert calls['n'] == 1
+    assert out['a']['routed'] is True and out['a']['distance_m'] == 634.0
+    assert out['z']['routed'] is False
 
 
 def test_only_stops_missing_from_the_cache_are_requested(monkeypatch):
