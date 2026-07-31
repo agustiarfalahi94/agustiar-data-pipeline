@@ -35,6 +35,7 @@ config.py
 secrets.py
 .env
 .env.local
+.streamlit/secrets.toml
 
 # Data Directories
 data/raw/
