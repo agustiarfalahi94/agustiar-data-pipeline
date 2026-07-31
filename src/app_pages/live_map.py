@@ -589,7 +589,13 @@ def show():
     picked = None
     try:
         objects = selection.selection.objects.get("vehicles", [])
-        picked = objects[0].get("vehicle_id") if objects else None
+        raw = objects[0].get("vehicle_id") if objects else None
+        # Coerce to str before it ever meets a pandas comparison below. A
+        # non-string id against an Arrow-backed string column raises
+        # NotImplementedError rather than comparing false, so an unexpected
+        # payload type would take the whole page down instead of matching
+        # nothing.
+        picked = str(raw) if isinstance(raw, (str, int)) else None
     except (AttributeError, KeyError, IndexError, TypeError):
         picked = None
 

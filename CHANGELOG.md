@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-07-31
+
+### Fixed
+- **Three tests passed locally and failed on CI**, breaking the build on `main`. The page stub let
+  `st.pydeck_chart` return a bare `MagicMock`, so the selection parsing produced a `MagicMock`
+  vehicle id which reached `df_map['vehicle_id'] == picked`. Whether that survives depends on the
+  pandas string dtype: an object-dtype column quietly compares `False`, an Arrow-backed one raises
+  `NotImplementedError`. Local pandas infers object, CI infers Arrow. The stub now defaults to
+  "nothing selected", and the suite is verified green under both dtype regimes
+- The selection id is now coerced to a string before it meets that comparison, so an unexpected
+  payload type from Streamlit matches nothing instead of taking the page down
+
 ## [2.5.0] - 2026-07-31
 
 ### Added

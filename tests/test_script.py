@@ -998,6 +998,16 @@ def _stub_streamlit(monkeypatch, module):
     st_stub = MagicMock()
     st_stub.session_state = _SessionState(auto_refresh=False)
     st_stub.button.return_value = False        # no refresh click
+    # Default to "nothing selected". Without this, pydeck_chart returns a bare
+    # MagicMock, the selection parsing yields a MagicMock vehicle id, and that
+    # reaches `df_map['vehicle_id'] == picked`. Whether that is survivable
+    # depends on the pandas string dtype: object dtype quietly returns False,
+    # but an Arrow-backed string column raises NotImplementedError. Locally
+    # pandas infers object and the tests passed; on CI it infers Arrow and three
+    # of them failed. Tests that want a selection supply their own payload.
+    st_stub.pydeck_chart.return_value = SimpleNamespace(
+        selection=SimpleNamespace(objects={})
+    )
     monkeypatch.setattr(module, 'st', st_stub)
     monkeypatch.setattr(module, 'fetch_and_store_transit_data', lambda *a, **k: None)
     return st_stub
