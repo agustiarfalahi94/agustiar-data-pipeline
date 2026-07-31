@@ -1288,10 +1288,21 @@ def test_arrivals_panel_reports_when_no_stops_are_nearby(monkeypatch):
 # parsing and rendering logic is exercised, both when something is picked and
 # when nothing is.
 
-def _live_map_with_selection(monkeypatch, selection_payload):
+def _live_map_with_selection(monkeypatch, selection_payload, df=None):
     """Like _live_map_with_one_region, but wires st.pydeck_chart to return a
     caller-supplied selection object, and hands back the vehicle's fixed
-    timestamp so a test can build a matching timetable for it."""
+    timestamp so a test can build a matching timetable for it.
+
+    Freezes the clock live_map sees (monkeypatches live_map.time.time) so the
+    frozen `now` returned here and show()'s own `int(time.time())` calls read
+    identically. Without this, a margin between the two reads is
+    load-bearing — the same off-by-a-tick shape already fixed elsewhere in
+    this file for test_sync_time_is_never_in_the_future.
+
+    Pass `df` to control exactly which vehicles are in df_live/df_map (e.g.
+    to build a vehicle that is live but filtered out of the drawn frame);
+    the default is a single fresh vehicle, 'V1'.
+    """
     from app_pages import live_map
 
     st_stub = _stub_streamlit(monkeypatch, live_map)
@@ -1307,16 +1318,19 @@ def _live_map_with_selection(monkeypatch, selection_payload):
     st_stub.pydeck_chart.return_value = selection_payload
 
     now = int(time.time())
-    df = pd.DataFrame({
-        'region': ['Rapid Bus KL'], 'vehicle_id': ['V1'],
-        'latitude': [3.14], 'longitude': [101.68], 'bearing': [90.0],
-        'speed': [10.0], 'timestamp': [now],
-        'trip_id': ['T1'], 'route_id': ['T5800'],
-        'freshness': ['fresh'], 'age_seconds': [5],
-    })
+    monkeypatch.setattr(live_map.time, 'time', lambda: float(now))
+
+    if df is None:
+        df = pd.DataFrame({
+            'region': ['Rapid Bus KL'], 'vehicle_id': ['V1'],
+            'latitude': [3.14], 'longitude': [101.68], 'bearing': [90.0],
+            'speed': [10.0], 'timestamp': [now],
+            'trip_id': ['T1'], 'route_id': ['T5800'],
+            'freshness': ['fresh'], 'age_seconds': [5],
+        })
     monkeypatch.setattr(
         live_map.db, 'get_live_data_optimized',
-        lambda *a, **k: (df, {'total': 1, 'stale': 0, 'hidden': 0,
+        lambda *a, **k: (df, {'total': len(df), 'stale': 0, 'hidden': 0,
                               'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'),
     )
     return live_map, st_stub, now
@@ -1360,3 +1374,72 @@ def test_tapped_vehicle_with_no_selection_renders_nothing(monkeypatch):
 
     said = _texts(st_stub.success)
     assert 'reaches' not in said, "no vehicle was tapped, so no arrival should render"
+
+
+def test_tapped_vehicle_filtered_out_is_distinguished_from_genuinely_gone(monkeypatch):
+    """
+    Pins the fix for a real bug: df_map has already been through the region,
+    freshness, and route-search filters, so a selection that survives from
+    before one of those changed could point at a vehicle that is still live
+    in df_live but simply not in the currently-drawn df_map. That must never
+    read as "no longer reporting" — a live bus is not gone.
+
+    Two vehicles are seeded: V-HIDDEN (freshness='hidden', filtered out of
+    df_map but present in df_live) and V-FRESH (keeps df_map non-empty past
+    the early-return). Tapping V-HIDDEN must produce the "still reporting,
+    but is not shown" wording and must NOT say "no longer reporting".
+    Tapping V-GONE (absent from both frames) is the companion case, and must
+    say "no longer reporting" — asserting only one half of this pair could
+    pass for the wrong reason (e.g. a message that never mentions "no longer
+    reporting" for anyone).
+    """
+    now = int(time.time())
+    df = pd.DataFrame({
+        'region': ['Rapid Bus KL', 'Rapid Bus KL'],
+        'vehicle_id': ['V-HIDDEN', 'V-FRESH'],
+        'latitude': [3.14, 3.15], 'longitude': [101.68, 101.69],
+        'bearing': [90.0, 90.0], 'speed': [10.0, 10.0],
+        'timestamp': [now, now], 'trip_id': ['T1', 'T2'],
+        'route_id': ['T5800', 'T5801'],
+        'freshness': ['hidden', 'fresh'], 'age_seconds': [5000, 5],
+    })
+
+    # -- tap the filtered-but-live vehicle --
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V-HIDDEN"}]})
+    )
+    live_map, st_stub, _ = _live_map_with_selection(monkeypatch, selection, df=df)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert 'still reporting, but is not shown in the current view' in said, (
+        f"expected the filtered-but-live wording, got: {said!r}"
+    )
+    assert 'no longer reporting' not in said, (
+        f"a live vehicle must never be reported as no longer reporting: {said!r}"
+    )
+
+
+def test_tapped_vehicle_absent_from_both_frames_says_no_longer_reporting(monkeypatch):
+    """Companion to the test above: a vehicle_id in neither df_live nor
+    df_map is genuinely gone, and must still say so."""
+    now = int(time.time())
+    df = pd.DataFrame({
+        'region': ['Rapid Bus KL'], 'vehicle_id': ['V-FRESH'],
+        'latitude': [3.15], 'longitude': [101.69], 'bearing': [90.0],
+        'speed': [10.0], 'timestamp': [now], 'trip_id': ['T2'],
+        'route_id': ['T5801'], 'freshness': ['fresh'], 'age_seconds': [5],
+    })
+
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V-GONE"}]})
+    )
+    live_map, st_stub, _ = _live_map_with_selection(monkeypatch, selection, df=df)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert 'is no longer reporting' in said, f"expected the gone-vehicle wording, got: {said!r}"
