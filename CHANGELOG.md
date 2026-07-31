@@ -10,39 +10,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **"Arrivals near you"** — the Live Map now answers *"I am standing here; what can I catch?"*
   It finds stops within 800 m of your location and lists the next buses to each, with an estimated
-  arrival, the route's destination, and how late the bus is running. No route knowledge and no map
-  reading required
-- **Tap a bus** to see when that specific vehicle reaches your nearest stop on its trip
+  arrival and the route's destination. No route knowledge and no map reading required
+- **Tap a bus** to see when that specific vehicle reaches your nearest stop on its trip. The
+  selection is held in session state and re-resolved from the current frame each render, so
+  auto-refresh advances the bus without dropping the panel; a control clears it
 - `src/utils/eta.py` — arrival estimation as pure, testable functions: `haversine_m`,
   `nearest_stop_index`, `walking_minutes`, `service_day_epoch`, `estimate_delay_seconds`,
   `compute_eta_seconds` and `arrivals_for_stops`
-- `gtfs_static.get_trip_stops`, `get_stops_near`, `get_trip_headsign` and `parse_gtfs_time` —
-  timetable lookups, with `stop_times.txt` (~88,000 rows for Rapid Bus KL) parsed once per agency
-  into a trip-keyed index rather than per interaction
+- `gtfs_static.get_trip_stops`, `get_stops_near`, `get_trip_headsign`, `is_frequency_based` and
+  `parse_gtfs_time` — timetable lookups, with `stop_times.txt` (~88,000 rows for Rapid Bus KL)
+  parsed once per agency into a trip-keyed index rather than per interaction
 
 ### Changed
 - Minimum Streamlit raised to **1.40** for map click selection (`selection_mode` / `on_select`)
+- The map tooltip now names the local clock time a vehicle last reported, rather than a relative
+  age. A per-second string was recomputed on every render, and the deck spec — data included — is
+  hashed into the chart's widget id, so it churned that id continuously
 
 ### Notes
+- **Lateness is not claimed for every bus, because it is not knowable for every bus.** 2,099 of the
+  2,102 Rapid Bus KL trips are published in `frequencies.txt` with `exact_times=0`: they run to a
+  headway, so their `stop_times.txt` rows are a travel-time template repeated across an operating
+  window rather than scheduled wall-clock times, and no start time exists to be late against. For
+  those trips `arrivals_for_stops` reports `delay_seconds` as `None` — unknown, not zero — and the
+  UI renders no lateness clause at all. **The arrival is unaffected and stays correct**: the
+  service-day epoch and the bus's own scheduled time cancel algebraically, so the estimate uses only
+  the *differences* between stop times, which is exactly what a headway template encodes
 - The provider publishes vehicle positions only — trip updates are on their 2026 roadmap — so every
-  arrival here is derived locally from the published timetable plus each bus's measured delay. It
-  is accurate to about one stop and is labelled as an estimate throughout
+  arrival here is derived locally from the published timetable. It is accurate to about one stop and
+  is labelled as an estimate throughout
 - GTFS times legitimately exceed 24:00:00 (`25:30:00` means 01:30 the next day). They are handled
   as integer seconds since service-day midnight, never as clock times
 - Known limitation: the service day is derived from the vehicle's own timestamp because ingestion
   does not capture the trip descriptor's `startDate`. A trip that begins before midnight and runs
-  past it can therefore resolve against the wrong service day. Rapid KL services largely end by
+  past it therefore resolves against the following service day. What that corrupts is the **delay**,
+  not the arrival — the epoch cancels out of the arrival entirely. A bus at 00:30 on a 23:50-start
+  trip that is genuinely 40 minutes late computes as roughly −1,400 minutes, which the "late"
+  threshold then suppresses, so a late bus reads as on time. Rapid KL services largely end by
   midnight, so this is accepted for now
 - Walking time is a straight-line distance at a fixed pace, not a routed path
-- `arrivals_for_stops` reports its skip reasons as three separate counters — `no_trip_id`,
-  `trip_not_in_schedule` and `bad_position` (a vehicle whose coordinates are missing, non-finite, or
-  geographically out of range) — and the UI surfaces every one that is non-zero, so a vehicle
-  omitted from the list is never omitted silently
+- `arrivals_for_stops` reports its skip reasons as three separate counters — `no_trip_id` (including
+  a `NaN` trip_id, which would otherwise stringify to `'nan'`), `trip_not_in_schedule`, and
+  `bad_position` for unusable telemetry (coordinates missing, non-finite or out of range, **or an
+  unreadable timestamp**). An unreadable clock is not a missing timetable entry, and saying so
+  explained the omission wrongly. The UI surfaces every non-zero counter, so a vehicle omitted from
+  the list is never omitted silently
+- A trip that revisits a stop — 1,003 of 2,096 Rapid Bus KL trips do, up to 8 times — is listed once
+  per stop at its earliest arrival, not once per visit
 - `compute_eta_seconds` returns `None` for a stop that does not exist on the trip, and a negative
   integer for a stop the bus has already passed. Those are deliberately different values —
   collapsing both to `-1` would make missing data read as "arriving now"
-- Verified with the automated suite (135 tests) and parse checks; not yet exercised in a running
-  browser
+- The per-agency trip index is keyed on the cached ZIP's mtime, so a refreshed 24-hour cache rebuilds
+  it rather than serving a superseded timetable. A failed build stores nothing, so one network blip
+  no longer caches "this agency has no timetable" for the life of the process
+- Verified with the automated suite (153 tests) and parse checks against the cached Rapid Bus KL
+  feed; not yet exercised in a running browser
 
 ## [2.4.2] - 2026-07-31
 
