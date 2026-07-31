@@ -23,19 +23,28 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
-- **📍 Arrivals near you** — with your location set, see nearby stops within 800 m and the next
-  buses to each, with an estimated arrival for every bus listed. Up to five stops are shown, those
-  with a bus inbound first; if more than five have buses coming, the panel says how many were left
-  out rather than dropping them silently. Each nearby stop is also drawn on the map as a hollow
-  gold ring so its position is visible, not just its name; every stop name in the panel links to
-  Google Maps for walking directions. Tap a bus on the map to see when that specific vehicle
-  reaches your nearest stop — the tapped panel states the same facts as the stop list for the same
-  bus (destination, arrival, lateness, position age), only as labelled lines. Lateness is shown
-  only where the feed actually publishes a timetabled start time — almost every Rapid Bus KL trip
-  runs to a headway instead, and for those no lateness is claimed (see *No lateness on a headway
-  service* under Design Decisions). While a route search is active the panel names the searched
-  route in its "nothing inbound" wording, because with the map filtered to one route it has no
-  evidence about the others
+- **📍 Arrivals near you** — with your location set, see nearby stops within 800 m (straight-line)
+  and the next buses to each, each with a route-first, labelled line: `Route T580 → Awan Besar ·
+  arrives ~6 min · 2 min late · position 3 min old`. Up to five stops are shown, those with a bus
+  inbound first; if more than five have buses coming, the panel says how many were left out rather
+  than dropping them silently. Each nearby stop is also drawn on the map as a hollow gold ring so
+  its position is visible, not just its name, and it is tappable: tapping a stop ring opens a panel
+  below the map with that stop's name, distance, walk time, and the buses en route to it. Tap a bus
+  on the map instead to see when that specific vehicle reaches your nearest stop — the panel states
+  the same facts as the stop list for the same bus (destination, arrival, lateness, position age),
+  only as labelled lines. The last tap wins between a stop panel and a bus panel. Lateness is shown
+  only where the feed actually publishes a timetabled start time — almost
+  every Rapid Bus KL trip runs to a headway instead, and for those no lateness is claimed (see *No
+  lateness on a headway service* under Design Decisions). While a route search is active the panel
+  names the searched route in its "nothing inbound" wording, because with the map filtered to one
+  route it has no evidence about the others
+- **🚶 Walk times** — each nearby stop's walk time comes from OpenRouteService's Matrix API routed
+  along real footpaths (`~9 min walk`) when `ORS_API_KEY` is configured, falling back to a
+  straight-line estimate (`~5 min walk (estimated)`) otherwise or on any request failure. Straight
+  lines can be badly wrong: measured from one KL neighbourhood, a stop 60 m away in a straight line
+  was 634 m and about ten minutes on foot because of an uncrossable barrier between it and the
+  user. Every stop name in the panel also links to Google Maps for walking directions, which this
+  app deliberately does not compute itself
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation
@@ -94,6 +103,7 @@ agustiar-data-pipeline/
 │       ├── data_processor.py     # Speed conversion, filtering, freshness tiers
 │       ├── gtfs_static.py        # GTFS Static ZIP download, caching, timetable lookups
 │       ├── eta.py                # Arrival estimation — pure, no Streamlit or DuckDB
+│       ├── walking.py            # Routed walk times (OpenRouteService), straight-line fallback
 │       └── dbt_runner.py         # Creates the dbt mart views once, after first ingestion
 │
 ├── transform/                    # dbt-duckdb project (analytics transformation layer)
@@ -167,6 +177,7 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 | `LIVE_FRESH_SECONDS` | `60` | Vehicles at or under this age are drawn solid |
 | `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
 | `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
+| `ORS_API_KEY` | *(unset)* | OpenRouteService key for real walking distances. Optional — see *Streamlit Cloud Secrets* below and *Troubleshooting* for what happens without one |
 
 The three `LIVE_*` knobs are optional and are read one at a time: a `config.py` copied from an
 earlier release simply falls back to the default for each one it lacks, and keeps every setting it
@@ -191,6 +202,9 @@ size = 0.001
 
 [regions]
 list = ["Rapid Bus KL", "KTM Berhad"]
+
+[routing]
+api_key = "your-openrouteservice-key"
 ```
 
 ---
@@ -241,6 +255,10 @@ Live Map      Data Table        Analytics     Network Health
 | **ETAs from the timetable, not from speed** | The provider publishes no trip updates, so arrivals are derived by joining each vehicle's live `trip_id` to `stop_times.txt`, shifted by its measured delay where one can be measured (see the next row). Instantaneous speed is a poor predictor — a bus at a red light reports 0 km/h |
 | **No lateness on a headway service** | 2,099 of the 2,102 Rapid Bus KL trips appear in `frequencies.txt` with `exact_times=0`, so their `stop_times.txt` rows are a travel-time template repeated across an operating window, not scheduled wall-clock times. There is no published start time to be late against, so the delay is reported as unknown rather than computed. The arrival is unaffected — it uses only the *differences* between stop times, which is exactly what a headway template encodes |
 | **Nearby stops ranked by usefulness** | Truncating to the closest few stops before computing arrivals hid a stop that had a bus inbound behind five that did not. The nearest 40 stops within the radius are now evaluated (`NEARBY_STOP_SCAN_LIMIT`), then those with a bus coming are shown first, at most five of them (`NEARBY_STOP_DISPLAY`). The 40 is a bound on work, not a claim of completeness: measured against the feed, the largest 800 m neighbourhood in the Rapid KL network is 41 stops and the median is 13, so the cap bites in exactly one place on the network. Any served stops past the five shown are counted in the panel rather than dropped in silence |
+| **ORS Matrix API for walk distance; our own pace for duration** | Straight-line distance is not a walk — circuity measured across 15 stops in one neighbourhood ranges 1.04 to 10.60, too wide a spread for any single correction constant to survive. `utils/walking.py` asks OpenRouteService for the routed distance to every nearby stop in one request, cached per stop on a ~55 m grid for 24h. ORS's own `duration` is not used: it implies 5.2 km/h against Google's ~3.6 km/h for the same route, because it models the path, not the crossings or the waiting. Only the distance is taken from ORS; minutes are computed from it at this app's pace |
+| **Walk time is honest about its source** | A routed figure reads `~9 min walk`; a fallback figure (no key configured, or the request failed) reads `~5 min walk (estimated)`. The label is load-bearing, not decorative — an estimate cannot see that a stop 60 m away in a straight line is 634 m on foot |
+| **Nearby-stop radius stays straight-line even when routing is available** | The 800 m cutoff that decides which stops are "nearby" is computed before any routing request is made, so it is always straight-line. Only the walk time shown for an already-selected stop is routed. Making the radius itself routed would mean a Matrix API call for every stop in range before knowing which are in range — an unbounded cost for a bound that exists to keep the panel small |
+| **Stops are tappable, not hoverable** | 2.6.0 shipped nearby-stop markers as visible but unpickable, because hover doesn't exist on the touch devices this app is used on. 2.7.0 makes the layer pickable instead of adding hover: tapping a stop ring opens a panel below the map with its name, distance, walk time, and buses en route, the same interaction the map already used for buses. Last tap wins between a bus panel and a stop panel |
 
 ### Route Viewer — How It Works
 
@@ -404,7 +422,9 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 | Map not loading | Toggle map theme (light↔dark), check browser console |
 | Locate Me does nothing | Allow location permission in browser when prompted |
 | Route Viewer shows "No route data" | That vehicle's region may not have `shapes.txt` in its GTFS Static feed — historical trail is shown as fallback |
-| Hovering a nearby-stop marker shows nothing | Expected — stop markers are deliberately not interactive (hover doesn't exist on the touch devices this app is used on). Stop names and Google Maps links are in the panel below the map |
+| Hovering a nearby-stop marker shows nothing | Expected — stop markers respond to a tap, not a hover (hover doesn't exist on the touch devices this app is used on). Tap a stop ring to open its panel below the map |
+| Walk times are labelled "(estimated)" | No `ORS_API_KEY` is configured (or the request failed), so the figure is a straight-line estimate, not a routed one. A stop across an uncrossable barrier — a highway, a river, a fenced compound — will read as far nearer than it actually is. Set `ORS_API_KEY` (see *Configuration* above) to get a real footpath figure instead |
+| A "nearby" stop is further to walk to than it looks, or a closer one is missing | The 800 m radius that decides which stops count as nearby is straight-line even when routing is configured — only the walk time shown for each already-selected stop is routed. This is a known limitation, not a bug |
 | Database errors | Delete `agustiar_analytics.duckdb` and click "Refresh Data" |
 
 ---
@@ -424,6 +444,10 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 - [x] Search by route name — type a route (e.g. `T580`) and see every vehicle on that
       route live on the map, instead of looking up an opaque vehicle ID
 - [x] Arrivals near you — stop-centric ETAs derived from the published timetable
+- [x] Routed walk times to nearby stops (OpenRouteService), labelled `(estimated)` when no key is
+      configured or a request fails
+- [x] Tappable nearby stops — tap a stop ring for its own panel below the map, same interaction as
+      tapping a bus
 
 > **Not planned: a full route planner.** Origin→destination journey planning is well served
 > by Google Maps and this app would not improve on it. The gap worth filling is the opposite

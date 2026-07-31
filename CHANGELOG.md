@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-08-01
+
+### Added
+- **Walk times now come from real footpaths, not a straight line.** Measured live from KL1743
+  GREEN AVENUE CONDOMINIUM across all 15 stops within 800 m, circuity — routed distance divided
+  by straight-line distance — ranges from 1.04 to 10.60. The extreme case is KL1291 KM1 BUKIT
+  JALIL: 60 m away in a straight line, 634 m on foot, because something uncrossable sits between
+  the user and the stop. The app quoted that as a one-minute walk; it is about ten. That spread is
+  why no corrected constant was used — a multiplier tuned to Bukit Jalil would badly overestimate
+  in a walkable grid like George Town. `utils/walking.py` now asks OpenRouteService's Matrix API
+  for the footpath distance to every nearby stop in one request, cached per stop on a ~55 m
+  location grid for 24h so auto-refresh and GPS jitter cost nothing further. Two more measured
+  examples: KL2324 LRT AWAN BESAR was quoted 8 min, is ~13 (585 m straight, 864 m routed); KL1289
+  TAMAN ESPLANADE was quoted 7 min, is ~15 (485 m straight, 957 m routed)
+- **ORS supplies distance; the pace stays ours.** ORS's own `duration` was rejected — it walks
+  957 m in 11 minutes (5.2 km/h), where the same distance implies 16 minutes (~3.6 km/h) by
+  Google's estimate. It models the path, not the crossings, the waiting, the stairs, or a person
+  who isn't in a hurry. Only the routed distance is taken from ORS; minutes are computed from it
+  at this app's own walking pace
+- **Streamlit Secrets are read for the first time.** `live_map._ors_api_key()` reads
+  `ORS_API_KEY` from `config.py` for local dev, falling back to `st.secrets['routing']['api_key']`
+  for Streamlit Cloud. No other code in this repository reads `st.secrets` at all — a past
+  refactor had replaced those reads with hardcoded defaults, so a key placed in Secrets was
+  silently ignored until now. `.streamlit/secrets.toml` is gitignored as of `b3a3af2`; the README
+  had already documented it as the cloud config mechanism, but only `config.py` and `secrets.py`
+  were actually ignored before this release introduced a real key worth protecting
+- **Stops on the map are tappable.** Tapping a stop ring opens a panel below the map naming that
+  stop, its distance, its walk time, and the buses en route to it — the same information the
+  "Arrivals near you" list already showed, reachable directly from the map. Tapping a bus replaces
+  the stop panel and vice versa: last tap wins, matching the existing bus-tap behaviour. Hover
+  tooltips on stops were considered and rejected again — hover does not exist on the touch devices
+  this app is actually used on, and 2.6.0 already made that call for the same layer
+
+### Changed
+- **Arrival rows are route-first and labelled.** `format_arrival` now renders `Route T580 → Awan
+  Besar · arrives ~6 min · 2 min late · position 3 min old` instead of running the same facts
+  together with hedging prose (`, so less certain`). The route is unconditional — Rapid KL names
+  routes after places, so without the label a reader can't tell a route from a destination
+- Walk times state whether they are real. A routed figure reads `~9 min walk`; a fallback figure
+  reads `~5 min walk (estimated)`, because a straight-line estimate cannot see that KL1291 is 60 m
+  away and 634 m on foot
+
+### Known Limitations
+- **Without an `ORS_API_KEY`, walk times remain straight-line estimates**, labelled
+  `(estimated)`. A stop across an uncrossable barrier will read as far nearer than it actually is
+  — the fallback has no way to know the barrier exists. This is the same gap the routing feature
+  exists to close; it is not closed for anyone who has not configured a key
+- **The 800 m radius that decides which stops count as "nearby" is still straight-line**, even
+  when a key is configured and routing is available for the stops it selects. Only the walk time
+  quoted for each already-selected stop is routed — a stop 750 m away on the map could be well
+  over 800 m on foot and still appear in the list, or a stop just past 800 m by the crow that is
+  genuinely closer by footpath will not appear at all
+
 ## [2.6.0] - 2026-07-31
 
 ### Fixed

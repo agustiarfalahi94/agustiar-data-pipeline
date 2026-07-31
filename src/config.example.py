@@ -76,3 +76,8 @@ API_SOURCES = {
 # API configuration
 API_BASE_URL = 'https://api.data.gov.my/gtfs-realtime/vehicle-position/'
 REQUEST_TIMEOUT = 10
+
+# OpenRouteService API key, for real walking distances to nearby stops.
+# Free key from https://account.heigit.org. Optional: without it, walk times
+# fall back to a straight-line estimate and are labelled "(estimated)".
+ORS_API_KEY = ''
