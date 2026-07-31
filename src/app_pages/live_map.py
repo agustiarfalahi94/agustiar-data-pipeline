@@ -784,6 +784,14 @@ def show():
     if cleared is not None and picked == cleared:
         picked = None
 
+    # Captured before the sticky re-resolution below overwrites `picked` with
+    # whatever vehicle is *currently* selected. Last-tap-wins must compare a
+    # fresh tap against a fresh tap -- comparing it against a sticky selection
+    # meant a bus stayed "picked" on every render after the one it was tapped
+    # on, so a stop tap could never win against it for as long as any bus
+    # remained selected.
+    fresh_vehicle_tap = picked
+
     if picked:
         st.session_state['selected_vehicle_id'] = picked
     else:
@@ -793,10 +801,15 @@ def show():
     # and a stop panel at once, each answering a question the user did not ask
     # most recently.
     picked_stop = _picked_stop_id(selection)
-    if picked is not None:
+    if fresh_vehicle_tap is not None:
         st.session_state['selected_stop_id'] = None
     elif picked_stop is not None:
         st.session_state['selected_stop_id'] = picked_stop
+        st.session_state['selected_vehicle_id'] = None
+        # Suppress the bus panel for this render too, not just next render's
+        # session state -- otherwise the sticky bus resolved above still
+        # renders alongside the stop panel just tapped into existence.
+        picked = None
     selected_stop_id = st.session_state.get('selected_stop_id')
 
     if picked:

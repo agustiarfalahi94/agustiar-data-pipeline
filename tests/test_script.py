@@ -2323,3 +2323,105 @@ def test_picked_stop_id_survives_an_unexpected_payload_shape():
     assert live_map._picked_stop_id(_Sel({'nearby-stops': [{}]})) is None
     assert live_map._picked_stop_id(_Sel({'nearby-stops': 'not a list'})) is None
     assert live_map._picked_stop_id(object()) is None
+
+
+# ── last-tap-wins: a fresh tap in either direction must clear the other ──────
+#
+# `picked` (the vehicle id) is re-read from session state whenever nothing was
+# tapped this render, so it stays non-None for as long as a bus is selected —
+# not only on the render where it was actually tapped. The last-tap-wins check
+# must compare against a *fresh* tap, not that sticky value, or a stop tap can
+# never be recorded while any bus stays selected.
+
+def test_a_fresh_stop_tap_overrides_a_sticky_bus_selection(monkeypatch):
+    """
+    Regression: a bus selected on an earlier render left `picked` truthy on
+    every later render (it is re-read from session state), so the
+    last-tap-wins check saw a "bus selected" signal even on the render where
+    the user actually tapped a stop, and silently discarded the stop tap.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
+            'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"nearby-stops": [{"stop_id": "S1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # As if a bus was already selected from an earlier render.
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert 'Tapped Stop' in said, \
+        f"the freshly tapped stop must render even though a bus was sticky: {said!r}"
+    buttons = _texts(st_stub.button)
+    assert 'Clear bus selection' not in buttons, \
+        "the bus panel must not render beside a freshly tapped stop"
+    assert st_stub.session_state.get('selected_vehicle_id') is None, \
+        "a fresh stop tap must clear the sticky bus selection"
+
+
+def test_a_fresh_bus_tap_overrides_a_sticky_stop_selection(monkeypatch):
+    """Companion direction: tapping a bus while a stop panel is showing must
+    swap it out for the bus panel. This direction already worked before the
+    fix — pinned here so a future change cannot regress it silently."""
+    stop = {'stop_id': 'S1', 'stop_name': 'Sticky Stop',
+            'stop_lat': 3.14, 'stop_lon': 101.68, 'distance_m': 50.0}
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # As if a stop was already selected from an earlier render.
+    st_stub.session_state['selected_stop_id'] = 'S1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    trip_stops = [
+        {'stop_id': 'S0', 'stop_name': 'Origin Stop', 'stop_lat': 3.14, 'stop_lon': 101.68,
+         'arrival_seconds': local_seconds_of_day},
+        {'stop_id': 'S1', 'stop_name': 'Nearby Stop', 'stop_lat': 3.1401, 'stop_lon': 101.6801,
+         'arrival_seconds': local_seconds_of_day + 300},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: trip_stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert 'Nearby Stop' in said, \
+        f"the freshly tapped bus's arrival must render: {said!r}"
+    assert '📍' not in said, \
+        "the stop panel must not render beside a freshly tapped bus"
+    assert st_stub.session_state.get('selected_stop_id') is None, \
+        "a fresh bus tap must clear the sticky stop selection"
+
+
+def test_a_sticky_stop_selection_survives_a_render_that_reports_none(monkeypatch):
+    """
+    Companion to test_a_selection_survives_a_render_that_reports_none: a stop
+    tap is reported for exactly one render too, so the stop panel must persist
+    across auto-refresh the same way the bus panel already does.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Persisted Stop',
+            'stop_lat': 3.14, 'stop_lon': 101.68, 'distance_m': 50.0}
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # As if a previous render had recorded the tap.
+    st_stub.session_state['selected_stop_id'] = 'S1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert 'Persisted Stop' in said, \
+        "the stop selection was dropped on a render that reported no tap"
