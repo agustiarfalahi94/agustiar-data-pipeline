@@ -647,9 +647,12 @@ def test_arrivals_groups_by_stop_and_sorts_soonest_first():
     now = day + 9 * 3600
     nearby = [dict(stops[2], distance_m=100.0)]     # user waits at the last stop
 
-    # two buses on the same trip, one further back than the other
+    # Two buses, one running 3 minutes early. Note the delay is what separates
+    # them, NOT their positions: with schedule-based ETA two on-time buses reach
+    # a stop at the same scheduled minute however far apart they are, so a
+    # fixture where both are on time cannot produce an ordering to assert.
     behind = _vehicle('SLOW', 3.10, 101.70, day + 9 * 3600, route='T580')
-    closer = _vehicle('FAST', 3.20, 101.70, day + 9 * 3600 + 600, route='T581')
+    closer = _vehicle('FAST', 3.20, 101.70, day + 9 * 3600 + 420, route='T581')
 
     arrivals, skipped = eta.arrivals_for_stops(
         [behind, closer], nearby, lambda t: stops, now, 8)
