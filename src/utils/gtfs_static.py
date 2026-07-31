@@ -208,6 +208,13 @@ def get_route_name(agency_slug: str, route_id: str) -> str:
 # A failed read is deliberately not cached, so one outage cannot blank every
 # route name until the process restarts.
 _ROUTE_PARTS_INDEX = {}
+# agency slug -> mtime of the ZIP the index above was built from. Keyed the
+# same way as _TRIP_INDEX_MTIME and for the same reason: the ZIP cache rolls
+# every 24 hours, and an index keyed on presence alone lets a long-running
+# process serve a superseded routes.txt for its lifetime — a renamed route
+# would keep showing its old name, and a route added in the new release would
+# fall back to displaying its raw route_id.
+_ROUTE_PARTS_MTIME = {}
 
 
 def _route_parts_index(agency_slug: str) -> dict:
@@ -250,11 +257,13 @@ def get_route_parts(agency_slug: str, route_id: str) -> dict:
     if not route_id:
         return empty
 
+    mtime = _zip_mtime(agency_slug)
     index = _ROUTE_PARTS_INDEX.get(agency_slug)
-    if not index:
+    if not index or _ROUTE_PARTS_MTIME.get(agency_slug) != mtime:
         index = _route_parts_index(agency_slug)
         if index:
             _ROUTE_PARTS_INDEX[agency_slug] = index
+            _ROUTE_PARTS_MTIME[agency_slug] = mtime
 
     parts = index.get(route_id.strip())
     return dict(parts) if parts else empty

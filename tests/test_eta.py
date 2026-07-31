@@ -105,6 +105,10 @@ def _clear_indexes():
     gtfs_static._TRIP_HEADSIGN_INDEX.clear()
     gtfs_static._TRIP_FREQUENCY_INDEX.clear()
     gtfs_static._TRIP_INDEX_MTIME.clear()
+    # Every process-global index belongs here. A test that fakes a feed but
+    # leaves one cache populated silently reads the previous test's parse.
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+    gtfs_static._ROUTE_PARTS_MTIME.clear()
 
 
 def _use_fake_feed(monkeypatch, zip_path):

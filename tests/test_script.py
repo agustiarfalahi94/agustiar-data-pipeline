@@ -2158,3 +2158,33 @@ def test_get_route_name_still_joins_the_two_parts(tmp_path, monkeypatch):
     assert gtfs_static.get_route_name('kl', 'X1') == 'X1'
     assert gtfs_static.get_route_name('kl', 'NOPE') == ''
     assert gtfs_static.get_route_name('kl', '') == ''
+
+
+def test_get_route_parts_rereads_when_the_zip_is_refreshed(tmp_path, monkeypatch):
+    """
+    The ZIP cache rolls every 24 hours and a new static release can rename a
+    route. This module already learned that lesson once for the trip index,
+    whose docstring records it: an index keyed on presence alone let a process
+    serve a superseded timetable indefinitely. The route index is keyed on the
+    ZIP's mtime for the same reason.
+    """
+    import zipfile
+    from utils import gtfs_static
+
+    old = _make_static_zip(tmp_path, 'old', [('T5800', 'T580', 'Awan Besar ~ TPM')])
+    new = _make_static_zip(tmp_path, 'new', [('T5800', 'T580', 'Awan Besar ~ Bandar Malaysia')])
+
+    current = {'zip': old, 'mtime': 1000.0}
+    monkeypatch.setattr(gtfs_static, '_load_zip',
+                        lambda slug: zipfile.ZipFile(current['zip']))
+    monkeypatch.setattr(gtfs_static, '_zip_mtime', lambda slug: current['mtime'])
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+    gtfs_static._ROUTE_PARTS_MTIME.clear()
+
+    assert gtfs_static.get_route_parts('kl', 'T5800')['long'] == 'Awan Besar ~ TPM'
+
+    # A new static release lands: same slug, same route_id, renamed.
+    current['zip'] = new
+    current['mtime'] = 2000.0
+    assert gtfs_static.get_route_parts('kl', 'T5800')['long'] == (
+        'Awan Besar ~ Bandar Malaysia'), "served a superseded routes.txt"
