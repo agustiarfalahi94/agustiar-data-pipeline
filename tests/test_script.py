@@ -1359,8 +1359,87 @@ def test_tapped_vehicle_with_realistic_selection_renders_its_arrival(monkeypatch
 
     live_map.show()
 
-    said = _texts(st_stub.success)
+    said = _texts(st_stub.info)
     assert 'Nearby Stop' in said, f"expected the tapped vehicle's arrival at Nearby Stop, got: {said!r}"
+    # Deliberately not st.success: a green confirmation box reads as certainty,
+    # and this is an estimate that can rest on a position minutes old.
+    assert 'Nearby Stop' not in _texts(st_stub.success), \
+        "an estimate must not be rendered as a green confidence box"
+
+
+def test_the_tapped_arrival_carries_the_same_caveats_as_the_stop_panel(monkeypatch):
+    """
+    Both panels show the same estimate for the same bus, so they must qualify
+    it identically. The secondary used to render a bare green box: no delay, no
+    position age, no one-stop caveat -- so a four-minute-stale position read as
+    an unqualified confident "~6 min". df_map admits positions up to 300s old.
+    """
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    now = int(time.time())
+    # 240s old: still drawn (under LIVE_STALE_SECONDS) but well past fresh.
+    df = pd.DataFrame({
+        'region': ['Rapid Bus KL'], 'vehicle_id': ['V1'],
+        'latitude': [3.14], 'longitude': [101.68], 'bearing': [90.0],
+        'speed': [10.0], 'timestamp': [now - 240], 'trip_id': ['T1'],
+        'route_id': ['T5800'], 'freshness': ['stale'], 'age_seconds': [240],
+    })
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection, df=df)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    stops = [
+        {'stop_id': 'S0', 'stop_name': 'Origin Stop', 'stop_lat': 3.14, 'stop_lon': 101.68,
+         'arrival_seconds': local_seconds_of_day - 240},
+        {'stop_id': 'S1', 'stop_name': 'Nearby Stop', 'stop_lat': 3.1401, 'stop_lon': 101.6801,
+         'arrival_seconds': local_seconds_of_day + 300},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    live_map.show()
+
+    said = _texts(st_stub.info) + _texts(st_stub.caption)
+    assert 'position 4 min old' in said, \
+        f"a stale position must be shown with its age, flagged as less certain: {said!r}"
+    assert 'accurate to about one stop' in said, \
+        f"the accuracy caveat is missing from the tapped-bus panel: {said!r}"
+
+
+def test_a_frequency_based_trip_shows_no_lateness_clause(monkeypatch):
+    """
+    99% of the Rapid Bus KL feed runs to a headway, so no lateness is knowable
+    and arrivals_for_stops reports delay_seconds as None. The renderer guarded
+    only on `>= 60`, which raises TypeError on None -- the panel must instead
+    say nothing at all about lateness.
+    """
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    stops = [
+        {'stop_id': 'S0', 'stop_name': 'Origin Stop', 'stop_lat': 3.14, 'stop_lon': 101.68,
+         # An hour "late" against the template -- pure fiction on a headway trip.
+         'arrival_seconds': local_seconds_of_day - 3600},
+        {'stop_id': 'S1', 'stop_name': 'Nearby Stop', 'stop_lat': 3.1401, 'stop_lon': 101.6801,
+         'arrival_seconds': local_seconds_of_day - 3600 + 300},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+
+    live_map.show()   # must not raise on a None delay
+
+    said = _texts(st_stub.info)
+    assert 'Nearby Stop' in said, f"the arrival itself must still render: {said!r}"
+    assert 'late' not in said, f"no lateness may be claimed on a headway trip: {said!r}"
 
 
 def test_tapped_vehicle_with_no_selection_renders_nothing(monkeypatch):
@@ -1372,8 +1451,110 @@ def test_tapped_vehicle_with_no_selection_renders_nothing(monkeypatch):
 
     live_map.show()   # must not raise
 
-    said = _texts(st_stub.success)
-    assert 'reaches' not in said, "no vehicle was tapped, so no arrival should render"
+    said = _texts(st_stub.success) + _texts(st_stub.info)
+    assert 'min walk' not in said, "no vehicle was tapped, so no arrival should render"
+
+
+def test_a_selection_survives_a_render_that_reports_none(monkeypatch):
+    """
+    A tap is reported for exactly one render; every auto-refresh afterwards
+    hands back an empty selection. Without persistence the panel appeared for a
+    single frame and then vanished -- the module's own comment claimed it was
+    re-resolved from the current frame each render, and it was not.
+    """
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # As if a previous render had recorded the tap.
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    stops = [
+        {'stop_id': 'S0', 'stop_name': 'Origin Stop', 'stop_lat': 3.14, 'stop_lon': 101.68,
+         'arrival_seconds': local_seconds_of_day},
+        {'stop_id': 'S1', 'stop_name': 'Nearby Stop', 'stop_lat': 3.1401, 'stop_lon': 101.6801,
+         'arrival_seconds': local_seconds_of_day + 300},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    live_map.show()
+
+    assert 'Nearby Stop' in _texts(st_stub.info), \
+        "the selection was dropped on the first render that reported none"
+
+
+def test_a_tap_is_recorded_so_the_next_render_can_reuse_it(monkeypatch):
+    """The companion half: a fresh tap must be written to session state."""
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+
+    live_map.show()
+
+    assert st_stub.session_state.get('selected_vehicle_id') == 'V1'
+
+
+def test_every_layer_in_the_selectable_deck_declares_a_stable_id(monkeypatch):
+    """
+    Streamlit requires every layer to declare an `id` once on_select is active,
+    and a pdk.Layer built without one is assigned a fresh uuid4 on each
+    construction. st.pydeck_chart hashes the whole deck spec into the chart's
+    widget id, so an unnamed layer rewrites that id on every render and the
+    selection is written under one id and read back under another -- tap-a-bus
+    could never fire. Only the vehicles layer used to carry an id.
+
+    Two renders are driven and the ids compared, so this fails for a layer that
+    is merely *named by accident* as well as for one that is unnamed.
+    """
+    def ids_for_one_render():
+        selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+        live_map, st_stub, _ = _live_map_with_selection(monkeypatch, selection)
+        # A user location adds the marker and accuracy-circle layers too.
+        st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+        monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+        live_map.show()
+        deck = st_stub.pydeck_chart.call_args_list[0].args[0]
+        return [layer.id for layer in deck.layers]
+
+    first = ids_for_one_render()
+    second = ids_for_one_render()
+
+    assert len(first) == 4, f"expected vehicles, arrows, marker and accuracy: {first}"
+    assert first == second, f"layer ids churn between renders: {first} vs {second}"
+    assert 'vehicles' in first
+    for layer_id in first:
+        assert '-' not in layer_id or not len(layer_id) == 36, \
+            f"layer {layer_id!r} looks like a generated uuid4, not a declared id"
+
+
+def test_the_deck_data_excludes_columns_recomputed_every_render(monkeypatch):
+    """
+    Stable ids alone are not enough: the deck's *data* is hashed into the
+    widget id too, so a column recomputed from the wall clock on every render
+    (a relative "12s ago" freshness string) churns the id just as effectively
+    as an unnamed layer.
+    """
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _ = _live_map_with_selection(monkeypatch, selection)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+
+    live_map.show()
+
+    deck = st_stub.pydeck_chart.call_args_list[0].args[0]
+    vehicles = next(layer for layer in deck.layers if layer.id == 'vehicles')
+    # pydeck normalises a DataFrame into a list of per-row records.
+    columns = set(vehicles.data[0])
+
+    assert 'freshness_display' not in columns, \
+        "a per-second relative age is back in the deck data"
+    assert 'age_seconds' not in columns and 'timestamp' not in columns, \
+        f"the deck carries more than the layer draws: {sorted(columns)}"
+    # It still carries what the tooltip actually shows.
+    assert {'vehicle_id', 'route_display', 'last_report_display'} <= columns
 
 
 def test_tapped_vehicle_filtered_out_is_distinguished_from_genuinely_gone(monkeypatch):
