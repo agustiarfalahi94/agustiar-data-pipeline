@@ -83,6 +83,7 @@ def _make_gtfs_zip(tmp_path, name='feed'):
 def _use_fake_feed(monkeypatch, zip_path):
     monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(zip_path))
     gtfs_static._TRIP_STOPS_INDEX.clear()
+    gtfs_static._TRIP_HEADSIGN_INDEX.clear()
 
 
 def test_parse_gtfs_time_handles_hours_past_midnight():
@@ -114,6 +115,7 @@ def test_get_trip_stops_is_empty_when_the_feed_fails(monkeypatch):
         raise OSError('feed down')
     monkeypatch.setattr(gtfs_static, '_load_zip', boom)
     gtfs_static._TRIP_STOPS_INDEX.clear()
+    gtfs_static._TRIP_HEADSIGN_INDEX.clear()
     assert gtfs_static.get_trip_stops('any', 'TRIP1') == []
 
 
@@ -138,3 +140,62 @@ def test_get_trip_headsign(tmp_path, monkeypatch):
     _use_fake_feed(monkeypatch, _make_gtfs_zip(tmp_path))
     assert gtfs_static.get_trip_headsign('any', 'TRIP1') == 'GAMMA TERMINAL'
     assert gtfs_static.get_trip_headsign('any', 'NOPE') == ''
+
+
+def _timed_stops():
+    """Three stops at 09:00, 09:10, 09:20 on the same service day."""
+    out = _stops((3.10, 101.70), (3.20, 101.70), (3.30, 101.70))
+    for s, secs in zip(out, (9 * 3600, 9 * 3600 + 600, 9 * 3600 + 1200)):
+        s['arrival_seconds'] = secs
+    return out
+
+
+def test_service_day_epoch_is_local_midnight():
+    # 2026-07-31 09:00 local (UTC+8) -> local midnight of the same day
+    day = eta.service_day_epoch(1785459600, 8)
+    assert (1785459600 - day) == 9 * 3600
+
+
+def test_estimate_delay_is_zero_for_an_on_time_bus():
+    stops = _timed_stops()
+    day = 1785427200          # local midnight
+    on_time = day + 9 * 3600  # exactly the scheduled time at stop 0
+    assert eta.estimate_delay_seconds(stops, 0, on_time, day) == 0
+
+
+def test_estimate_delay_is_positive_when_late_and_negative_when_early():
+    stops = _timed_stops()
+    day = 1785427200
+    assert eta.estimate_delay_seconds(stops, 0, day + 9 * 3600 + 180, day) == 180
+    assert eta.estimate_delay_seconds(stops, 0, day + 9 * 3600 - 120, day) == -120
+
+
+def test_estimate_delay_is_zero_for_an_out_of_range_index():
+    stops = _timed_stops()
+    assert eta.estimate_delay_seconds(stops, -1, 0, 0) == 0
+    assert eta.estimate_delay_seconds(stops, 99, 0, 0) == 0
+
+
+def test_compute_eta_adds_the_delay():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600            # 09:00
+    # stop 2 is scheduled 09:20; a 3-minute-late bus arrives ~09:23
+    assert eta.compute_eta_seconds(stops, 2, 180, now, day) == 1200 + 180
+
+
+def test_compute_eta_is_negative_once_the_bus_has_passed():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600 + 1500     # 09:25, past the 09:20 stop
+    assert eta.compute_eta_seconds(stops, 2, 0, now, day) < 0
+
+
+def test_compute_eta_survives_a_past_midnight_schedule():
+    """A 25:30:00 stop is 01:30 next day — not 01:30 today, and not an error."""
+    stops = _stops((3.10, 101.70), (3.20, 101.70))
+    stops[0]['arrival_seconds'] = 85800   # 23:50
+    stops[1]['arrival_seconds'] = 91800   # 25:30 == 01:30 next day
+    day = 1785427200
+    now = day + 85800                     # 23:50
+    assert eta.compute_eta_seconds(stops, 1, 0, now, day) == 6000   # 100 minutes

@@ -52,3 +52,47 @@ def walking_minutes(distance_m, pace_m_per_min=DEFAULT_PACE_M_PER_MIN):
     must present it as approximate.
     """
     return max(1, math.ceil(distance_m / pace_m_per_min))
+
+
+def service_day_epoch(vehicle_timestamp, utc_offset_hours):
+    """
+    Epoch seconds of local midnight for the service day containing *vehicle_timestamp*.
+
+    Derived from the vehicle's own timestamp rather than read from the feed —
+    ingestion does not currently capture the trip descriptor's startDate. A trip
+    that began before midnight and runs past it therefore resolves against the
+    following service day and can produce a wrong arrival. Accepted for now and
+    recorded as a follow-up.
+    """
+    offset = int(utc_offset_hours) * 3600
+    local = int(vehicle_timestamp) + offset
+    return (local // 86400) * 86400 - offset
+
+
+def estimate_delay_seconds(stops, bus_index, bus_timestamp, day_epoch):
+    """
+    How late the bus is, in seconds. Positive means late, negative means early.
+
+    Compares when the vehicle actually reported near *bus_index* against when
+    the timetable says it should have been there. Returns 0 when the index is
+    out of range, so a caller with no fix on the bus degrades to "on schedule"
+    rather than inventing a delay.
+    """
+    if not (0 <= bus_index < len(stops)):
+        return 0
+    scheduled = day_epoch + stops[bus_index]['arrival_seconds']
+    return int(bus_timestamp) - scheduled
+
+
+def compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch):
+    """
+    Seconds until the bus reaches *target_index*. Negative means already passed.
+
+    The timetable supplies the travel time; the measured delay shifts it. Both
+    are integers of seconds since the service-day epoch, so a stop scheduled at
+    25:30:00 resolves to 01:30 the next day rather than wrapping backwards.
+    """
+    if not (0 <= target_index < len(stops)):
+        return -1
+    scheduled = day_epoch + stops[target_index]['arrival_seconds']
+    return int(scheduled + delay_seconds - now_epoch)
