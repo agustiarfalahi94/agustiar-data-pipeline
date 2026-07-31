@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] - 2026-07-31
+
+### Documentation
+- Added `eta.py` and `dbt_runner.py` to the README's project-structure tree. `eta.py` is the
+  module this release is built on and was missing entirely; `dbt_runner.py` had been absent since
+  2.2.0
+- The "ETAs from the timetable" design-decision row said arrivals are shifted "by its measured
+  delay" without qualification, which the row immediately below it contradicts — for 99% of Rapid
+  Bus KL trips there is no measurable delay. It now says "where one can be measured"
+
 ## [2.5.1] - 2026-07-31
 
 ### Fixed

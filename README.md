@@ -83,8 +83,10 @@ agustiar-data-pipeline/
 │   └── utils/
 │       ├── ingestion.py          # Parallel GTFS Realtime fetch → DuckDB
 │       ├── db.py                 # DuckDB queries and schema migration
-│       ├── data_processor.py     # Speed conversion, filtering, display formatting
-│       └── gtfs_static.py        # GTFS Static ZIP download, caching, shape/route lookup
+│       ├── data_processor.py     # Speed conversion, filtering, freshness tiers
+│       ├── gtfs_static.py        # GTFS Static ZIP download, caching, timetable lookups
+│       ├── eta.py                # Arrival estimation — pure, no Streamlit or DuckDB
+│       └── dbt_runner.py         # Creates the dbt mart views once, after first ingestion
 │
 ├── transform/                    # dbt-duckdb project (analytics transformation layer)
 │   ├── dbt_project.yml
@@ -228,7 +230,7 @@ Live Map      Data Table        Analytics     Network Health
 | **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query, so positions and their per-second ages are always current |
 | **Live window anchored to wall-clock now** | Anchoring to `MAX(timestamp)` let one feed with a fast clock drag the window into the future and black out regions reporting honestly. Ages are clamped at zero so a fast clock reads as current rather than being discarded |
 | **15 min fetched, 5 min drawn, 60s solid** | `LIVE_HIDDEN_SECONDS` bounds the query, `LIVE_STALE_SECONDS` bounds what is drawn, `LIVE_FRESH_SECONDS` bounds what is drawn solid. A vehicle between the last two is dimmed rather than deleted, so a 90-second gap in one feed no longer looks like the bus vanished |
-| **ETAs from the timetable, not from speed** | The provider publishes no trip updates, so arrivals are derived by joining each vehicle's live `trip_id` to `stop_times.txt` and shifting by its measured delay. Instantaneous speed is a poor predictor — a bus at a red light reports 0 km/h |
+| **ETAs from the timetable, not from speed** | The provider publishes no trip updates, so arrivals are derived by joining each vehicle's live `trip_id` to `stop_times.txt`, shifted by its measured delay where one can be measured (see the next row). Instantaneous speed is a poor predictor — a bus at a red light reports 0 km/h |
 | **No lateness on a headway service** | 2,099 of the 2,102 Rapid Bus KL trips appear in `frequencies.txt` with `exact_times=0`, so their `stop_times.txt` rows are a travel-time template repeated across an operating window, not scheduled wall-clock times. There is no published start time to be late against, so the delay is reported as unknown rather than computed. The arrival is unaffected — it uses only the *differences* between stop times, which is exactly what a headway template encodes |
 
 ### Route Viewer — How It Works
