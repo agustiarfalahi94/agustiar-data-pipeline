@@ -215,3 +215,85 @@ def test_compute_eta_returns_none_for_an_index_that_does_not_exist():
     # and a genuinely-passed stop still returns a negative int, not None
     passed = eta.compute_eta_seconds(stops, 0, 0, day + 9 * 3600 + 60, day)
     assert isinstance(passed, int) and passed < 0
+
+
+def _vehicle(vid, lat, lon, ts, trip='TRIP1', route='T580'):
+    return {'vehicle_id': vid, 'latitude': lat, 'longitude': lon,
+            'timestamp': ts, 'trip_id': trip, 'route_display': route}
+
+
+def test_arrivals_groups_by_stop_and_sorts_soonest_first():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]     # user waits at the last stop
+
+    # two buses on the same trip, one further back than the other. FAST is
+    # pinged 3 minutes early against its own stop's schedule (09:10 - 180s)
+    # so its projected arrival at the shared target is measurably sooner than
+    # SLOW's, which is pinged exactly on time. Two buses that are BOTH
+    # perfectly on schedule would tie on eta_seconds regardless of position,
+    # since eta is schedule-time-at-target + delay - now; distance alone
+    # carries no weight in that formula.
+    behind = _vehicle('SLOW', 3.10, 101.70, day + 9 * 3600, route='T580')
+    closer = _vehicle('FAST', 3.20, 101.70, day + 9 * 3600 + 420, route='T581')
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [behind, closer], nearby, lambda t: stops, now, 8)
+
+    got = arrivals[stops[2]['stop_id']]
+    assert [a['vehicle_id'] for a in got] == ['FAST', 'SLOW']
+    assert got[0]['eta_seconds'] < got[1]['eta_seconds']
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0}
+
+
+def test_arrivals_excludes_a_bus_that_already_passed():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600 + 1500                      # 09:25
+    nearby = [dict(stops[0], distance_m=50.0)]       # user at the FIRST stop
+    # bus is already at the last stop, so the first is behind it
+    passed = _vehicle('GONE', 3.30, 101.70, now)
+
+    arrivals, _ = eta.arrivals_for_stops([passed], nearby, lambda t: stops, now, 8)
+    assert arrivals.get(stops[0]['stop_id'], []) == []
+
+
+def test_arrivals_counts_why_vehicles_were_skipped():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    no_trip = _vehicle('NOTRIP', 3.10, 101.70, now, trip='')
+    unknown = _vehicle('UNKNOWN', 3.10, 101.70, now, trip='GHOST')
+
+    def lookup(trip_id):
+        return stops if trip_id == 'TRIP1' else []
+
+    _, skipped = eta.arrivals_for_stops([no_trip, unknown], nearby, lookup, now, 8)
+    assert skipped == {'no_trip_id': 1, 'trip_not_in_schedule': 1}
+
+
+def test_arrivals_carries_headsign_and_delay():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+    late = _vehicle('LATE', 3.10, 101.70, day + 9 * 3600 + 180)
+
+    arrivals, _ = eta.arrivals_for_stops(
+        [late], nearby, lambda t: stops, now, 8,
+        headsign_lookup=lambda t: 'TPM')
+
+    a = arrivals[stops[2]['stop_id']][0]
+    assert a['headsign'] == 'TPM'
+    assert a['delay_seconds'] == 180
+
+
+def test_arrivals_with_no_vehicles_returns_empty_lists_per_stop():
+    stops = _timed_stops()
+    nearby = [dict(stops[2], distance_m=100.0)]
+    arrivals, skipped = eta.arrivals_for_stops([], nearby, lambda t: stops, 0, 8)
+    assert arrivals == {stops[2]['stop_id']: []}
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0}
