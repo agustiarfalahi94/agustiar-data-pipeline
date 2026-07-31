@@ -716,3 +716,34 @@ def test_arrivals_skips_an_out_of_range_position_without_raising():
     assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 1}
     got = arrivals[stops[2]['stop_id']]
     assert [a['vehicle_id'] for a in got] == ['GOOD']
+
+
+def test_get_route_parts_splits_short_from_long(tmp_path, monkeypatch):
+    import zipfile
+    p = tmp_path / "routes.zip"
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('routes.txt',
+                    "route_id,route_short_name,route_long_name\n"
+                    "S6060,PAVILION BUKIT JALIL (PAVBJ),Stesen LRT Awan Besar ~ Pavilion Bukit Jalil\n")
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(p))
+    parts = gtfs_static.get_route_parts('any', 'S6060')
+    assert parts['short'] == 'PAVILION BUKIT JALIL (PAVBJ)'
+    assert parts['long'] == 'Stesen LRT Awan Besar ~ Pavilion Bukit Jalil'
+
+
+def test_get_route_parts_is_empty_for_unknown_or_failed(monkeypatch):
+    import zipfile
+    monkeypatch.setattr(gtfs_static, '_load_zip',
+                        lambda slug: (_ for _ in ()).throw(OSError('feed down')))
+    assert gtfs_static.get_route_parts('any', 'S6060') == {'short': '', 'long': ''}
+
+
+def test_arrivals_carry_route_id():
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+    v = _vehicle('V1', 3.10, 101.70, now)
+    v['route_id'] = 'S6060'
+    arrivals, _ = eta.arrivals_for_stops([v], nearby, lambda t: stops, now, 8)
+    assert arrivals[stops[2]['stop_id']][0]['route_id'] == 'S6060'

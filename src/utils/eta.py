@@ -238,6 +238,7 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             arrivals[sid].append({
                 'vehicle_id': v.get('vehicle_id', ''),
                 'route_display': v.get('route_display', ''),
+                'route_id': str(v.get('route_id') or ''),
                 'headsign': headsign,
                 'eta_seconds': secs,
                 'delay_seconds': reported_delay,

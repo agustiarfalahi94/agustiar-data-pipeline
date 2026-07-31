@@ -213,6 +213,32 @@ def get_route_name(agency_slug: str, route_id: str) -> str:
     return ''
 
 
+def get_route_parts(agency_slug: str, route_id: str) -> dict:
+    """
+    A route's short and long names, kept separate.
+
+    `get_route_name` joins them for a tooltip, which reads badly in a panel:
+    Rapid KL's short name is often a place ("PAVILION BUKIT JALIL (PAVBJ)")
+    and the long name is the path between two places, one of which is that
+    same place. Joined, it looks like the name was printed twice. Returned
+    separately, the UI can label which is which.
+    """
+    empty = {'short': '', 'long': ''}
+    if not route_id:
+        return empty
+    try:
+        with _load_zip(agency_slug) as zf:
+            for row in _read_csv_from_zip(zf, 'routes.txt') or []:
+                if (row.get('route_id') or '').strip() == route_id.strip():
+                    return {
+                        'short': (row.get('route_short_name') or '').strip(),
+                        'long': (row.get('route_long_name') or '').strip(),
+                    }
+    except Exception:
+        return empty
+    return empty
+
+
 # ---------------------------------------------------------------------------
 # Route lookup
 #
