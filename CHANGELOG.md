@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.3] - 2026-07-31
+
+### Fixed
+- **"Clear bus selection" now actually clears.** The chart's selection lives in Streamlit widget
+  state keyed by an id derived from the deck spec, so when nothing on the map had changed between
+  renders the id was unchanged, Streamlit handed back the same payload, and the code re-adopted the
+  vehicle it had just dismissed — the panel stayed stuck on the chosen bus. Clearing now bumps a
+  generation counter folded into the chart key, making it a new widget, and additionally ignores
+  the dismissed vehicle for exactly one render in case a stale payload still arrives. Reported from
+  live use; predicted by the 2.5.0 review and previously deferred
+- The one-render guard is deliberately not permanent: a first attempt remembered the dismissed
+  vehicle indefinitely, which silently cost the user the ability to tap that same bus again. A test
+  pins both halves — clearing sticks, and reselecting still works
+
 ## [2.5.2] - 2026-07-31
 
 ### Documentation

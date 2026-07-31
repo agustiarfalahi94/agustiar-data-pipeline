@@ -1634,3 +1634,57 @@ def test_tapped_vehicle_absent_from_both_frames_says_no_longer_reporting(monkeyp
 
     said = _texts(st_stub.info)
     assert 'is no longer reporting' in said, f"expected the gone-vehicle wording, got: {said!r}"
+
+
+def test_clearing_a_bus_selection_survives_a_repeated_payload(monkeypatch):
+    """
+    Clearing must stick even when Streamlit hands back the same selection.
+
+    The deck's selection lives in widget state keyed by the element id, and that
+    id is derived from the deck spec. When nothing on the map changed between
+    renders the id is unchanged, so the *same* payload is returned on the very
+    next run — and the code used to re-adopt it immediately, rewriting the
+    session key it had just popped. The clear looked ignored.
+    """
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+
+    # First render: the tap registers.
+    live_map.show()
+    assert st_stub.session_state.get('selected_vehicle_id') == 'V1'
+
+    # The user clicks "Clear bus selection".
+    st_stub.button.return_value = True
+    live_map.show()
+    st_stub.button.return_value = False
+
+    # Next render still receives the identical payload naming V1, because the
+    # deck spec did not change. It must NOT come back.
+    live_map.show()
+    assert st_stub.session_state.get('selected_vehicle_id') is None, \
+        "a cleared selection was re-adopted from the repeated payload"
+
+
+def test_a_cleared_bus_can_be_selected_again(monkeypatch):
+    """
+    Clearing must not blacklist a bus. Once the stale payload has been shrugged
+    off, tapping the same vehicle again has to work — otherwise the fix for the
+    sticky selection quietly costs the user the ability to reselect.
+    """
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+
+    live_map.show()                       # tap V1
+    st_stub.button.return_value = True
+    live_map.show()                       # clear it
+    st_stub.button.return_value = False
+    live_map.show()                       # stale payload shrugged off
+    assert st_stub.session_state.get('selected_vehicle_id') is None
+
+    live_map.show()                       # user taps V1 again
+    assert st_stub.session_state.get('selected_vehicle_id') == 'V1', \
+        "clearing a bus permanently blocked reselecting it"

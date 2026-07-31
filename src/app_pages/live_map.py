@@ -575,7 +575,11 @@ def show():
         ),
         selection_mode="single-object",
         on_select="rerun",
-        key="live_map_deck",
+        # The generation counter is bumped when the user clears a selection, so
+        # the chart becomes a *new* widget and Streamlit stops handing back the
+        # stale payload. Without it, clearing appeared to do nothing whenever
+        # the deck spec was unchanged between renders.
+        key=f"live_map_deck_{st.session_state.get('deck_generation', 0)}",
     )
 
     # Secondary view: one tapped vehicle, against the user's nearest stop on
@@ -599,6 +603,16 @@ def show():
     except (AttributeError, KeyError, IndexError, TypeError):
         picked = None
 
+    # Belt and braces on clearing. Bumping the widget key should be enough to
+    # stop a stale payload coming back, but the payload is Streamlit's to
+    # deliver, so the dismissed vehicle is also ignored for exactly one render.
+    #
+    # One render, not forever: a permanent block would mean dismissing a bus
+    # silently cost the user the ability to tap it again.
+    cleared = st.session_state.pop('cleared_vehicle_id', None)
+    if cleared is not None and picked == cleared:
+        picked = None
+
     if picked:
         st.session_state['selected_vehicle_id'] = picked
     else:
@@ -606,7 +620,11 @@ def show():
 
     if picked:
         if st.button("✕ Clear bus selection", key="clear_vehicle_selection"):
+            st.session_state['cleared_vehicle_id'] = picked
             st.session_state.pop('selected_vehicle_id', None)
+            st.session_state['deck_generation'] = (
+                st.session_state.get('deck_generation', 0) + 1
+            )
             st.rerun()
 
         row = df_map[df_map['vehicle_id'] == picked]
