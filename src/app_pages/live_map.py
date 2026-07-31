@@ -57,14 +57,16 @@ def format_route_heading(parts, fallback=''):
     answers that; the repetition itself is in the source data and is not ours
     to strip.
 
-    The path line is omitted when it adds nothing, i.e. when it is identical
-    to the short name.
+    The path line is omitted when it adds nothing: when it is identical to
+    the short name, or when there is no short name at all, since without one
+    the long name is promoted to the Route line above and repeating it as a
+    Runs line would be the same duplication this task exists to remove.
     """
     short = (parts or {}).get('short') or ''
     long_ = (parts or {}).get('long') or ''
     name = short or long_ or fallback or '—'
-    lines = [f"**Route:** {name}"]
-    if long_ and long_ != short:
+    lines = [f"**Route:** {name.replace('~', '↔')}"]
+    if short and long_ and long_ != short:
         lines.append(f"**Runs:** {long_.replace('~', '↔')}")
     return lines
 
@@ -736,12 +738,9 @@ def show():
                             f"(~{eta.walking_minutes(s['distance_m'])} min walk)")
                         age = a.get('age_seconds')
                         if age and age > LIVE_FRESH_SECONDS:
-                            # Same wording as format_arrival's age caveat (used
-                            # by the other panel) so both panels state the same
-                            # fact about the same bus identically.
                             body.append(
-                                f"⚠️ position {round(age / 60)} min old, "
-                                f"so less certain")
+                                f"⚠️ This bus last reported "
+                                f"{round(age / 60)} min ago")
                         st.info("  \n".join(body))
                         st.caption(ARRIVAL_ACCURACY_NOTE)
 

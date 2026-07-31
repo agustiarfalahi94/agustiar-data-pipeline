@@ -1413,7 +1413,7 @@ def test_the_tapped_arrival_carries_the_same_caveats_as_the_stop_panel(monkeypat
     live_map.show()
 
     said = _texts(st_stub.info) + _texts(st_stub.caption)
-    assert 'position 4 min old' in said, \
+    assert 'last reported 4 min ago' in said, \
         f"a stale position must be shown with its age, flagged as less certain: {said!r}"
     assert 'accurate to about one stop' in said, \
         f"the accuracy caveat is missing from the tapped-bus panel: {said!r}"
@@ -1787,3 +1787,12 @@ def test_format_route_heading_falls_back_when_parts_are_missing():
     from app_pages import live_map
     lines = live_map.format_route_heading({'short': '', 'long': ''}, fallback='T580')
     assert lines == ['**Route:** T580']
+
+
+def test_format_route_heading_does_not_repeat_a_long_name_with_no_short_name():
+    from app_pages import live_map
+    lines = live_map.format_route_heading(
+        {'short': '', 'long': 'Stesen LRT Awan Besar ~ Pavilion Bukit Jalil'},
+        fallback='S6060',
+    )
+    assert lines == ['**Route:** Stesen LRT Awan Besar ↔ Pavilion Bukit Jalil']
