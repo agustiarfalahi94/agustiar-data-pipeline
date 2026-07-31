@@ -244,7 +244,7 @@ def test_arrivals_groups_by_stop_and_sorts_soonest_first():
     got = arrivals[stops[2]['stop_id']]
     assert [a['vehicle_id'] for a in got] == ['FAST', 'SLOW']
     assert got[0]['eta_seconds'] < got[1]['eta_seconds']
-    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0}
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 0}
 
 
 def test_arrivals_excludes_a_bus_that_already_passed():
@@ -272,7 +272,7 @@ def test_arrivals_counts_why_vehicles_were_skipped():
         return stops if trip_id == 'TRIP1' else []
 
     _, skipped = eta.arrivals_for_stops([no_trip, unknown], nearby, lookup, now, 8)
-    assert skipped == {'no_trip_id': 1, 'trip_not_in_schedule': 1}
+    assert skipped == {'no_trip_id': 1, 'trip_not_in_schedule': 1, 'bad_position': 0}
 
 
 def test_arrivals_carries_headsign_and_delay():
@@ -296,4 +296,65 @@ def test_arrivals_with_no_vehicles_returns_empty_lists_per_stop():
     nearby = [dict(stops[2], distance_m=100.0)]
     arrivals, skipped = eta.arrivals_for_stops([], nearby, lambda t: stops, 0, 8)
     assert arrivals == {stops[2]['stop_id']: []}
-    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0}
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 0}
+
+
+def test_arrivals_skips_a_bad_position_without_raising_and_keeps_good_vehicles():
+    """
+    A vehicle missing latitude/longitude, or carrying None, must be counted
+    under 'bad_position' and skipped -- never allowed to raise, since that
+    would take down every stop and every other vehicle in the same call.
+    A valid vehicle in the same batch must still produce its arrival.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    none_lat = _vehicle('NONE_LAT', None, 101.70, now)
+    missing_lat = {'vehicle_id': 'MISSING_LAT', 'longitude': 101.70,
+                   'timestamp': now, 'trip_id': 'TRIP1', 'route_display': 'T580'}
+    good = _vehicle('GOOD', 3.10, 101.70, now)
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [none_lat, missing_lat, good], nearby, lambda t: stops, now, 8)
+
+    assert skipped['bad_position'] == 2
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 2}
+    got = arrivals[stops[2]['stop_id']]
+    assert [a['vehicle_id'] for a in got] == ['GOOD']
+
+
+def test_arrivals_skips_an_unparseable_timestamp_without_raising():
+    """
+    A vehicle with a None or non-numeric timestamp must be counted rather
+    than raising or silently vanishing.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    none_ts = _vehicle('NONE_TS', 3.10, 101.70, None)
+    junk_ts = _vehicle('JUNK_TS', 3.10, 101.70, 'not-a-timestamp')
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [none_ts, junk_ts], nearby, lambda t: stops, now, 8)
+
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 2, 'bad_position': 0}
+    assert arrivals[stops[2]['stop_id']] == []
+
+
+def test_arrivals_coerces_a_non_string_trip_id():
+    """An int trip_id must not raise on .strip() -- it is coerced first."""
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+    vehicle = _vehicle('INTTRIP', 3.10, 101.70, now, trip=404)
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [vehicle], nearby, lambda t: stops if t == '404' else [], now, 8)
+
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 0}
+    assert [a['vehicle_id'] for a in arrivals[stops[2]['stop_id']]] == ['INTTRIP']

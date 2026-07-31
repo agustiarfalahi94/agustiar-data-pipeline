@@ -113,17 +113,21 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
     Returns (arrivals, skipped):
       arrivals  {stop_id: [ {vehicle_id, route_display, headsign, eta_seconds,
                              delay_seconds, age_seconds}, ... ]} soonest first
-      skipped   {'no_trip_id': int, 'trip_not_in_schedule': int}
+      skipped   {'no_trip_id': int, 'trip_not_in_schedule': int, 'bad_position': int}
 
     The skipped counts exist so the UI can say why a bus is missing. A vehicle
-    silently dropped is indistinguishable from one that is not coming.
+    silently dropped is indistinguishable from one that is not coming. A
+    malformed vehicle must be counted and skipped, never allowed to raise —
+    one bad record must not take the whole call (every stop, every other
+    vehicle) down with it. Feeds have been observed publishing garbage this
+    bad: a timestamp of 1886017556 (~year 2029) from Rapid Bus MRT Feeder.
     """
     arrivals = {s['stop_id']: [] for s in nearby_stops}
-    skipped = {'no_trip_id': 0, 'trip_not_in_schedule': 0}
+    skipped = {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 0}
     wanted = {s['stop_id'] for s in nearby_stops}
 
     for v in vehicles:
-        trip_id = (v.get('trip_id') or '').strip()
+        trip_id = str(v.get('trip_id') or '').strip()
         if not trip_id:
             skipped['no_trip_id'] += 1
             continue
@@ -139,11 +143,19 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             skipped['trip_not_in_schedule'] += 1
             continue
 
+        try:
+            lat = float(v['latitude'])
+            lon = float(v['longitude'])
+        except (KeyError, TypeError, ValueError):
+            skipped['bad_position'] += 1
+            continue
+
         day = service_day_epoch(timestamp, utc_offset_hours)
-        bus_index, _ = nearest_stop_index(stops, v['latitude'], v['longitude'])
+        bus_index, _ = nearest_stop_index(stops, lat, lon)
         if bus_index < 0:
             continue
         delay = estimate_delay_seconds(stops, bus_index, timestamp, day)
+        headsign = headsign_lookup(trip_id) if headsign_lookup else ''
 
         # Only stops the bus has yet to reach; a closer stop behind it is not
         # an arrival, it is history.
@@ -160,7 +172,7 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             arrivals[sid].append({
                 'vehicle_id': v.get('vehicle_id', ''),
                 'route_display': v.get('route_display', ''),
-                'headsign': headsign_lookup(trip_id) if headsign_lookup else '',
+                'headsign': headsign,
                 'eta_seconds': secs,
                 'delay_seconds': delay,
                 'age_seconds': v.get('age_seconds'),
