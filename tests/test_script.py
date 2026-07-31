@@ -4,6 +4,7 @@ import sys
 import os
 import time
 import warnings
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -1274,3 +1275,88 @@ def test_arrivals_panel_reports_when_no_stops_are_nearby(monkeypatch):
 
     said = _texts(st_stub.info) + _texts(st_stub.caption)
     assert 'No stops found' in said
+
+
+# ── tap-a-bus: main map selection (secondary "arrivals" view) ────────────────
+#
+# A bare MagicMock() — the generic st_stub used by every other test above —
+# never exercises this feature's real code path: `MagicMock().get(...)`
+# returns another (truthy) Mock rather than raising, so `picked` becomes a
+# Mock and the `if picked:` branch is entered with a nonsense value, not the
+# `except` clause. These tests instead stub a realistic `.selection.objects`
+# payload (a plain dict, via SimpleNamespace) so the try branch's actual
+# parsing and rendering logic is exercised, both when something is picked and
+# when nothing is.
+
+def _live_map_with_selection(monkeypatch, selection_payload):
+    """Like _live_map_with_one_region, but wires st.pydeck_chart to return a
+    caller-supplied selection object, and hands back the vehicle's fixed
+    timestamp so a test can build a matching timetable for it."""
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    st_stub.selectbox.return_value = 'Rapid Bus KL'
+    st_stub.text_input.return_value = ''
+    st_stub.session_state['map_theme'] = 'dark'
+    st_stub.session_state['getting_location'] = False
+    st_stub.session_state['selected_region'] = 'Rapid Bus KL'
+    st_stub.session_state['_region_for_search'] = 'Rapid Bus KL'
+    st_stub.columns.side_effect = lambda spec, *a, **k: [
+        MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
+    ]
+    st_stub.pydeck_chart.return_value = selection_payload
+
+    now = int(time.time())
+    df = pd.DataFrame({
+        'region': ['Rapid Bus KL'], 'vehicle_id': ['V1'],
+        'latitude': [3.14], 'longitude': [101.68], 'bearing': [90.0],
+        'speed': [10.0], 'timestamp': [now],
+        'trip_id': ['T1'], 'route_id': ['T5800'],
+        'freshness': ['fresh'], 'age_seconds': [5],
+    })
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (df, {'total': 1, 'stale': 0, 'hidden': 0,
+                              'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'),
+    )
+    return live_map, st_stub, now
+
+
+def test_tapped_vehicle_with_realistic_selection_renders_its_arrival(monkeypatch):
+    """Success path: a real dict payload (not a MagicMock) resolves 'V1',
+    and its timetable puts a stop 5 minutes ahead within walking distance —
+    the panel must render that arrival."""
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    stops = [
+        {'stop_id': 'S0', 'stop_name': 'Origin Stop', 'stop_lat': 3.14, 'stop_lon': 101.68,
+         'arrival_seconds': local_seconds_of_day},
+        {'stop_id': 'S1', 'stop_name': 'Nearby Stop', 'stop_lat': 3.1401, 'stop_lon': 101.6801,
+         'arrival_seconds': local_seconds_of_day + 300},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+
+    live_map.show()
+
+    said = _texts(st_stub.success)
+    assert 'Nearby Stop' in said, f"expected the tapped vehicle's arrival at Nearby Stop, got: {said!r}"
+
+
+def test_tapped_vehicle_with_no_selection_renders_nothing(monkeypatch):
+    """A realistic but empty payload (`objects` is an empty dict): nothing was
+    tapped, so the panel must render nothing and must not raise."""
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    live_map.show()   # must not raise
+
+    said = _texts(st_stub.success)
+    assert 'reaches' not in said, "no vehicle was tapped, so no arrival should render"

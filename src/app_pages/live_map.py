@@ -512,6 +512,16 @@ def show():
     # Secondary view: one tapped vehicle, against the user's nearest stop on
     # its own trip. Re-resolved from the current frame every render, so
     # auto-refresh advances the bus without dropping the selection.
+    #
+    # NOTE on test coverage: a bare MagicMock() (the generic page-level stub
+    # used elsewhere in this test file) never reaches the `except` below —
+    # `MagicMock().get(...)` returns another (truthy) Mock rather than
+    # raising, so `picked` becomes a Mock and execution falls into the
+    # `if picked:` branch. The dedicated selection tests stub a realistic
+    # `.selection.objects` payload (a real dict) to actually exercise both
+    # the success path and the "nothing selected" path; the broad except
+    # here exists to guard against a real selection payload not matching
+    # this assumed shape, not because the generic stub triggers it.
     picked = None
     try:
         objects = selection.selection.objects.get("vehicles", [])
@@ -522,7 +532,20 @@ def show():
     if picked:
         row = df_map[df_map['vehicle_id'] == picked]
         if row.empty:
-            st.info(f"Vehicle {picked} is no longer reporting.")
+            # df_map has already been through the region filter, the stale/
+            # hidden-freshness filter, and any active route search — a
+            # selection surviving from before one of those changed can miss
+            # here while the vehicle is still very much live in df_live.
+            # Asserting "no longer reporting" in that case would be a
+            # confidently wrong claim, which this feature must never make.
+            if picked in df_live['vehicle_id'].values:
+                st.info(
+                    f"Vehicle {picked} is still reporting, but is not shown in "
+                    f"the current view — it may be filtered out by a route "
+                    f"search, belong to another region, or be too stale to draw."
+                )
+            else:
+                st.info(f"Vehicle {picked} is no longer reporting.")
         elif not st.session_state.get('user_location'):
             st.info("Tap **📍 Locate Me** to see when this bus reaches you.")
         else:
