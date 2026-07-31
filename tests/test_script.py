@@ -1842,3 +1842,37 @@ def test_stop_names_link_to_google_maps(monkeypatch):
     said = _texts(st_stub.markdown)
     assert 'maps.google.com' in said or 'google.com/maps' in said
     assert '3.058659,101.673981' in said
+
+
+def test_nearby_stops_layer_is_a_hollow_ring_not_a_filled_dot(monkeypatch):
+    """Buses are filled ScatterplotLayer dots. A stop drawn the same way (just
+    a different colour/radius) reads as a smaller bus, not a different kind
+    of thing. The stops layer must be stroked and unfilled so its SHAPE, not
+    only its colour, differs from a vehicle."""
+    import pydeck as pdk
+    from app_pages import live_map
+
+    made_kwargs = {}
+    real_layer = pdk.Layer
+
+    def recording_layer(*a, **k):
+        if k.get('id') == 'nearby-stops':
+            made_kwargs.update(k)
+        return real_layer(*a, **k)
+
+    monkeypatch.setattr(live_map.pdk, 'Layer', recording_layer)
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map_mod, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.0586, 'lon': 101.6739,
+                                              'accuracy': 10}
+    monkeypatch.setattr(live_map_mod.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'A STOP',
+                                          'stop_lat': 3.0586, 'stop_lon': 101.6739,
+                                          'distance_m': 50.0}])
+    live_map_mod.show()
+
+    assert made_kwargs, "the nearby-stops layer was never constructed"
+    assert made_kwargs.get('stroked') is True, \
+        "stop markers must be outlined (stroked=True) to read as rings"
+    assert made_kwargs.get('filled') is False, \
+        "stop markers must not be filled, or they read as small bus dots"

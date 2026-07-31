@@ -545,27 +545,38 @@ def show():
         pitch=st.session_state.map_view_state['pitch'],
     )
 
-    # Nearby stops, drawn beneath the vehicles. Only static columns reach the
-    # layer: a per-render-volatile field here would churn the deck spec hash
-    # and break map selection, as it did in 2.5.0.
+    # Nearby stops, drawn beneath the vehicles. Resolved once here and reused
+    # by the "Arrivals near you" panel below, so the map and the panel can
+    # never disagree about which stops are in range, and stops.txt is parsed
+    # only once per render instead of twice.
+    # Only static columns reach the layer: a per-render-volatile field here
+    # would churn the deck spec hash and break map selection, as it did in
+    # 2.5.0.
     stops_layer = None
     _loc = st.session_state.get('user_location')
+    _nearby_stops = None
     if _loc and agency_slug:
-        _stops = gtfs_static.get_stops_near(
+        _nearby_stops = gtfs_static.get_stops_near(
             agency_slug, _loc['lat'], _loc['lon'],
             radius_m=NEARBY_STOP_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
-        if _stops:
+        if _nearby_stops:
             stops_layer = pdk.Layer(
                 "ScatterplotLayer",
                 id="nearby-stops",
                 data=[{'stop_name': s['stop_name'],
                        'stop_lat': s['stop_lat'],
-                       'stop_lon': s['stop_lon']} for s in _stops],
+                       'stop_lon': s['stop_lon']} for s in _nearby_stops],
                 get_position=['stop_lon', 'stop_lat'],
-                get_fill_color=[255, 200, 60, 180],
+                # Hollow rings, not dots: buses are filled circles, so a stop
+                # must differ in shape and not only in colour — a smaller
+                # coloured dot reads as a smaller bus.
+                stroked=True,
+                filled=False,
+                get_line_color=[255, 200, 60, 220],
+                line_width_min_pixels=2,
                 get_radius=40,
-                radius_min_pixels=4,
-                radius_max_pixels=9,
+                radius_min_pixels=5,
+                radius_max_pixels=10,
                 pickable=False,
             )
 
@@ -798,9 +809,10 @@ def show():
         elif not agency_slug:
             st.info(f"No timetable is published for {selected_region}.")
         else:
-            nearby = gtfs_static.get_stops_near(
-                agency_slug, loc['lat'], loc['lon'],
-                radius_m=NEARBY_STOP_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
+            # Reuse the single resolution of get_stops_near computed above
+            # (same agency, same lat/lon, same radius/limit) so the panel and
+            # the map layer can never list a different set of stops.
+            nearby = _nearby_stops
             if not nearby:
                 st.info(
                     f"No stops found within {NEARBY_STOP_RADIUS_M} m of you "
