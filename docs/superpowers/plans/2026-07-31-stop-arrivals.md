@@ -895,12 +895,22 @@ In `src/app_pages/live_map.py`, immediately BEFORE the existing `with st.expande
                     "Estimated from the published timetable and each bus's "
                     "measured delay — accurate to about one stop."
                 )
-                if skipped['no_trip_id'] or skipped['trip_not_in_schedule']:
-                    st.caption(
-                        f"Not shown: {skipped['no_trip_id']} vehicle(s) without trip "
-                        f"info, {skipped['trip_not_in_schedule']} on a trip missing "
-                        f"from the timetable."
-                    )
+                # skipped has three keys — no_trip_id, trip_not_in_schedule and
+                # bad_position. Report every non-zero one; a vehicle omitted
+                # without explanation is indistinguishable from one that simply
+                # is not coming, which is the whole reason these are counted.
+                if any(skipped.values()):
+                    reasons = []
+                    if skipped.get('no_trip_id'):
+                        reasons.append(f"{skipped['no_trip_id']} without trip info")
+                    if skipped.get('trip_not_in_schedule'):
+                        reasons.append(
+                            f"{skipped['trip_not_in_schedule']} on a trip missing "
+                            f"from the timetable")
+                    if skipped.get('bad_position'):
+                        reasons.append(
+                            f"{skipped['bad_position']} with an unusable position")
+                    st.caption("Not shown: " + ", ".join(reasons) + ".")
                 if not any_arrival:
                     st.caption("No buses are currently inbound to these stops.")
 ```
