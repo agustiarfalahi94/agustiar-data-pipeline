@@ -22,6 +22,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
+- **📍 Arrivals near you** — with your location set, see the stops within 800 m and the next buses
+  to each, with estimated arrivals and how late each bus is running. Tap a bus on the map to see
+  when that specific vehicle reaches your nearest stop
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation
@@ -222,6 +225,7 @@ Live Map      Data Table        Analytics     Network Health
 | **dbt marts for analytical reads** | Network Health and the Analytics region charts read pre-modelled views, so the scoring logic lives in one tested place instead of inline SQL. The live map keeps its direct query, so positions and their per-second ages are always current |
 | **Live window anchored to wall-clock now** | Anchoring to `MAX(timestamp)` let one feed with a fast clock drag the window into the future and black out regions reporting honestly. Ages are clamped at zero so a fast clock reads as current rather than being discarded |
 | **15 min fetched, 5 min drawn, 60s solid** | `LIVE_HIDDEN_SECONDS` bounds the query, `LIVE_STALE_SECONDS` bounds what is drawn, `LIVE_FRESH_SECONDS` bounds what is drawn solid. A vehicle between the last two is dimmed rather than deleted, so a 90-second gap in one feed no longer looks like the bus vanished |
+| **ETAs from the timetable, not from speed** | The provider publishes no trip updates, so arrivals are derived by joining each vehicle's live `trip_id` to `stop_times.txt` and shifting by its measured delay. Instantaneous speed is a poor predictor — a bus at a red light reports 0 km/h |
 
 ### Route Viewer — How It Works
 
@@ -361,7 +365,7 @@ For the full interactive lineage graph:
 ## 🛠️ Dependencies
 
 ```
-streamlit>=1.28.0              # Web framework
+streamlit>=1.40.0              # Web framework
 streamlit-autorefresh>=1.0.1   # 20s auto-refresh trigger
 streamlit-js-eval>=0.1.7       # Browser geolocation bridge
 pandas>=2.0.0                  # Data manipulation
@@ -403,6 +407,7 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 - [x] dbt analytics layer — bronze/silver/gold models, data tests, CI
 - [x] Search by route name — type a route (e.g. `T580`) and see every vehicle on that
       route live on the map, instead of looking up an opaque vehicle ID
+- [x] Arrivals near you — stop-centric ETAs derived from the published timetable
 
 > **Not planned: a full route planner.** Origin→destination journey planning is well served
 > by Google Maps and this app would not improve on it. The gap worth filling is the opposite

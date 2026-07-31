@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-07-31
+
+### Added
+- **"Arrivals near you"** — the Live Map now answers *"I am standing here; what can I catch?"*
+  It finds stops within 800 m of your location and lists the next buses to each, with an estimated
+  arrival, the route's destination, and how late the bus is running. No route knowledge and no map
+  reading required
+- **Tap a bus** to see when that specific vehicle reaches your nearest stop on its trip
+- `src/utils/eta.py` — arrival estimation as pure, testable functions: `haversine_m`,
+  `nearest_stop_index`, `walking_minutes`, `service_day_epoch`, `estimate_delay_seconds`,
+  `compute_eta_seconds` and `arrivals_for_stops`
+- `gtfs_static.get_trip_stops`, `get_stops_near`, `get_trip_headsign` and `parse_gtfs_time` —
+  timetable lookups, with `stop_times.txt` (~88,000 rows for Rapid Bus KL) parsed once per agency
+  into a trip-keyed index rather than per interaction
+
+### Changed
+- Minimum Streamlit raised to **1.40** for map click selection (`selection_mode` / `on_select`)
+
+### Notes
+- The provider publishes vehicle positions only — trip updates are on their 2026 roadmap — so every
+  arrival here is derived locally from the published timetable plus each bus's measured delay. It
+  is accurate to about one stop and is labelled as an estimate throughout
+- GTFS times legitimately exceed 24:00:00 (`25:30:00` means 01:30 the next day). They are handled
+  as integer seconds since service-day midnight, never as clock times
+- Known limitation: the service day is derived from the vehicle's own timestamp because ingestion
+  does not capture the trip descriptor's `startDate`. A trip that begins before midnight and runs
+  past it can therefore resolve against the wrong service day. Rapid KL services largely end by
+  midnight, so this is accepted for now
+- Walking time is a straight-line distance at a fixed pace, not a routed path
+- `arrivals_for_stops` reports its skip reasons as three separate counters — `no_trip_id`,
+  `trip_not_in_schedule` and `bad_position` (a vehicle whose coordinates are missing, non-finite, or
+  geographically out of range) — and the UI surfaces every one that is non-zero, so a vehicle
+  omitted from the list is never omitted silently
+- `compute_eta_seconds` returns `None` for a stop that does not exist on the trip, and a negative
+  integer for a stop the bus has already passed. Those are deliberately different values —
+  collapsing both to `-1` would make missing data read as "arriving now"
+- Verified with the automated suite (135 tests) and parse checks; not yet exercised in a running
+  browser
+
 ## [2.4.2] - 2026-07-31
 
 ### Fixed
