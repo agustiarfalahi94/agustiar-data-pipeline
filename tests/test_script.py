@@ -1688,3 +1688,78 @@ def test_a_cleared_bus_can_be_selected_again(monkeypatch):
     live_map.show()                       # user taps V1 again
     assert st_stub.session_state.get('selected_vehicle_id') == 'V1', \
         "clearing a bus permanently blocked reselecting it"
+
+
+def test_a_served_stop_beyond_the_nearest_few_is_still_shown(monkeypatch):
+    """
+    Stops are chosen by usefulness, not raw proximity.
+
+    Reported from Bukit Jalil: 15 stops sat within 800 m, the panel evaluated
+    only the 5 nearest, and the one stop with a bus inbound ranked 9th. Every
+    stop on screen said "nothing inbound" while a bus was on its way to one the
+    panel never looked at.
+    """
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    st_stub.selectbox.return_value = 'Rapid Bus KL'
+    st_stub.text_input.return_value = ''
+    st_stub.session_state.update({
+        'map_theme': 'dark', 'getting_location': False,
+        'selected_region': 'Rapid Bus KL', '_region_for_search': 'Rapid Bus KL',
+        'user_location': {'lat': 3.0586, 'lon': 101.6739, 'accuracy': 10},
+    })
+    st_stub.columns.side_effect = lambda spec, *a, **k: [
+        MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
+    ]
+    now = int(time.time())
+    monkeypatch.setattr(live_map.time, 'time', lambda: float(now))
+
+    # Eight stops in range. Only the FAR one is served.
+    stops = [
+        {'stop_id': f'S{i}', 'stop_name': f'CLOSE STOP {i}',
+         'stop_lat': 3.0586 + i * 0.0002, 'stop_lon': 101.6739,
+         'distance_m': 20.0 * (i + 1)}
+        for i in range(7)
+    ]
+    served = {'stop_id': 'FAR', 'stop_name': 'LRT AWAN BESAR',
+              'stop_lat': 3.0640, 'stop_lon': 101.6739, 'distance_m': 585.0}
+    # The stub MUST honour `limit` the way the real get_stops_near does —
+    # it sorts by distance and returns found[:limit]. A stub that ignores
+    # `limit` bypasses the very truncation this bug is about, and the test
+    # would then pass against the unfixed code.
+    all_stops = stops + [served]
+
+    def fake_stops_near(agency, lat, lon, radius_m=800, limit=5):
+        return sorted(all_stops, key=lambda s: s['distance_m'])[:limit]
+
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', fake_stops_near)
+
+    # A trip that stops at the bus's position, then at the far stop.
+    trip = [
+        {'stop_id': 'ORIGIN', 'stop_name': 'ORIGIN', 'stop_lat': 3.0500,
+         'stop_lon': 101.6739, 'arrival_seconds': 0},
+        {'stop_id': 'FAR', 'stop_name': 'LRT AWAN BESAR', 'stop_lat': 3.0640,
+         'stop_lon': 101.6739, 'arrival_seconds': 600},
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: trip)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+
+    df = pd.DataFrame([{
+        'region': 'Rapid Bus KL', 'vehicle_id': 'V1',
+        'latitude': 3.0500, 'longitude': 101.6739, 'bearing': 90.0, 'speed': 10.0,
+        'timestamp': now, 'trip_id': 'T1', 'route_id': 'S6060',
+        'freshness': 'fresh', 'age_seconds': 5,
+    }])
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (df, {'total': 1, 'stale': 0, 'hidden': 0,
+                              'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'),
+    )
+
+    live_map.show()
+
+    said = _texts(st_stub.markdown) + _texts(st_stub.caption)
+    assert 'LRT AWAN BESAR' in said, \
+        "the only served stop was dropped for being 8th-nearest"

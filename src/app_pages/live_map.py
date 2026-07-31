@@ -33,6 +33,13 @@ UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
 # from the number actually applied.
 NEARBY_STOP_RADIUS_M = 800
 
+# Evaluate every stop in range, then show the useful ones. Truncating by
+# distance first hid a stop that had a bus inbound behind five closer stops
+# that had none.
+NEARBY_STOP_SCAN_LIMIT = 40     # candidates evaluated
+NEARBY_STOP_DISPLAY = 5         # stops rendered
+NEARBY_STOP_MIN_SHOWN = 3       # filled with unserved stops when few are served
+
 # The same caveat wherever an arrival is shown.
 ARRIVAL_ACCURACY_NOTE = (
     "Estimated from the published timetable — accurate to about one stop."
@@ -732,7 +739,7 @@ def show():
         else:
             nearby = gtfs_static.get_stops_near(
                 agency_slug, loc['lat'], loc['lon'],
-                radius_m=NEARBY_STOP_RADIUS_M, limit=5)
+                radius_m=NEARBY_STOP_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
             if not nearby:
                 st.info(
                     f"No stops found within {NEARBY_STOP_RADIUS_M} m of you "
@@ -748,8 +755,18 @@ def show():
                     frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
                 )
 
-                any_arrival = False
-                for stop in nearby:
+                # Rank by usefulness: stops with a bus actually coming, nearest
+                # first, then fill with the nearest unserved ones so the panel
+                # is never empty and "nothing anywhere" is distinguishable from
+                # "the app found nothing".
+                served = [s for s in nearby if arrivals.get(s['stop_id'])]
+                unserved = [s for s in nearby if not arrivals.get(s['stop_id'])]
+                shown = served[:NEARBY_STOP_DISPLAY]
+                if len(shown) < NEARBY_STOP_MIN_SHOWN:
+                    shown += unserved[:NEARBY_STOP_MIN_SHOWN - len(shown)]
+
+                any_arrival = bool(served)
+                for stop in shown:
                     walk = eta.walking_minutes(stop['distance_m'])
                     st.markdown(
                         f"**{stop['stop_name']}** · ~{int(stop['distance_m'])} m "
@@ -757,7 +774,7 @@ def show():
                     )
                     rows = arrivals.get(stop['stop_id'], [])
                     if not rows:
-                        st.caption("  nothing inbound right now")
+                        st.caption("  no bus currently en route to this stop")
                         continue
                     any_arrival = True
                     for a in rows[:3]:
@@ -781,7 +798,10 @@ def show():
                             f"{skipped['bad_position']} with unusable telemetry")
                     st.caption("Not shown: " + ", ".join(reasons) + ".")
                 if not any_arrival:
-                    st.caption("No buses are currently inbound to these stops.")
+                    st.caption(
+                        f"No buses are currently en route to any stop within "
+                        f"{NEARBY_STOP_RADIUS_M} m of you."
+                    )
 
     with st.expander("🚌 Route Viewer", expanded=False):
         vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())
