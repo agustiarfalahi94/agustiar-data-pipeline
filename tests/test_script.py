@@ -1442,7 +1442,7 @@ def test_the_tapped_arrival_carries_the_same_caveats_as_the_stop_panel(monkeypat
 
     said = _texts(st_stub.info) + _texts(st_stub.caption)
     assert 'last reported 4 min ago' in said, \
-        f"a stale position must be shown with its age, flagged as less certain: {said!r}"
+        f"a stale position must be shown with its age: {said!r}"
     assert 'accurate to about one stop' in said, \
         f"the accuracy caveat is missing from the tapped-bus panel: {said!r}"
 

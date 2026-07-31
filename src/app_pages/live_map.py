@@ -555,6 +555,11 @@ def show():
             matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
             st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")
 
+    # Resolved once per render and passed down. It was being re-resolved at
+    # each of the three walk-time call sites, re-reading config and st.secrets
+    # every time for a value that cannot change within a render.
+    ors_key = _ors_api_key()
+
     # One arrivals lookup, shared by the tapped-stop panel and the "Arrivals
     # near you" panel below.
     #
@@ -607,8 +612,8 @@ def show():
     df_map['tip_html'] = (
         df_map['vehicle_id'].map(lambda v: _tip_html('Vehicle', v))
         + '<br/>' + df_map['route_display'].map(lambda v: _tip_html('Route', v))
-        + '<br/>' + df_map['speed_display'].map(lambda v: _tip_html('Speed', str(v) + ' km/h'))
-        + '<br/>' + df_map['bearing_display'].map(lambda v: _tip_html('Bearing', str(v) + '°'))
+        + '<br/>' + df_map['speed_display'].map(lambda v: _tip_html('Speed', v + ' km/h'))
+        + '<br/>' + df_map['bearing_display'].map(lambda v: _tip_html('Bearing', v + '°'))
         + '<br/>' + df_map['last_report_display'].map(lambda v: _tip_html('Last reported', v))
     )
     vehicle_columns = [
@@ -964,7 +969,7 @@ def show():
                         body.append(arrives)
                         walk = walking.walk_times(
                             loc['lat'], loc['lon'], [s], agency_slug,
-                            api_key=_ors_api_key())[s['stop_id']]
+                            api_key=ors_key)[s['stop_id']]
                         body.append(
                             f"That stop is ~{int(walk['distance_m'])} m from you "
                             f"({_walk_label(walk)})")
@@ -995,7 +1000,7 @@ def show():
         else:
             walk = walking.walk_times(
                 loc['lat'], loc['lon'], [stop], agency_slug,
-                api_key=_ors_api_key())[stop['stop_id']]
+                api_key=ors_key)[stop['stop_id']]
             body = [f"📍 **{stop['stop_name']}**",
                     f"~{int(walk['distance_m'])} m · {_walk_label(walk)}"]
 
@@ -1017,7 +1022,7 @@ def show():
                 )
             st.info("  \n".join(body))
             st.caption(ARRIVAL_ACCURACY_NOTE)
-            if st.button("Clear stop selection"):
+            if st.button("Clear stop selection", key="clear_stop_selection"):
                 st.session_state['cleared_stop_id'] = selected_stop_id
                 st.session_state['selected_stop_id'] = None
                 # Bump the widget key so Streamlit stops handing back the stale
@@ -1082,7 +1087,7 @@ def show():
 
                 walks = walking.walk_times(
                     loc['lat'], loc['lon'], shown, agency_slug,
-                    api_key=_ors_api_key())
+                    api_key=ors_key)
 
                 any_arrival = bool(served)
                 for stop in shown:

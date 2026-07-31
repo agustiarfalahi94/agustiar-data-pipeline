@@ -34,9 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stops on the map are tappable.** Tapping a stop ring opens a panel below the map naming that
   stop, its distance, its walk time, and the buses en route to it — the same information the
   "Arrivals near you" list already showed, reachable directly from the map. Tapping a bus replaces
-  the stop panel and vice versa: last tap wins, matching the existing bus-tap behaviour. Hover
-  tooltips on stops were considered and rejected again — hover does not exist on the touch devices
-  this app is actually used on, and 2.6.0 already made that call for the same layer
+  the stop panel and vice versa: last tap wins, matching the existing bus-tap behaviour. Tap is
+  the designed interaction, because hover does not exist on the touch devices this app is actually
+  used on; what was rejected was hover as *the* way in, not a tooltip as such. Since every map row
+  now carries its own rendered `tip_html`, a desktop pointer hovering a stop does also show
+  `Stop: <name>` — a side effect of that work, and stated here so the documentation does not
+  understate what the code does
 
 ### Changed
 - **Arrival rows are route-first and labelled.** `format_arrival` now renders `Route T580 → Awan
@@ -46,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Walk times state whether they are real. A routed figure reads `~9 min walk`; a fallback figure
   reads `~5 min walk (estimated)`, because a straight-line estimate cannot see that KL1291 is 60 m
   away and 634 m on foot
+- **A failed routing lookup stops further requests for 60 seconds.** Auto-refresh renders every
+  20 s and each render can issue two lookups at a 5 s timeout, so an ORS outage, an exhausted
+  quota, or ordinary mobile flakiness meant up to 10 s of blocking I/O in the page thread three
+  times a minute — and a 429 became a tight retry loop against the endpoint rate-limiting us to
+  prevent exactly that. This is not negative caching of the *answer*, which remains rejected: no
+  fallback distance is ever stored, distances already routed are still served throughout the
+  window, and the estimate is recomputed fresh on every render. Sixty seconds, not a day, so
+  recovery is still felt as immediate
+- Both arrival panels list at most three buses for one stop. A tapped stop previously rendered
+  every arrival while the list below it capped at three, so the same stop could show six above and
+  three below — a contradiction rather than two views
 
 ### Known Limitations
 - **Without an `ORS_API_KEY`, walk times remain straight-line estimates**, labelled
