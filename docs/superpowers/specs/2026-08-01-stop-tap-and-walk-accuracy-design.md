@@ -106,6 +106,30 @@ inside the per-request ceiling and comfortably inside the daily one before cachi
 already a dependency, and the REST call is made directly — **no new package**, so
 `requirements.txt` and `pyproject.toml` dependency lists are unchanged.
 
+### Live measurement, 2026-08-01
+
+The premise was tested against the real API before planning, from KL1743 GREEN AVENUE
+CONDOMINIUM (3.05866, 101.67398) across all 15 stops within 800 m. HTTP 200; Malaysian footpath
+coverage in OSM is sufficient, with no null entries.
+
+| Stop | Straight | Routed | App today | Routed |
+|---|---|---|---|---|
+| KL1291 KM1 BUKIT JALIL | 60 m | 634 m | 1 min | ~10 min |
+| KL2019 ANJUNG HIJAU GREENFIELDS | 332 m | 344 m | 5 min | ~5 min |
+| KL1289 TAMAN ESPLANADE | 485 m | 957 m | 7 min | ~15 min |
+| KL2324 LRT AWAN BESAR | 585 m | 864 m | 8 min | ~13 min |
+
+**Circuity across the 15: min 1.04, median 1.62, max 10.60.**
+
+Two conclusions, both load-bearing:
+
+1. A spread of 1.04 to 10.60 *inside one neighbourhood* rules out any tuned multiplier. This is
+   the evidence for routing, and it is stronger than the two hand-collected data points that
+   prompted the work.
+2. KL1291 is the failure the current code cannot see. A stop 60 m away across an uncrossable
+   barrier is quoted as a one-minute walk. A user told a bus is three minutes out would believe
+   they had time; the walk is ten.
+
 ---
 
 ## Part 1 — `src/utils/walking.py` (new module)
@@ -125,9 +149,23 @@ network or a browser.
 ### Routed path
 
 One POST to `https://api.openrouteservice.org/v2/matrix/foot-walking`, one origin, N destinations,
-requesting both `distance` and `duration` metrics. `duration` is ORS's pedestrian estimate along
-the real footpath network and is what the UI displays. Timeout **5 seconds** — this call sits
-inside a page render and a slow dependency must not hold the map hostage.
+requesting the `distance` metric. Timeout **5 seconds** — this call sits inside a page render and
+a slow dependency must not hold the map hostage.
+
+**ORS supplies the distance; the pace stays ours.** The obvious approach — display ORS's own
+`duration` — was tested against the live API and rejected. On the reported Stop B, ORS returns a
+correct routed distance of 957 m but a duration of 11 minutes, implying 5.2 km/h; Google says 16
+minutes, implying ~3.6 km/h. ORS models the path, not the crossings, waiting, stairs, or the pace
+of a person who is not in a hurry. Taking ORS's distance at our own pace yields ~15 minutes against
+Google's 16.
+
+```python
+WALK_PACE_M_PER_MIN = 67    # 4.0 km/h, matching observed Google walking estimates
+minutes = max(1, ceil(routed_distance_m / WALK_PACE_M_PER_MIN))
+```
+
+One constant governs walking speed everywhere, routed or fallback, so the two paths cannot drift
+into quoting different speeds for the same walk.
 
 ### Fallback path
 
@@ -136,14 +174,18 @@ Every one collapses to the same behaviour — straight-line estimate, `routed=Fa
 exception escaping into the render**.
 
 ```python
-estimate_minutes(distance_m) = ceil(distance_m * DETOUR_FACTOR / FALLBACK_PACE_M_PER_MIN)
-DETOUR_FACTOR = 1.35
-FALLBACK_PACE_M_PER_MIN = 75    # 4.5 km/h, a real walk with crossings
+estimate_minutes(distance_m) = ceil(distance_m * DETOUR_FACTOR / WALK_PACE_M_PER_MIN)
+DETOUR_FACTOR = 1.4     # measured median 1.62 in Bukit Jalil; walkable grids run ~1.2
 ```
 
-This replaces today's `80` m/min crow-flight. On the reported stops it yields ~5 min (true 8) and
-~10 min (true 16) — still short, and honestly so. It is a floor on wrongness, not a fix; the fix is
-the routed path.
+The factor is a deliberate compromise between the two regimes, not a fit to either. Against the
+measured stops it turns 585 m into 13 minutes where routing says 13, and 485 m into 11 where
+routing says 15 — a large improvement on today's 8 and 7, and still short.
+
+**The fallback cannot detect a severed connection.** KL1291 sits 60 m away and 634 m by foot; no
+multiplier applied to 60 m will ever yield ten minutes. This is the ceiling on what any
+straight-line estimate can do, and precisely why the fallback is a degraded mode rather than the
+design.
 
 **Disposition of `eta.walking_minutes`.** It is superseded, not duplicated. Its two call sites
 (`live_map.py:808` and `live_map.py:878`) move to `walk_times`, and the function itself is removed
@@ -263,8 +305,10 @@ Unit tests, no network and no browser:
 - **Failure paths, each asserted separately:** absent key, connection error, non-200, malformed
   body, timeout. Each returns estimates with `routed=False` and raises nothing.
 - **No key ⇒ zero network calls**, asserted on a mock that fails the test if called.
-- **Request shape:** one request for N stops, correct origin/destination ordering, both metrics
+- **Request shape:** one request for N stops, correct origin/destination ordering, `distance`
   requested — ordering matters because results map back to stops positionally.
+- **Null distances:** ORS returns `null` for an unreachable destination. That stop falls back to
+  its straight-line estimate individually, without discarding the rest of the response.
 - **`format_arrival`:** the `Route` prefix present, missing headsign, `delay=None` rendering as
   nothing, `delay=0` likewise, stale position, route-search qualifier.
 - **Stop selection:** payload round-trip, last-tap-wins in both directions, clear button, and a
