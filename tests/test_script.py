@@ -12,6 +12,7 @@ from utils import data_processor
 from utils.data_processor import convert_speed_to_kmh, prepare_map_data, get_sorted_regions
 from unittest.mock import patch, MagicMock
 from utils.ingestion import _fetch_endpoint
+from utils import walking
 
 
 # ── convert_speed_to_kmh ──────────────────────────────────────────────────────
@@ -1010,6 +1011,33 @@ def _stub_streamlit(monkeypatch, module):
     )
     monkeypatch.setattr(module, 'st', st_stub)
     monkeypatch.setattr(module, 'fetch_and_store_transit_data', lambda *a, **k: None)
+
+    # ── the page must never reach OpenRouteService from a test ──────────────
+    #
+    # Two separate failures were live here. Locally, src/config.py holds a real
+    # ORS_API_KEY, so every page test that rendered a walk time spent the
+    # owner's quota against the real endpoint — a full run made 39 requests
+    # carrying the real key. On CI there is no config.py, so _ors_api_key()
+    # fell through to st.secrets, and `st` being a MagicMock made that return a
+    # truthy Mock; requests then raised InvalidHeader, which _routed_distances'
+    # broad except swallowed. CI passed for an accidental reason and only ever
+    # exercised the fallback — exactly the local/CI divergence this helper
+    # exists to prevent.
+    #
+    # So: pin the key to None on both paths, and make any attempt to reach the
+    # network a loud failure rather than a silently-swallowed one. A test that
+    # genuinely wants the routed path must opt in by overriding this mock with
+    # a canned response of its own.
+    st_stub.secrets = {}
+    if hasattr(module, '_config'):
+        monkeypatch.setattr(module, '_config', None)
+    monkeypatch.setattr(
+        walking.requests, 'post',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError('page test reached the network')))
+    # Cached routed distances would otherwise leak between tests and let one
+    # test's canned response answer another's lookup.
+    walking._clear_cache()
     return st_stub
 
 
@@ -1969,6 +1997,42 @@ def test_nearby_stops_layer_is_a_hollow_ring_not_a_filled_dot(monkeypatch):
         "stop markers must be outlined (stroked=True) to read as rings"
     assert made_kwargs.get('filled') is False, \
         "stop markers must not be filled, or they read as small bus dots"
+
+
+def test_the_stops_layer_is_tappable_and_carries_its_own_tooltip(monkeypatch):
+    """
+    Every stop-selection test injects a synthetic selection payload, so the two
+    settings that make a real tap possible are invisible to all of them:
+    reverting `pickable=True` to the `pickable=False` 2.6.0 shipped leaves them
+    all green while the feature is dead in the browser, and restoring the old
+    vehicle-specific Deck tooltip template would make a stop render literal
+    `{vehicle_id}` text. Both are pinned here, against the built deck rather
+    than against a mock.
+    """
+    from app_pages import live_map
+
+    selection = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map_mod, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.0586, 'lon': 101.6739,
+                                              'accuracy': 10}
+    monkeypatch.setattr(live_map_mod.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'A STOP',
+                                          'stop_lat': 3.0586, 'stop_lon': 101.6739,
+                                          'distance_m': 50.0}])
+    live_map_mod.show()
+
+    deck = st_stub.pydeck_chart.call_args_list[0].args[0]
+    stops = next((l for l in deck.layers if l.id == 'nearby-stops'), None)
+    assert stops is not None, "the nearby-stops layer is missing from the deck"
+    assert stops.pickable is True, \
+        "stops must be pickable or a tap on a stop ring does nothing"
+    assert 'tip_html' in stops.data[0], \
+        "each stop row must carry its own rendered tooltip markup"
+    assert 'A STOP' in stops.data[0]['tip_html']
+
+    assert deck._tooltip['html'] == '{tip_html}', \
+        ("the Deck tooltip must name the shared per-row field; a "
+         "vehicle-specific template renders literally on a stop")
 
 
 # ---------------------------------------------------------------------------
