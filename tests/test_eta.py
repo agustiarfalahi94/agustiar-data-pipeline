@@ -358,3 +358,72 @@ def test_arrivals_coerces_a_non_string_trip_id():
 
     assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 0}
     assert [a['vehicle_id'] for a in arrivals[stops[2]['stop_id']]] == ['INTTRIP']
+
+
+def test_arrivals_skips_an_infinite_position_without_raising():
+    """
+    float('inf') is accepted by float() but would otherwise reach
+    haversine_m and raise ValueError out of the whole call. It must be
+    counted under 'bad_position' instead, and a valid vehicle in the same
+    call must still produce its arrival.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    inf_lat = _vehicle('INF', float('inf'), 101.70, now)
+    good = _vehicle('GOOD', 3.10, 101.70, now)
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [inf_lat, good], nearby, lambda t: stops, now, 8)
+
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 1}
+    got = arrivals[stops[2]['stop_id']]
+    assert [a['vehicle_id'] for a in got] == ['GOOD']
+
+
+def test_arrivals_skips_a_nan_position_without_raising():
+    """
+    float('nan') doesn't raise -- it silently resolves to no nearest-stop
+    match and would vanish uncounted, contradicting the whole point of
+    'skipped'. It must be counted under 'bad_position', and a valid
+    vehicle in the same call must still produce its arrival.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    nan_lat = _vehicle('NAN', float('nan'), 101.70, now)
+    good = _vehicle('GOOD', 3.10, 101.70, now)
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [nan_lat, good], nearby, lambda t: stops, now, 8)
+
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 1}
+    got = arrivals[stops[2]['stop_id']]
+    assert [a['vehicle_id'] for a in got] == ['GOOD']
+
+
+def test_arrivals_skips_an_out_of_range_position_without_raising():
+    """
+    A latitude of 999 is finite but not a real position -- it would
+    produce nonsense distances rather than an error, which is worse than
+    raising. It must be rejected and counted under 'bad_position', and a
+    valid vehicle in the same call must still produce its arrival.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    nearby = [dict(stops[2], distance_m=100.0)]
+
+    out_of_range = _vehicle('OUTOFRANGE', 999, 101.70, now)
+    good = _vehicle('GOOD', 3.10, 101.70, now)
+
+    arrivals, skipped = eta.arrivals_for_stops(
+        [out_of_range, good], nearby, lambda t: stops, now, 8)
+
+    assert skipped == {'no_trip_id': 0, 'trip_not_in_schedule': 0, 'bad_position': 1}
+    got = arrivals[stops[2]['stop_id']]
+    assert [a['vehicle_id'] for a in got] == ['GOOD']

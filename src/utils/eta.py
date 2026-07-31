@@ -149,6 +149,15 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
         except (KeyError, TypeError, ValueError):
             skipped['bad_position'] += 1
             continue
+        # float() happily accepts inf/-inf/nan (and the strings "inf",
+        # "-inf"), which would otherwise reach haversine_m and raise out of
+        # this whole call, or -- for nan -- silently resolve to no match
+        # and vanish uncounted. Reject non-finite and out-of-range
+        # coordinates here, same as any other malformed position.
+        if not (math.isfinite(lat) and math.isfinite(lon)
+                and -90 <= lat <= 90 and -180 <= lon <= 180):
+            skipped['bad_position'] += 1
+            continue
 
         day = service_day_epoch(timestamp, utc_offset_hours)
         bus_index, _ = nearest_stop_index(stops, lat, lon)
