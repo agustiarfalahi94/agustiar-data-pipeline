@@ -471,7 +471,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Produces:
   - `eta.service_day_epoch(vehicle_timestamp, utc_offset_hours) -> int` — epoch seconds of local midnight for the service day containing that timestamp.
   - `eta.estimate_delay_seconds(stops, bus_index, bus_timestamp, day_epoch) -> int` — signed; positive means running late. `0` when `bus_index` is out of range.
-  - `eta.compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch) -> int` — seconds until arrival; negative means already passed.
+  - `eta.compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch) -> int | None` — seconds until arrival; a negative int means already passed; **`None` means there is no such stop**. These must stay distinguishable: `-1` for both would make a missing stop read as "left one second ago", and `nearest_stop_index` already returns `-1` for its own not-found case, so the obvious call chain would conflate them.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -769,7 +769,10 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             if sid not in wanted:
                 continue
             secs = compute_eta_seconds(stops, i, delay, now_epoch, day)
-            if secs < 0:
+            # None means "no such stop"; a negative int means "already passed".
+            # Both are excluded, but they are different facts and must not be
+            # compared with `<` against each other.
+            if secs is None or secs < 0:
                 continue
             arrivals[sid].append({
                 'vehicle_id': v.get('vehicle_id', ''),
