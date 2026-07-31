@@ -43,23 +43,6 @@ def test_nearest_stop_index_on_empty_or_exhausted_list():
     assert eta.nearest_stop_index(stops, 3.1, 101.7, start_index=5) == (-1, math.inf)
 
 
-def test_walking_minutes_rounds_up_and_has_a_floor():
-    assert eta.walking_minutes(0) == 1
-    assert eta.walking_minutes(80) == 1
-    assert eta.walking_minutes(81) == 2
-    assert eta.walking_minutes(240) == 3
-
-
-def test_walking_minutes_honours_a_non_default_pace():
-    """
-    Every assertion above holds for a function that ignored pace_m_per_min
-    and hardcoded 80, so the parameter needs one case of its own.
-    """
-    assert eta.walking_minutes(240, pace_m_per_min=40) == 6      # half the pace
-    assert eta.walking_minutes(240, pace_m_per_min=120) == 2     # 1.5x the pace
-    assert eta.walking_minutes(240) == 3                          # default unchanged
-
-
 import zipfile
 
 from utils import gtfs_static

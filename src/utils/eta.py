@@ -14,7 +14,6 @@ unit-testable.
 import math
 
 EARTH_RADIUS_M = 6_371_000
-DEFAULT_PACE_M_PER_MIN = 80     # ~4.8 km/h, an unhurried walk
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -42,16 +41,6 @@ def nearest_stop_index(stops, lat, lon, start_index=0):
         if d < best_distance:
             best_index, best_distance = i, d
     return best_index, best_distance
-
-
-def walking_minutes(distance_m, pace_m_per_min=DEFAULT_PACE_M_PER_MIN):
-    """
-    Approximate walking time in whole minutes, never less than 1.
-
-    Straight-line distance at a fixed pace — not a routed walking path. The UI
-    must present it as approximate.
-    """
-    return max(1, math.ceil(distance_m / pace_m_per_min))
 
 
 def service_day_epoch(vehicle_timestamp, utc_offset_hours):

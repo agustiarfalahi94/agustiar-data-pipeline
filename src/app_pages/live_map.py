@@ -7,6 +7,7 @@ from streamlit_js_eval import get_geolocation as js_get_geolocation
 from utils import db, data_processor, eta
 from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
+from utils import walking
 
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE
@@ -27,6 +28,43 @@ LIVE_FRESH_SECONDS = getattr(_config, 'LIVE_FRESH_SECONDS', 60)
 LIVE_STALE_SECONDS = getattr(_config, 'LIVE_STALE_SECONDS', 300)
 LIVE_HIDDEN_SECONDS = getattr(_config, 'LIVE_HIDDEN_SECONDS', 900)
 UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
+
+
+def _ors_api_key():
+    """
+    The OpenRouteService key: config.py for local dev, Streamlit Secrets for
+    cloud. None when unset, in which case walk times degrade to estimates.
+
+    Both are needed. config.py is gitignored so it never reaches Streamlit
+    Cloud, and no other code in this repository reads st.secrets — a past
+    refactor replaced those reads with hardcoded defaults, so a key placed in
+    Secrets was silently ignored until this function existed.
+
+    The except is broad because Streamlit raises varied types when no secrets
+    file exists at all, which is the normal case for a fresh clone. A missing
+    optional key must never break a render.
+    """
+    key = getattr(_config, 'ORS_API_KEY', None)
+    if key:
+        return key
+    try:
+        return st.secrets['routing']['api_key'] or None
+    except Exception:
+        return None
+
+
+def _walk_label(entry):
+    """
+    "~9 min walk", or "~5 min walk (estimated)" when routing was unavailable.
+
+    The suffix is not decoration. A routed figure follows the real footpath; an
+    estimate cannot see that KL1291 is 60 m away and 634 m on foot. Saying
+    which one you are reading is the difference between an estimate and a
+    claim.
+    """
+    suffix = '' if entry['routed'] else ' (estimated)'
+    return f"~{entry['minutes']} min walk{suffix}"
+
 
 # One definition of "within walking distance", shared by both arrival panels and
 # by the copy that explains them, so the number in the message can never drift
@@ -803,9 +841,12 @@ def show():
                         if delay is not None and delay >= 60:
                             arrives += f" · {round(delay / 60)} min late"
                         body.append(arrives)
+                        walk = walking.walk_times(
+                            loc['lat'], loc['lon'], [s], agency_slug,
+                            api_key=_ors_api_key())[s['stop_id']]
                         body.append(
-                            f"That stop is ~{int(s['distance_m'])} m from you "
-                            f"(~{eta.walking_minutes(s['distance_m'])} min walk)")
+                            f"That stop is ~{int(walk['distance_m'])} m from you "
+                            f"({_walk_label(walk)})")
                         age = a.get('age_seconds')
                         if age and age > LIVE_FRESH_SECONDS:
                             body.append(
@@ -873,16 +914,20 @@ def show():
                 if len(shown) < NEARBY_STOP_MIN_SHOWN:
                     shown += unserved[:NEARBY_STOP_MIN_SHOWN - len(shown)]
 
+                walks = walking.walk_times(
+                    loc['lat'], loc['lon'], shown, agency_slug,
+                    api_key=_ors_api_key())
+
                 any_arrival = bool(served)
                 for stop in shown:
-                    walk = eta.walking_minutes(stop['distance_m'])
+                    walk = walks[stop['stop_id']]
                     maps_url = (
                         "https://www.google.com/maps/search/?api=1&query="
                         f"{stop['stop_lat']},{stop['stop_lon']}"
                     )
                     st.markdown(
                         f"**[{stop['stop_name']}]({maps_url})** "
-                        f"· ~{int(stop['distance_m'])} m · ~{walk} min walk"
+                        f"· ~{int(walk['distance_m'])} m · {_walk_label(walk)}"
                     )
                     rows = arrivals.get(stop['stop_id'], [])
                     if not rows:
