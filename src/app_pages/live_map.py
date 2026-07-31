@@ -46,6 +46,29 @@ ARRIVAL_ACCURACY_NOTE = (
 )
 
 
+def format_route_heading(parts, fallback=''):
+    """
+    A route's identity as labelled lines rather than one run-on string.
+
+    Rapid KL's short name is frequently a place — "PAVILION BUKIT JALIL
+    (PAVBJ)" — and the long name is the path between two places, one of which
+    is that same place. Joined with a dash and no labels, it reads as the name
+    printed twice and leaves no way to tell which part is the route. Labelling
+    answers that; the repetition itself is in the source data and is not ours
+    to strip.
+
+    The path line is omitted when it adds nothing, i.e. when it is identical
+    to the short name.
+    """
+    short = (parts or {}).get('short') or ''
+    long_ = (parts or {}).get('long') or ''
+    name = short or long_ or fallback or '—'
+    lines = [f"**Route:** {name}"]
+    if long_ and long_ != short:
+        lines.append(f"**Runs:** {long_.replace('~', '↔')}")
+    return lines
+
+
 def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
     """
     One arrival as a single line, rendered identically wherever it appears.
@@ -700,11 +723,26 @@ def show():
                         # Deliberately not st.success: a green confirmation box
                         # reads as certainty, and this is an estimate that may
                         # rest on a position several minutes old.
-                        st.info(
-                            f"{format_arrival(a)} at **{s['stop_name']}** — "
-                            f"~{int(s['distance_m'])} m from you "
-                            f"(~{eta.walking_minutes(s['distance_m'])} min walk)."
-                        )
+                        parts = gtfs_static.get_route_parts(
+                            agency_slug, a.get('route_id', ''))
+                        heading = format_route_heading(
+                            parts, fallback=a.get('route_display', ''))
+                        mins = max(1, round(a['eta_seconds'] / 60))
+                        body = list(heading)
+                        body.append(
+                            f"**Arrives** {s['stop_name']} in **~{mins} min**")
+                        body.append(
+                            f"That stop is ~{int(s['distance_m'])} m from you "
+                            f"(~{eta.walking_minutes(s['distance_m'])} min walk)")
+                        age = a.get('age_seconds')
+                        if age and age > LIVE_FRESH_SECONDS:
+                            # Same wording as format_arrival's age caveat (used
+                            # by the other panel) so both panels state the same
+                            # fact about the same bus identically.
+                            body.append(
+                                f"⚠️ position {round(age / 60)} min old, "
+                                f"so less certain")
+                        st.info("  \n".join(body))
                         st.caption(ARRIVAL_ACCURACY_NOTE)
 
     # While a search is filtering the frame, len(df_map) is the match count, not

@@ -1763,3 +1763,27 @@ def test_a_served_stop_beyond_the_nearest_few_is_still_shown(monkeypatch):
     said = _texts(st_stub.markdown) + _texts(st_stub.caption)
     assert 'LRT AWAN BESAR' in said, \
         "the only served stop was dropped for being 8th-nearest"
+
+
+def test_format_route_heading_labels_the_two_parts():
+    from app_pages import live_map
+    lines = live_map.format_route_heading(
+        {'short': 'PAVILION BUKIT JALIL (PAVBJ)',
+         'long': 'Stesen LRT Awan Besar ~ Pavilion Bukit Jalil'},
+        fallback='ignored',
+    )
+    assert lines[0] == '**Route:** PAVILION BUKIT JALIL (PAVBJ)'
+    assert lines[1] == '**Runs:** Stesen LRT Awan Besar ↔ Pavilion Bukit Jalil'
+
+
+def test_format_route_heading_omits_a_path_that_repeats_the_name():
+    from app_pages import live_map
+    lines = live_map.format_route_heading(
+        {'short': 'T580', 'long': 'T580'}, fallback='ignored')
+    assert lines == ['**Route:** T580']
+
+
+def test_format_route_heading_falls_back_when_parts_are_missing():
+    from app_pages import live_map
+    lines = live_map.format_route_heading({'short': '', 'long': ''}, fallback='T580')
+    assert lines == ['**Route:** T580']
