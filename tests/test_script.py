@@ -1185,3 +1185,67 @@ def test_find_regions_for_route_ignores_a_failing_agency(tmp_path, monkeypatch):
     gtfs_static._ROUTE_REGION_INDEX.clear()
     # one dead agency must not sink the whole lookup
     assert gtfs_static.find_regions_for_route('T580') == ['Rapid Bus KL']
+
+
+# ---------------------------------------------------------------------------
+# Region change must not silently wipe an active route search
+# ---------------------------------------------------------------------------
+
+def _live_map_with_one_region(monkeypatch, selectbox_returns):
+    """Drive live_map.show() far enough to exercise the region/search block."""
+    from app_pages import live_map
+
+    st_stub = _stub_streamlit(monkeypatch, live_map)
+    st_stub.selectbox.return_value = selectbox_returns
+    st_stub.text_input.return_value = ''
+    st_stub.session_state['map_theme'] = 'dark'
+    st_stub.session_state['getting_location'] = False
+    # st.columns(n) / st.columns([w, ...]) must unpack to that many objects.
+    st_stub.columns.side_effect = lambda spec, *a, **k: [
+        MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
+    ]
+    df = pd.DataFrame({
+        'region': ['Rapid Bus KL'], 'vehicle_id': ['V1'],
+        'latitude': [3.14], 'longitude': [101.68], 'bearing': [90.0],
+        'speed': [10.0], 'timestamp': [int(time.time())],
+        'trip_id': ['T1'], 'route_id': ['T5800'],
+        'freshness': ['fresh'], 'age_seconds': [5],
+    })
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (df, {'total': 1, 'stale': 0, 'hidden': 0,
+                              'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'),
+    )
+    return live_map, st_stub
+
+
+def test_route_search_survives_a_rerun_without_a_region_change(monkeypatch):
+    """
+    The search used to be cleared whenever the selectbox value disagreed with a
+    parallel `selected_region` mirror. Any transient drift between those two
+    wiped an active search for one render — the reported "first auto-refresh
+    shows every bus" symptom.
+    """
+    live_map, st_stub = _live_map_with_one_region(monkeypatch, 'Rapid Bus KL')
+    # Mirror deliberately disagrees with the widget, as it did in the wild.
+    st_stub.session_state['selected_region'] = 'myBAS Kuching'
+    st_stub.session_state['_region_for_search'] = 'Rapid Bus KL'
+    st_stub.session_state['route_search_live_map'] = 't580'
+
+    live_map.show()
+
+    assert st_stub.session_state.get('route_search_live_map') == 't580', \
+        "an active search was wiped even though the user never changed region"
+
+
+def test_route_search_is_cleared_on_a_real_region_change(monkeypatch):
+    """The clearing behaviour itself must survive: a genuine switch still resets."""
+    live_map, st_stub = _live_map_with_one_region(monkeypatch, 'myBAS Johor')
+    st_stub.session_state['selected_region'] = 'Rapid Bus KL'
+    st_stub.session_state['_region_for_search'] = 'Rapid Bus KL'
+    st_stub.session_state['route_search_live_map'] = 't580'
+
+    live_map.show()
+
+    assert 'route_search_live_map' not in st_stub.session_state, \
+        "switching region should drop a search that belonged to the old region"

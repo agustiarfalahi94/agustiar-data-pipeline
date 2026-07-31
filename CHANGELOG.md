@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.2] - 2026-07-31
+
+### Fixed
+- **An active route search is no longer wiped by a refresh.** The map kept the selected region in
+  two places — `st.session_state.selected_region` and the selectbox's own `key` — and cleared the
+  search whenever they disagreed. A keyed widget's stored value wins over its `index`, so the two
+  could drift apart without the user touching anything, and every drift dropped the filter for
+  exactly one render. That is the reported "first auto-refresh shows every bus in the region, then
+  it behaves". The search now clears only when the selectbox's value genuinely changes from its own
+  previous value
+
 ## [2.4.1] - 2026-07-31
 
 ### Fixed

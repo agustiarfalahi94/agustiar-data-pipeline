@@ -170,14 +170,23 @@ def show():
             index=current_index,
             key='region_selector_live_map',
         )
-        # Update session state only if changed
-        if selected_region != st.session_state.selected_region:
-            st.session_state.selected_region = selected_region
-            # Clear any stale search term so it doesn't silently re-apply to
-            # the new region's vehicles. Safe here: this runs before the
-            # text_input widget below is instantiated for this run.
+        # Clear a stale search only on a *genuine* region change, judged against
+        # the selectbox's own previous value.
+        #
+        # This used to compare the widget against st.session_state.selected_region,
+        # a parallel mirror of the same value. The selectbox carries both `index`
+        # and `key`, and a keyed widget's stored value wins over `index`, so the
+        # two could drift apart without the user touching anything — and every
+        # drift silently wiped an active search for exactly one render. That is
+        # the "first auto-refresh shows every bus, then it behaves" symptom.
+        previous_region = st.session_state.get('_region_for_search')
+        if previous_region is not None and previous_region != selected_region:
+            # Safe here: this runs before the text_input below is instantiated
+            # for this run, so clearing its key does not raise.
             st.session_state.pop('route_search_live_map', None)
             auto_picked_region = None
+        st.session_state['_region_for_search'] = selected_region
+        st.session_state.selected_region = selected_region
 
         if auto_picked_region == selected_region:
             st.caption(
