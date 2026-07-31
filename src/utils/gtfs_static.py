@@ -209,3 +209,66 @@ def get_route_name(agency_slug: str, route_id: str) -> str:
         return ''
 
     return ''
+
+
+# ---------------------------------------------------------------------------
+# Route lookup
+#
+# These exist so the Live Map can tell two very different situations apart:
+# "this route does not run in the region you are looking at" and "it runs here
+# but nothing is reporting right now". Conflating them produced a search that
+# looked broken when it was working correctly against the wrong region.
+# ---------------------------------------------------------------------------
+
+# region name -> set of upper-cased route_short_name. Populated lazily and kept
+# for the life of the process; the underlying ZIPs already carry a 24h cache.
+_ROUTE_REGION_INDEX = {}
+
+
+def _route_short_names(agency_slug: str) -> set:
+    """Upper-cased route_short_name values for one agency. Empty set on any error."""
+    names = set()
+    try:
+        with _load_zip(agency_slug) as zf:
+            for row in _read_csv_from_zip(zf, 'routes.txt') or []:
+                short = (row.get('route_short_name') or '').strip()
+                if short:
+                    names.add(short.upper())
+    except Exception:
+        return set()
+    return names
+
+
+def region_has_route(agency_slug: str, query: str) -> bool:
+    """
+    True if *query* names a route published by *agency_slug*.
+
+    Matching is case-insensitive against route_short_name, mirroring how the
+    Live Map's search box is used ("t580" and "T580" are the same route).
+    """
+    q = (query or '').strip().upper()
+    if not q:
+        return False
+    return q in _route_short_names(agency_slug)
+
+
+def find_regions_for_route(query: str) -> list:
+    """
+    Region names that publish a route called *query*, in STATIC_API_SOURCES order.
+
+    Used to answer "you searched the wrong region" with something actionable.
+    An agency whose feed is unavailable is skipped rather than sinking the whole
+    lookup — rapid-bus-kuantan currently 404s, and one dead feed must not stop
+    the others from answering.
+    """
+    q = (query or '').strip().upper()
+    if not q:
+        return []
+
+    found = []
+    for region, slug in STATIC_API_SOURCES.items():
+        if region not in _ROUTE_REGION_INDEX:
+            _ROUTE_REGION_INDEX[region] = _route_short_names(slug)
+        if q in _ROUTE_REGION_INDEX[region]:
+            found.append(region)
+    return found

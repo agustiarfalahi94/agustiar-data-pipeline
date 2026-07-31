@@ -145,9 +145,17 @@ def show():
     
     with col_region:
         # Initialize selected region - preserve during auto-refresh
+        auto_picked_region = None
         if st.session_state.selected_region is None or st.session_state.selected_region not in hardcoded_regions:
-            # Try to use first available, otherwise use first hardcoded
+            # Try to use first available, otherwise use first hardcoded.
+            # get_sorted_regions only puts the primary region first when it has
+            # live vehicles, so when it is quiet this silently lands the user in
+            # an unrelated region. Remember that so it can be surfaced below —
+            # searching a route against a region you never chose looks like a
+            # broken search, not a wrong region.
             st.session_state.selected_region = available_regions[0] if available_regions else hardcoded_regions[0]
+            if st.session_state.selected_region != data_processor.PRIMARY_REGION:
+                auto_picked_region = st.session_state.selected_region
 
         # Get current index safely from hardcoded list
         try:
@@ -169,6 +177,14 @@ def show():
             # the new region's vehicles. Safe here: this runs before the
             # text_input widget below is instantiated for this run.
             st.session_state.pop('route_search_live_map', None)
+            auto_picked_region = None
+
+        if auto_picked_region == selected_region:
+            st.caption(
+                f"Showing **{selected_region}** — {data_processor.PRIMARY_REGION} "
+                f"had no vehicles reporting, so the first region with live data "
+                f"was selected."
+            )
 
         # Route search — hidden for KTM, whose realtime feed carries no route_id
         if selected_region == 'KTM Berhad':
@@ -311,7 +327,34 @@ def show():
         if df_filtered.empty:
             # Leave the map unfiltered: a blank map cannot be told apart from
             # a bad search term.
-            st.warning(f"No live vehicles found on '{route_query.strip()}' right now.")
+            #
+            # Naming the region matters here. "No live vehicles found on 't580'"
+            # is indistinguishable from a broken search when the region silently
+            # defaulted to somewhere T580 does not run.
+            q = route_query.strip()
+            if agency_slug and gtfs_static.region_has_route(agency_slug, q):
+                st.warning(
+                    f"**{q}** runs in {selected_region}, but no vehicles are "
+                    f"reporting on it right now."
+                )
+            else:
+                # Cold path reads routes.txt from every agency — measured ~5s
+                # the first time, then memoised. Worth a spinner so it does not
+                # read as a frozen page.
+                with st.spinner(f"Looking for '{q}' in other regions…"):
+                    elsewhere = gtfs_static.find_regions_for_route(q)
+                elsewhere = [r for r in elsewhere if r != selected_region]
+                if elsewhere:
+                    st.warning(
+                        f"**{q}** is not a route in {selected_region} — "
+                        f"it runs in **{', '.join(elsewhere)}**. "
+                        f"Change the region above to see it."
+                    )
+                else:
+                    st.warning(
+                        f"**{q}** is not a route in {selected_region}, and no "
+                        f"other region publishes it either."
+                    )
         else:
             df_map = df_filtered
             filter_active = True

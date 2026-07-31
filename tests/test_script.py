@@ -1100,6 +1100,10 @@ def test_sync_time_is_never_in_the_future(tmp_path, monkeypatch):
     con.close()
 
     monkeypatch.setattr(db_mod, 'DATABASE_NAME', str(dbfile))
+    # Freeze the clock. The code reads time.time() itself when clamping, so
+    # asserting exact equality against a `now` captured here races the wall
+    # clock and fails by exactly one second whenever it ticks in between.
+    monkeypatch.setattr(db_mod.time, 'time', lambda: float(now))
 
     _, _, live_sync = db_mod.get_live_data_optimized()
     _, _, historical_sync = db_mod.get_historical_data()
@@ -1107,3 +1111,77 @@ def test_sync_time_is_never_in_the_future(tmp_path, monkeypatch):
     assert live_sync == db_mod._format_sync_time(now)
     assert live_sync != db_mod._format_sync_time(now + 280)
     assert historical_sync == db_mod._format_sync_time(now)
+
+
+# ---------------------------------------------------------------------------
+# Route lookup — telling "not a route here" from "here but not running"
+# ---------------------------------------------------------------------------
+
+def _make_static_zip(tmp_path, name, routes_rows):
+    """Build a minimal GTFS static ZIP containing just routes.txt."""
+    import zipfile
+    p = tmp_path / f"{name}.zip"
+    header = "route_id,route_short_name,route_long_name\n"
+    body = "".join(f"{r[0]},{r[1]},{r[2]}\n" for r in routes_rows)
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('routes.txt', header + body)
+    return str(p)
+
+
+def test_region_has_route_matches_short_name_case_insensitively(tmp_path, monkeypatch):
+    from utils import gtfs_static
+    z = _make_static_zip(tmp_path, 'kl', [('T5800', 'T580', 'Awan Besar ~ TPM')])
+    monkeypatch.setattr(gtfs_static, '_load_zip',
+                        lambda slug: __import__('zipfile').ZipFile(z))
+    assert gtfs_static.region_has_route('anything', 't580') is True
+    assert gtfs_static.region_has_route('anything', 'T580') is True
+    assert gtfs_static.region_has_route('anything', 'U6000') is False
+
+
+def test_region_has_route_is_false_on_error(monkeypatch):
+    from utils import gtfs_static
+    def boom(slug):
+        raise OSError("network down")
+    monkeypatch.setattr(gtfs_static, '_load_zip', boom)
+    assert gtfs_static.region_has_route('anything', 'T580') is False
+
+
+def test_find_regions_for_route_reports_where_it_lives(tmp_path, monkeypatch):
+    import zipfile
+    from utils import gtfs_static
+    kl = _make_static_zip(tmp_path, 'kl', [('T5800', 'T580', 'Awan Besar ~ TPM')])
+    kch = _make_static_zip(tmp_path, 'kch', [('K1', 'K1', 'Kuching Line')])
+
+    def fake_load(slug):
+        return zipfile.ZipFile(kl if 'rapid-bus-kl' in slug else kch)
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', fake_load)
+    monkeypatch.setattr(gtfs_static, 'STATIC_API_SOURCES', {
+        'Rapid Bus KL': 'prasarana?category=rapid-bus-kl',
+        'myBAS Kuching': 'mybas-kuching',
+    })
+    gtfs_static._ROUTE_REGION_INDEX.clear()
+
+    assert gtfs_static.find_regions_for_route('t580') == ['Rapid Bus KL']
+    assert gtfs_static.find_regions_for_route('K1') == ['myBAS Kuching']
+    assert gtfs_static.find_regions_for_route('ZZZ') == []
+
+
+def test_find_regions_for_route_ignores_a_failing_agency(tmp_path, monkeypatch):
+    import zipfile
+    from utils import gtfs_static
+    kl = _make_static_zip(tmp_path, 'kl', [('T5800', 'T580', 'Awan Besar ~ TPM')])
+
+    def fake_load(slug):
+        if 'rapid-bus-kl' in slug:
+            return zipfile.ZipFile(kl)
+        raise OSError("feed withdrawn")
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', fake_load)
+    monkeypatch.setattr(gtfs_static, 'STATIC_API_SOURCES', {
+        'Rapid Bus KL': 'prasarana?category=rapid-bus-kl',
+        'Rapid Bus Kuantan': 'prasarana?category=rapid-bus-kuantan',
+    })
+    gtfs_static._ROUTE_REGION_INDEX.clear()
+    # one dead agency must not sink the whole lookup
+    assert gtfs_static.find_regions_for_route('T580') == ['Rapid Bus KL']

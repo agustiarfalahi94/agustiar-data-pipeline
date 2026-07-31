@@ -21,7 +21,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Hover tooltips** — vehicle ID, speed (km/h), and bearing
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
-- **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. Not available for KTM Berhad, whose realtime feed carries no route ID
+- **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation

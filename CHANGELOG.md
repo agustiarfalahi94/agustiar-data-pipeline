@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-07-31
+
+### Fixed
+- **Route search now says *why* it found nothing.** Searching `t580` returned only "No live
+  vehicles found on 't580' right now", which is indistinguishable from a broken search when the
+  region is wrong. The message now names the region and separates three cases: the route runs here
+  but nothing is reporting; the route is not published here but *is* published elsewhere (naming
+  which regions); or no region publishes it at all
+- **The silently auto-selected region is now visible.** `get_sorted_regions` only puts the primary
+  region first when it has live vehicles, so a quiet Rapid Bus KL left the user in an unrelated
+  region — myBAS Kuching, in the reported case — with nothing on screen saying so. When the app
+  picks a region rather than the user, it now says which and why
+
+- **A flaky test that would have reddened CI at random.** `test_sync_time_is_never_in_the_future`
+  captured `now` itself while the code under test reads the clock independently, so it failed by
+  exactly one second whenever the wall clock ticked between the two. The clock is now frozen for
+  that test; verified over 20 consecutive runs
+
+### Added
+- `gtfs_static.region_has_route` and `gtfs_static.find_regions_for_route` — case-insensitive
+  lookups over `routes.txt`. The cross-region search skips an agency whose feed is unavailable
+  rather than failing entirely (`rapid-bus-kuantan` currently returns 404), and memoises its index;
+  measured ~5s cold, ~0ms afterwards, so the cold path shows a spinner
+
+### Notes
+- Reported alongside these: pressing Enter in the search box with an unchanged value appeared to do
+  nothing. That is correct Streamlit behaviour and not a defect — the value persists, the filter
+  re-runs on every render, and the screenshot's own warning text proves the search had executed. It
+  read as broken only because the message did not explain itself, which is what the first fix above
+  addresses
+
 ## [2.4.0] - 2026-07-30
 
 ### Fixed
