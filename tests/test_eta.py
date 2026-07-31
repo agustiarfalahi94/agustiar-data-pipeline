@@ -199,3 +199,19 @@ def test_compute_eta_survives_a_past_midnight_schedule():
     day = 1785427200
     now = day + 85800                     # 23:50
     assert eta.compute_eta_seconds(stops, 1, 0, now, day) == 6000   # 100 minutes
+
+
+def test_compute_eta_returns_none_for_an_index_that_does_not_exist():
+    """
+    None means "no such stop"; a negative number means "already passed".
+    Returning -1 for both made a missing stop indistinguishable from a bus
+    that left one second ago.
+    """
+    stops = _timed_stops()
+    day = 1785427200
+    now = day + 9 * 3600
+    assert eta.compute_eta_seconds(stops, 99, 0, now, day) is None
+    assert eta.compute_eta_seconds(stops, -1, 0, now, day) is None
+    # and a genuinely-passed stop still returns a negative int, not None
+    passed = eta.compute_eta_seconds(stops, 0, 0, day + 9 * 3600 + 60, day)
+    assert isinstance(passed, int) and passed < 0

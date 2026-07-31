@@ -81,7 +81,7 @@ def estimate_delay_seconds(stops, bus_index, bus_timestamp, day_epoch):
     if not (0 <= bus_index < len(stops)):
         return 0
     scheduled = day_epoch + stops[bus_index]['arrival_seconds']
-    return int(bus_timestamp) - scheduled
+    return int(int(bus_timestamp) - scheduled)
 
 
 def compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch):
@@ -91,8 +91,15 @@ def compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch
     The timetable supplies the travel time; the measured delay shifts it. Both
     are integers of seconds since the service-day epoch, so a stop scheduled at
     25:30:00 resolves to 01:30 the next day rather than wrapping backwards.
+
+    Returns None when *target_index* is out of range — there is no such stop
+    to track. A negative int means the stop exists and the bus already passed
+    it. The two must stay distinguishable: collapsing "no such stop" into -1
+    would be indistinguishable from "passed one second ago", which matters
+    because callers commonly chain this straight off nearest_stop_index's own
+    -1 "nothing found" sentinel.
     """
     if not (0 <= target_index < len(stops)):
-        return -1
+        return None
     scheduled = day_epoch + stops[target_index]['arrival_seconds']
     return int(scheduled + delay_seconds - now_epoch)
