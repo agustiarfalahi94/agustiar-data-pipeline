@@ -1,9 +1,10 @@
+import time
 import streamlit as st
 import pydeck as pdk
 import numpy as np
 import pandas as pd
 from streamlit_js_eval import get_geolocation as js_get_geolocation
-from utils import db, data_processor
+from utils import db, data_processor, eta
 from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 
@@ -25,6 +26,7 @@ except ImportError:
 LIVE_FRESH_SECONDS = getattr(_config, 'LIVE_FRESH_SECONDS', 60)
 LIVE_STALE_SECONDS = getattr(_config, 'LIVE_STALE_SECONDS', 300)
 LIVE_HIDDEN_SECONDS = getattr(_config, 'LIVE_HIDDEN_SECONDS', 900)
+UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
@@ -528,6 +530,76 @@ def show():
     # ===== ROUTE VIEWER SECTION =====
     # Maps selected_region display names to GTFS static agency slugs
     REGION_TO_SLUG = gtfs_static.STATIC_API_SOURCES
+
+    # ── What can I catch from here? ─────────────────────────────────────────
+    with st.expander("📍 Arrivals near you", expanded=True):
+        loc = st.session_state.get('user_location')
+        if not loc:
+            st.info("Tap **📍 Locate Me** above to see what is arriving near you.")
+        elif not agency_slug:
+            st.info(f"No timetable is published for {selected_region}.")
+        else:
+            nearby = gtfs_static.get_stops_near(
+                agency_slug, loc['lat'], loc['lon'], radius_m=800, limit=5)
+            if not nearby:
+                st.info(
+                    f"No stops found within 800 m of you in {selected_region}."
+                )
+            else:
+                vehicles = df_map.to_dict('records')
+                arrivals, skipped = eta.arrivals_for_stops(
+                    vehicles, nearby,
+                    lambda t: gtfs_static.get_trip_stops(agency_slug, t),
+                    int(time.time()), UTC_OFFSET_HOURS,
+                    headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
+                )
+
+                any_arrival = False
+                for stop in nearby:
+                    walk = eta.walking_minutes(stop['distance_m'])
+                    st.markdown(
+                        f"**{stop['stop_name']}** · {int(stop['distance_m'])} m "
+                        f"· ~{walk} min walk"
+                    )
+                    rows = arrivals.get(stop['stop_id'], [])
+                    if not rows:
+                        st.caption("  nothing inbound right now")
+                        continue
+                    any_arrival = True
+                    for a in rows[:3]:
+                        mins = max(1, round(a['eta_seconds'] / 60))
+                        line = f"  {a['route_display']}"
+                        if a['headsign']:
+                            line += f" → {a['headsign']}"
+                        line += f" · **~{mins} min**"
+                        if a['delay_seconds'] >= 60:
+                            line += f" · {round(a['delay_seconds'] / 60)} min late"
+                        if a.get('age_seconds') and a['age_seconds'] > LIVE_FRESH_SECONDS:
+                            line += f" · position {round(a['age_seconds'] / 60)} min old"
+                        st.caption(line)
+
+                st.caption(
+                    "Estimated from the published timetable and each bus's "
+                    "measured delay — accurate to about one stop."
+                )
+                # skipped has three keys — no_trip_id, trip_not_in_schedule and
+                # bad_position. Report every non-zero one; a vehicle omitted
+                # without explanation is indistinguishable from one that simply
+                # is not coming, which is the whole reason these are counted.
+                if any(skipped.values()):
+                    reasons = []
+                    if skipped.get('no_trip_id'):
+                        reasons.append(f"{skipped['no_trip_id']} without trip info")
+                    if skipped.get('trip_not_in_schedule'):
+                        reasons.append(
+                            f"{skipped['trip_not_in_schedule']} on a trip missing "
+                            f"from the timetable")
+                    if skipped.get('bad_position'):
+                        reasons.append(
+                            f"{skipped['bad_position']} with an unusable position")
+                    st.caption("Not shown: " + ", ".join(reasons) + ".")
+                if not any_arrival:
+                    st.caption("No buses are currently inbound to these stops.")
 
     with st.expander("🚌 Route Viewer", expanded=False):
         vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())

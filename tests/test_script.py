@@ -1249,3 +1249,28 @@ def test_route_search_is_cleared_on_a_real_region_change(monkeypatch):
 
     assert 'route_search_live_map' not in st_stub.session_state, \
         "switching region should drop a search that belonged to the old region"
+
+
+def test_arrivals_panel_prompts_for_location_when_unknown(monkeypatch):
+    live_map, st_stub = _live_map_with_one_region(monkeypatch, 'Rapid Bus KL')
+    st_stub.session_state['selected_region'] = 'Rapid Bus KL'
+    st_stub.session_state['_region_for_search'] = 'Rapid Bus KL'
+    st_stub.session_state.pop('user_location', None)
+
+    live_map.show()
+
+    said = _texts(st_stub.info) + _texts(st_stub.caption)
+    assert 'Locate Me' in said
+
+
+def test_arrivals_panel_reports_when_no_stops_are_nearby(monkeypatch):
+    live_map, st_stub = _live_map_with_one_region(monkeypatch, 'Rapid Bus KL')
+    st_stub.session_state['selected_region'] = 'Rapid Bus KL'
+    st_stub.session_state['_region_for_search'] = 'Rapid Bus KL'
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+
+    live_map.show()
+
+    said = _texts(st_stub.info) + _texts(st_stub.caption)
+    assert 'No stops found' in said
