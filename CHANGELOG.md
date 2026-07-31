@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-07-31
+
+### Fixed
+- **"Nothing inbound" no longer hides a bus that is on its way.** Nearby stops were truncated to
+  the five closest *before* any arrival was computed. Measured from the reported location: 15 stops
+  sit within 800 m, and the only one with a bus inbound ranked 9th at 585 m — so every stop on
+  screen reported nothing while a bus was en route to one the panel never evaluated. Every stop in
+  range is now evaluated, and those with a bus coming are shown first
+- The wording said "nothing inbound right now", which reads as *no bus ever serves this stop*. It
+  now says "no bus currently en route to this stop", and the panel-level message names the radius
+- **The tapped-bus panel is legible.** It ran six facts into one sentence, and the staleness note
+  welded itself onto the stop name — *"position 1 min old, so less certain at KL2324 LRT AWAN
+  BESAR"*. Route, path, arrival, walk and staleness are now labelled lines
+
+### Added
+- Nearby stops are drawn on the map beneath the vehicles, so their position is visible rather than
+  only named
+- Stop names link to Google Maps for walking directions, which this app deliberately does not
+  compute itself
+- `gtfs_static.get_route_parts` — a route's short and long names kept separate
+
+### Known Limitations
+- **Nearby-stop markers have no hover tooltip.** The layer is deliberately `pickable=False` — hover
+  does not exist on the touch devices this app is actually used on, and making the layer pickable
+  risked polluting the working vehicle tooltip with a field that couldn't be filled in reliably.
+  Stop names remain visible and linked to Google Maps in the panel below the map
+
+### Notes
+- The reported "why is Pavilion Bukit Jalil written twice" is inherent to the feed, not a bug:
+  `route_short_name` is `PAVILION BUKIT JALIL (PAVBJ)` — a place — and `route_long_name` is
+  `Stesen LRT Awan Besar ~ Pavilion Bukit Jalil`, the path through that same place. Labelling the
+  two makes it readable; stripping either would lose information
+
 ## [2.5.3] - 2026-07-31
 
 ### Fixed

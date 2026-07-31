@@ -24,10 +24,13 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
 - **📍 Arrivals near you** — with your location set, see the stops within 800 m and the next buses
-  to each, with an estimated arrival for every one. Tap a bus on the map to see when that specific
-  vehicle reaches your nearest stop. Lateness is shown only where the feed actually publishes a
-  timetabled start time — almost every Rapid Bus KL trip runs to a headway instead, and for those
-  no lateness is claimed (see *No lateness on a headway service* under Design Decisions)
+  to each, with an estimated arrival for every one. Stops with a bus inbound are shown first, and
+  each nearby stop is also drawn on the map as a hollow gold ring so its position is visible, not
+  just its name; every stop name in the panel links to Google Maps for walking directions. Tap a
+  bus on the map to see when that specific vehicle reaches your nearest stop. Lateness is shown
+  only where the feed actually publishes a timetabled start time — almost every Rapid Bus KL trip
+  runs to a headway instead, and for those no lateness is claimed (see *No lateness on a headway
+  service* under Design Decisions)
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation
@@ -232,6 +235,7 @@ Live Map      Data Table        Analytics     Network Health
 | **15 min fetched, 5 min drawn, 60s solid** | `LIVE_HIDDEN_SECONDS` bounds the query, `LIVE_STALE_SECONDS` bounds what is drawn, `LIVE_FRESH_SECONDS` bounds what is drawn solid. A vehicle between the last two is dimmed rather than deleted, so a 90-second gap in one feed no longer looks like the bus vanished |
 | **ETAs from the timetable, not from speed** | The provider publishes no trip updates, so arrivals are derived by joining each vehicle's live `trip_id` to `stop_times.txt`, shifted by its measured delay where one can be measured (see the next row). Instantaneous speed is a poor predictor — a bus at a red light reports 0 km/h |
 | **No lateness on a headway service** | 2,099 of the 2,102 Rapid Bus KL trips appear in `frequencies.txt` with `exact_times=0`, so their `stop_times.txt` rows are a travel-time template repeated across an operating window, not scheduled wall-clock times. There is no published start time to be late against, so the delay is reported as unknown rather than computed. The arrival is unaffected — it uses only the *differences* between stop times, which is exactly what a headway template encodes |
+| **Nearby stops ranked by usefulness** | Truncating to the closest few stops before computing arrivals hid a stop that had a bus inbound behind five that did not. Every stop within the radius is evaluated, then those with a bus coming are shown first |
 
 ### Route Viewer — How It Works
 
@@ -395,6 +399,7 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 | Map not loading | Toggle map theme (light↔dark), check browser console |
 | Locate Me does nothing | Allow location permission in browser when prompted |
 | Route Viewer shows "No route data" | That vehicle's region may not have `shapes.txt` in its GTFS Static feed — historical trail is shown as fallback |
+| Hovering a nearby-stop marker shows nothing | Expected — stop markers are deliberately not interactive (hover doesn't exist on the touch devices this app is used on). Stop names and Google Maps links are in the panel below the map |
 | Database errors | Delete `agustiar_analytics.duckdb` and click "Refresh Data" |
 
 ---
