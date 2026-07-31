@@ -197,8 +197,16 @@ def test_a_served_stop_beyond_the_nearest_few_is_still_shown(monkeypatch):
     ]
     served = {'stop_id': 'FAR', 'stop_name': 'LRT AWAN BESAR',
               'stop_lat': 3.0640, 'stop_lon': 101.6739, 'distance_m': 585.0}
-    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
-                        lambda *a, **k: stops + [served])
+    # The stub MUST honour `limit` the way the real get_stops_near does —
+    # it sorts by distance and returns found[:limit]. A stub that ignores
+    # `limit` bypasses the very truncation this bug is about, and the test
+    # would then pass against the unfixed code.
+    all_stops = stops + [served]
+
+    def fake_stops_near(agency, lat, lon, radius_m=800, limit=5):
+        return sorted(all_stops, key=lambda s: s['distance_m'])[:limit]
+
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', fake_stops_near)
 
     # A trip that stops at the bus's position, then at the far stop.
     trip = [
