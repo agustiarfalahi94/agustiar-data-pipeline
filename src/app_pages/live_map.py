@@ -85,6 +85,12 @@ NEARBY_STOP_SCAN_LIMIT = 40     # candidates evaluated
 NEARBY_STOP_DISPLAY = 5         # stops rendered
 NEARBY_STOP_MIN_SHOWN = 3       # filled with unserved stops when few are served
 
+# Arrivals listed under a single stop, in both panels. One constant because the
+# two panels answer the same question about the same stop: a tapped stop that
+# listed six buses where the panel below it listed three read as a
+# contradiction rather than as two views.
+ARRIVALS_PER_STOP = 3
+
 # The same caveat wherever an arrival is shown.
 ARRIVAL_ACCURACY_NOTE = (
     "Estimated from the published timetable — accurate to about one stop."
@@ -549,6 +555,32 @@ def show():
             matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
             st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")
 
+    # One arrivals lookup, shared by the tapped-stop panel and the "Arrivals
+    # near you" panel below.
+    #
+    # The two call sites were character-for-character identical — six
+    # arguments including four identical lambdas — and both ran in full when a
+    # stop was selected, so df_map.to_dict('records') materialised the whole
+    # frame twice and arrivals_for_stops walked every vehicle twice, inside a
+    # 20-second auto-refresh. The records are built at most once per render and
+    # only when something actually asks for them.
+    #
+    # The tapped-*bus* panel is deliberately not routed through here: it asks
+    # about one vehicle against the stops of its own trip, which is a different
+    # question with different inputs.
+    _records = {}
+
+    def _arrivals(stops):
+        if 'v' not in _records:
+            _records['v'] = df_map.to_dict('records')
+        return eta.arrivals_for_stops(
+            _records['v'], stops,
+            lambda t: gtfs_static.get_trip_stops(agency_slug, t),
+            int(time.time()), UTC_OFFSET_HOURS,
+            headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
+            frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
+        )
+
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
 
@@ -967,16 +999,13 @@ def show():
             body = [f"📍 **{stop['stop_name']}**",
                     f"~{int(walk['distance_m'])} m · {_walk_label(walk)}"]
 
-            arrivals, _ = eta.arrivals_for_stops(
-                df_map.to_dict('records'), [stop],
-                lambda t: gtfs_static.get_trip_stops(agency_slug, t),
-                int(time.time()), UTC_OFFSET_HOURS,
-                headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
-                frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
-            )
+            arrivals, _ = _arrivals([stop])
             rows = arrivals.get(stop['stop_id'], [])
             if rows:
-                body += [format_arrival(r) for r in rows]
+                # Same cap as the panel below. Uncapped, a tapped stop could
+                # list six buses where the panel underneath listed three for
+                # that same stop.
+                body += [format_arrival(r) for r in rows[:ARRIVALS_PER_STOP]]
             else:
                 # A route search narrowed df_map before this panel looked, so
                 # with one active the only honest claim is about that route.
@@ -1039,14 +1068,7 @@ def show():
                     f"in {selected_region}."
                 )
             else:
-                vehicles = df_map.to_dict('records')
-                arrivals, skipped = eta.arrivals_for_stops(
-                    vehicles, nearby,
-                    lambda t: gtfs_static.get_trip_stops(agency_slug, t),
-                    int(time.time()), UTC_OFFSET_HOURS,
-                    headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
-                    frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
-                )
+                arrivals, skipped = _arrivals(nearby)
 
                 # Rank by usefulness: stops with a bus actually coming, nearest
                 # first, then fill with the nearest unserved ones so the panel
@@ -1087,7 +1109,7 @@ def show():
                         )
                         continue
                     any_arrival = True
-                    for a in rows[:3]:
+                    for a in rows[:ARRIVALS_PER_STOP]:
                         st.caption("  " + format_arrival(a))
 
                 st.caption(ARRIVAL_ACCURACY_NOTE)

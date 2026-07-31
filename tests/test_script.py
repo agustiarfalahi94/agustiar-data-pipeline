@@ -2620,6 +2620,34 @@ def test_a_selection_clears_itself_when_no_stops_are_in_range_at_all(monkeypatch
         "no stop panel should render with nothing in range"
 
 
+def test_the_tapped_stop_panel_lists_no_more_arrivals_than_the_panel_below(monkeypatch):
+    """
+    The two panels answer the same question about the same stop. The panel
+    below has always capped a stop at ARRIVALS_PER_STOP rows; the tapped-stop
+    panel rendered every row, so one stop could show six buses in the box above
+    and three in the list below — a contradiction, not two views.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Busy Stop',
+            'stop_lat': 3.14, 'stop_lon': 101.68, 'distance_m': 50.0}
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    st_stub.session_state['selected_stop_id'] = 'S1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+
+    six = [{'route_display': f'R{i}', 'headsign': '', 'eta_seconds': 60 * (i + 1),
+            'delay_seconds': None, 'age_seconds': 0} for i in range(6)]
+    monkeypatch.setattr(live_map.eta, 'arrivals_for_stops',
+                        lambda *a, **k: ({'S1': six}, {}))
+
+    live_map.show()
+
+    panel = _texts(st_stub.info)
+    listed = [f'R{i}' for i in range(6) if f'Route R{i}' in panel]
+    assert listed == ['R0', 'R1', 'R2'], \
+        f"the tapped-stop panel must cap at {live_map.ARRIVALS_PER_STOP}: {listed}"
+
+
 def test_a_blank_stop_id_is_not_a_stop_id():
     """
     get_stops_near takes stop_id straight from stops.txt with only a .strip(),
