@@ -15,6 +15,8 @@ import zipfile
 import csv
 import requests
 
+from utils.eta import haversine_m
+
 # ---------------------------------------------------------------------------
 # Agency slugs — mirrors API_SOURCES in ingestion.py
 # Key: display name used in selected_region, Value: GTFS static slug (single)
@@ -272,3 +274,200 @@ def find_regions_for_route(query: str) -> list:
         if q in _ROUTE_REGION_INDEX[region]:
             found.append(region)
     return found
+
+
+# ---------------------------------------------------------------------------
+# Timetable lookups
+#
+# stop_times.txt is ~88,000 rows for Rapid Bus KL, so it is parsed once per
+# agency into a trip-keyed index and kept for the life of the process. The
+# underlying ZIPs already carry a 24h cache.
+# ---------------------------------------------------------------------------
+
+# agency slug -> {trip_id: [stop dict, ...]} ordered by stop_sequence
+_TRIP_STOPS_INDEX = {}
+# agency slug -> {trip_id: headsign}
+_TRIP_HEADSIGN_INDEX = {}
+# agency slug -> {trip_id} for trips published in frequencies.txt
+_TRIP_FREQUENCY_INDEX = {}
+# agency slug -> mtime of the ZIP the index above was built from
+_TRIP_INDEX_MTIME = {}
+
+
+def _zip_mtime(agency_slug):
+    """Modification time of the cached ZIP, or None when there is no cache yet."""
+    try:
+        return os.path.getmtime(get_cached_path(agency_slug))
+    except OSError:
+        return None
+
+
+def _trip_index_is_current(agency_slug):
+    """
+    True when an index exists for *agency_slug* and was built from the ZIP
+    currently on disk.
+
+    The ZIP cache refreshes every 24 hours; a new static release brings new
+    trip_ids. Keying the index on presence alone let a process serve a
+    superseded timetable indefinitely, which degrades silently — every vehicle
+    on a new trip_id simply counts as "not in the schedule".
+    """
+    return (agency_slug in _TRIP_STOPS_INDEX
+            and _TRIP_INDEX_MTIME.get(agency_slug) == _zip_mtime(agency_slug))
+
+
+def parse_gtfs_time(value):
+    """
+    "HH:MM:SS" to seconds since service-day midnight. Returns -1 if unparseable.
+
+    GTFS hours legitimately exceed 24 — "25:30:00" means 01:30 the following
+    day on the same service day. Formatting these as clock times silently
+    breaks late-night arrivals, so they stay integer seconds throughout.
+    """
+    try:
+        h, m, s = (int(part) for part in str(value).strip().split(':'))
+    except (ValueError, AttributeError):
+        return -1
+    return h * 3600 + m * 60 + s
+
+
+def _build_trip_index(agency_slug):
+    """
+    Populate the trip-stops, headsign and frequency indexes for one agency.
+
+    On any failure nothing is stored, so the next call retries. Caching an
+    empty result would turn one network blip into a permanent "this agency has
+    no timetable" for the life of the process — every vehicle counted as not in
+    the schedule, the arrivals panel empty, forever. get_stops_near already
+    behaves this way; this now matches it.
+    """
+    stops_by_id = {}
+    trip_stops = {}
+    headsigns = {}
+    frequency_trips = set()
+    try:
+        with _load_zip(agency_slug) as zf:
+            for row in _read_csv_from_zip(zf, 'stops.txt') or []:
+                try:
+                    stops_by_id[row['stop_id'].strip()] = {
+                        'stop_id': row['stop_id'].strip(),
+                        'stop_name': (row.get('stop_name') or '').strip(),
+                        'stop_lat': float(row['stop_lat']),
+                        'stop_lon': float(row['stop_lon']),
+                    }
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+            rows = []
+            for row in _read_csv_from_zip(zf, 'stop_times.txt') or []:
+                stop = stops_by_id.get((row.get('stop_id') or '').strip())
+                if stop is None:
+                    continue
+                try:
+                    seq = int(row['stop_sequence'])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                rows.append((row.get('trip_id', '').strip(), seq,
+                             parse_gtfs_time(row.get('arrival_time')), stop))
+
+            for trip_id, seq, arrival_seconds, stop in rows:
+                if not trip_id or arrival_seconds < 0:
+                    continue
+                entry = dict(stop)
+                entry['arrival_seconds'] = arrival_seconds
+                trip_stops.setdefault(trip_id, []).append((seq, entry))
+
+            for trip_id in trip_stops:
+                trip_stops[trip_id] = [e for _, e in sorted(trip_stops[trip_id],
+                                                            key=lambda pair: pair[0])]
+
+            for row in _read_csv_from_zip(zf, 'trips.txt') or []:
+                tid = (row.get('trip_id') or '').strip()
+                if tid:
+                    headsigns[tid] = (row.get('trip_headsign') or '').strip()
+
+            # frequencies.txt marks trips that run to a headway rather than to
+            # the clock. For these the times in stop_times.txt are a
+            # travel-time template, so no absolute start time is published and
+            # no delay can be measured against one.
+            for row in _read_csv_from_zip(zf, 'frequencies.txt') or []:
+                tid = (row.get('trip_id') or '').strip()
+                if tid:
+                    frequency_trips.add(tid)
+    except Exception:
+        # Deliberately no write: leave the slug unindexed so the next call
+        # retries rather than caching the failure.
+        return
+
+    _TRIP_STOPS_INDEX[agency_slug] = trip_stops
+    _TRIP_HEADSIGN_INDEX[agency_slug] = headsigns
+    _TRIP_FREQUENCY_INDEX[agency_slug] = frequency_trips
+    # Recorded after the load, which may itself have downloaded a fresh ZIP.
+    _TRIP_INDEX_MTIME[agency_slug] = _zip_mtime(agency_slug)
+
+
+def get_trip_stops(agency_slug: str, trip_id: str) -> list:
+    """Ordered stops for *trip_id*, each with coordinates and arrival_seconds."""
+    if not trip_id:
+        return []
+    if not _trip_index_is_current(agency_slug):
+        _build_trip_index(agency_slug)
+    return _TRIP_STOPS_INDEX.get(agency_slug, {}).get(trip_id.strip(), [])
+
+
+def get_trip_headsign(agency_slug: str, trip_id: str) -> str:
+    """Destination text for *trip_id* — what a rider reads on the front of the bus."""
+    if not trip_id:
+        return ''
+    # All three indexes are always populated together by _build_trip_index, so
+    # _trip_index_is_current is the single source of truth for "already built
+    # from the ZIP on disk" — checking _TRIP_HEADSIGN_INDEX independently here
+    # would let a stale headsign entry survive a rebuild of the stops index for
+    # the same agency.
+    if not _trip_index_is_current(agency_slug):
+        _build_trip_index(agency_slug)
+    return _TRIP_HEADSIGN_INDEX.get(agency_slug, {}).get(trip_id.strip(), '')
+
+
+def is_frequency_based(agency_slug: str, trip_id: str) -> bool:
+    """
+    True if *trip_id* is published in frequencies.txt — a headway service.
+
+    Its stop_times.txt rows are then a travel-time template repeated across an
+    operating window, not scheduled wall-clock times, so no start time exists
+    to measure lateness against. Callers must report the delay as unknown; the
+    arrival itself stays valid, since it uses only differences between stop
+    times. 2,099 of the 2,102 Rapid Bus KL trips are published this way.
+    """
+    if not trip_id:
+        return False
+    if not _trip_index_is_current(agency_slug):
+        _build_trip_index(agency_slug)
+    return trip_id.strip() in _TRIP_FREQUENCY_INDEX.get(agency_slug, set())
+
+
+def get_stops_near(agency_slug: str, lat: float, lon: float,
+                   radius_m: float = 800, limit: int = 5) -> list:
+    """Nearest stops to (lat, lon) within *radius_m*, closest first."""
+    found = []
+    try:
+        with _load_zip(agency_slug) as zf:
+            for row in _read_csv_from_zip(zf, 'stops.txt') or []:
+                try:
+                    slat, slon = float(row['stop_lat']), float(row['stop_lon'])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                d = haversine_m(lat, lon, slat, slon)
+                if d <= radius_m:
+                    found.append({
+                        'stop_id': row['stop_id'].strip(),
+                        'stop_name': (row.get('stop_name') or '').strip(),
+                        'stop_lat': slat,
+                        'stop_lon': slon,
+                        'distance_m': d,
+                    })
+    except Exception:
+        return []
+
+    found.sort(key=lambda s: s['distance_m'])
+    return found[:limit]

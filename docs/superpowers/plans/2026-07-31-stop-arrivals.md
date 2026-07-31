@@ -471,7 +471,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Produces:
   - `eta.service_day_epoch(vehicle_timestamp, utc_offset_hours) -> int` — epoch seconds of local midnight for the service day containing that timestamp.
   - `eta.estimate_delay_seconds(stops, bus_index, bus_timestamp, day_epoch) -> int` — signed; positive means running late. `0` when `bus_index` is out of range.
-  - `eta.compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch) -> int` — seconds until arrival; negative means already passed.
+  - `eta.compute_eta_seconds(stops, target_index, delay_seconds, now_epoch, day_epoch) -> int | None` — seconds until arrival; a negative int means already passed; **`None` means there is no such stop**. These must stay distinguishable: `-1` for both would make a missing stop read as "left one second ago", and `nearest_stop_index` already returns `-1` for its own not-found case, so the obvious call chain would conflate them.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -647,9 +647,12 @@ def test_arrivals_groups_by_stop_and_sorts_soonest_first():
     now = day + 9 * 3600
     nearby = [dict(stops[2], distance_m=100.0)]     # user waits at the last stop
 
-    # two buses on the same trip, one further back than the other
+    # Two buses, one running 3 minutes early. Note the delay is what separates
+    # them, NOT their positions: with schedule-based ETA two on-time buses reach
+    # a stop at the same scheduled minute however far apart they are, so a
+    # fixture where both are on time cannot produce an ordering to assert.
     behind = _vehicle('SLOW', 3.10, 101.70, day + 9 * 3600, route='T580')
-    closer = _vehicle('FAST', 3.20, 101.70, day + 9 * 3600 + 600, route='T581')
+    closer = _vehicle('FAST', 3.20, 101.70, day + 9 * 3600 + 420, route='T581')
 
     arrivals, skipped = eta.arrivals_for_stops(
         [behind, closer], nearby, lambda t: stops, now, 8)
@@ -769,7 +772,10 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             if sid not in wanted:
                 continue
             secs = compute_eta_seconds(stops, i, delay, now_epoch, day)
-            if secs < 0:
+            # None means "no such stop"; a negative int means "already passed".
+            # Both are excluded, but they are different facts and must not be
+            # compared with `<` against each other.
+            if secs is None or secs < 0:
                 continue
             arrivals[sid].append({
                 'vehicle_id': v.get('vehicle_id', ''),
@@ -889,12 +895,22 @@ In `src/app_pages/live_map.py`, immediately BEFORE the existing `with st.expande
                     "Estimated from the published timetable and each bus's "
                     "measured delay — accurate to about one stop."
                 )
-                if skipped['no_trip_id'] or skipped['trip_not_in_schedule']:
-                    st.caption(
-                        f"Not shown: {skipped['no_trip_id']} vehicle(s) without trip "
-                        f"info, {skipped['trip_not_in_schedule']} on a trip missing "
-                        f"from the timetable."
-                    )
+                # skipped has three keys — no_trip_id, trip_not_in_schedule and
+                # bad_position. Report every non-zero one; a vehicle omitted
+                # without explanation is indistinguishable from one that simply
+                # is not coming, which is the whole reason these are counted.
+                if any(skipped.values()):
+                    reasons = []
+                    if skipped.get('no_trip_id'):
+                        reasons.append(f"{skipped['no_trip_id']} without trip info")
+                    if skipped.get('trip_not_in_schedule'):
+                        reasons.append(
+                            f"{skipped['trip_not_in_schedule']} on a trip missing "
+                            f"from the timetable")
+                    if skipped.get('bad_position'):
+                        reasons.append(
+                            f"{skipped['bad_position']} with an unusable position")
+                    st.caption("Not shown: " + ", ".join(reasons) + ".")
                 if not any_arrival:
                     st.caption("No buses are currently inbound to these stops.")
 ```

@@ -1,9 +1,10 @@
+import time
 import streamlit as st
 import pydeck as pdk
 import numpy as np
 import pandas as pd
 from streamlit_js_eval import get_geolocation as js_get_geolocation
-from utils import db, data_processor
+from utils import db, data_processor, eta
 from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 
@@ -25,6 +26,45 @@ except ImportError:
 LIVE_FRESH_SECONDS = getattr(_config, 'LIVE_FRESH_SECONDS', 60)
 LIVE_STALE_SECONDS = getattr(_config, 'LIVE_STALE_SECONDS', 300)
 LIVE_HIDDEN_SECONDS = getattr(_config, 'LIVE_HIDDEN_SECONDS', 900)
+UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
+
+# One definition of "within walking distance", shared by both arrival panels and
+# by the copy that explains them, so the number in the message can never drift
+# from the number actually applied.
+NEARBY_STOP_RADIUS_M = 800
+
+# The same caveat wherever an arrival is shown.
+ARRIVAL_ACCURACY_NOTE = (
+    "Estimated from the published timetable — accurate to about one stop."
+)
+
+
+def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
+    """
+    One arrival as a single line, rendered identically wherever it appears.
+
+    Both the stop-centric panel and the tap-a-bus panel show the same estimate
+    for the same bus, so they must qualify it identically. They previously did
+    not: the primary panel carried the delay, the position's age and the
+    one-stop caveat, while the secondary rendered a bare green box — a
+    four-minute-old position reading as a confident "~6 min".
+
+    A delay of None means "not knowable" — the trip runs to a headway rather
+    than to the clock — and is stated as nothing at all, never as zero.
+    """
+    line = f"{arrival.get('route_display') or '—'}"
+    if arrival.get('headsign'):
+        line += f" → {arrival['headsign']}"
+    line += f" · **~{max(1, round(arrival['eta_seconds'] / 60))} min**"
+
+    delay = arrival.get('delay_seconds')
+    if delay is not None and delay >= 60:
+        line += f" · {round(delay / 60)} min late"
+
+    age = arrival.get('age_seconds')
+    if age and age > fresh_seconds:
+        line += f" · position {round(age / 60)} min old, so less certain"
+    return line
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
@@ -288,11 +328,10 @@ def show():
     df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
     df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
 
-    # One fallback for a frame that never carried the freshness columns (an
+    # One fallback for a frame that never carried the freshness column (an
     # older cached frame, or a caller that skipped classify_freshness): treat
     # every row as fresh and full-strength.
     freshness_col = df_map.get('freshness', pd.Series('fresh', index=df_map.index))
-    age_col = df_map.get('age_seconds', pd.Series(0, index=df_map.index))
 
     # Counted here, before any route search narrows df_map, so the caption under
     # the map describes the region rather than the search result.
@@ -308,9 +347,17 @@ def show():
         [255, 255, 255, 90] if s else [255, 255, 255, 255] for s in is_stale
     ]
 
-    df_map['freshness_display'] = [
-        f"{int(a)}s ago" if f == 'fresh' else f"⚠️ last update {int(a) // 60}m {int(a) % 60}s ago"
-        for a, f in zip(age_col, freshness_col)
+    # The tooltip states *when* the vehicle last reported, not how long ago.
+    # A relative age ("12s ago") is recomputed on every render, and the deck
+    # spec — data included — is hashed into the chart's widget id, so a
+    # per-second string churns that id and loses any map selection with it.
+    # An absolute local clock time changes only when the bus genuinely reports
+    # again, which is the only time the deck should change identity.
+    df_map['last_report_display'] = [
+        (time.strftime('%H:%M:%S', time.gmtime(int(t) + int(UTC_OFFSET_HOURS) * 3600))
+         if pd.notna(t) else 'unknown')
+        + ('' if f == 'fresh' else ' ⚠️ stale')
+        for t, f in zip(pd.to_numeric(df_map['timestamp'], errors='coerce'), freshness_col)
     ]
 
     # Resolve human-readable route names from GTFS Static for all unique route_ids
@@ -374,10 +421,32 @@ def show():
     # Map style based on theme
     map_style = 'dark' if st.session_state.map_theme == 'dark' else 'light'
 
-    # Create bus icon layer
+    # ---- Layer identity ----------------------------------------------------
+    # Two rules govern every layer in the deck below, and tap-a-bus is dead
+    # without both:
+    #
+    #   1. Once on_select is anything but "ignore", Streamlit requires *every*
+    #      layer to declare an explicit `id`. A pdk.Layer built without one is
+    #      assigned a fresh uuid4 on each construction, so an unnamed layer
+    #      changes the deck on every render.
+    #   2. st.pydeck_chart hashes the whole deck spec — layers, and the data
+    #      inside them — into the chart's widget id. Anything in that data
+    #      that is recomputed per render (a relative "12s ago" age, say)
+    #      rewrites the id continuously, so the selection is written under one
+    #      id and read back under another and never survives.
+    #
+    # Hence: stable ids everywhere, and each layer is handed only the columns
+    # it actually draws or shows in its tooltip.
+    vehicle_columns = [
+        'longitude', 'latitude', 'dot_color', 'vehicle_id', 'route_display',
+        'speed_display', 'bearing_display', 'last_report_display',
+    ]
+    vehicle_data = df_map[[c for c in vehicle_columns if c in df_map.columns]].copy()
+
     icon_layer = pdk.Layer(
         "ScatterplotLayer",
-        data=df_map,
+        id="vehicles",
+        data=vehicle_data,
         get_position=['longitude', 'latitude'],
         get_fill_color='dot_color',
         get_radius=100,
@@ -387,16 +456,17 @@ def show():
         line_width_min_pixels=2,
         pickable=True,
     )
-    
+
     # Create arrow layer
     df_map['arrow_path'] = df_map.apply(
         lambda row: create_arrow_paths(row['latitude'], row['longitude'], row['bearing'], size=0.0003),
         axis=1,
     )
-    
+
     arrow_layer = pdk.Layer(
         "PathLayer",
-        data=df_map,
+        id="vehicle-arrows",
+        data=df_map[['arrow_path', 'arrow_color']].copy(),
         get_path='arrow_path',
         get_color='arrow_color',
         width_min_pixels=3,
@@ -457,6 +527,7 @@ def show():
         
         user_marker = pdk.Layer(
             "ScatterplotLayer",
+            id="user-location",
             data=user_marker_data,
             get_position='[lon, lat]',
             get_radius=20,
@@ -478,6 +549,7 @@ def show():
 
             accuracy_circle = pdk.Layer(
                 "ScatterplotLayer",
+                id="user-accuracy",
                 data=accuracy_circle_data,
                 get_position='[lon, lat]',
                 get_radius='accuracy',   # metres, matches the GPS accuracy value
@@ -491,17 +563,118 @@ def show():
         else:
             layers.append(user_marker)
 
-    st.pydeck_chart(
+    selection = st.pydeck_chart(
         pdk.Deck(
             map_style=map_style,
             initial_view_state=view_state,
             layers=layers,
             tooltip={
-                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°<br/><b>Updated:</b> {freshness_display}",
+                "html": "<b>Vehicle:</b> {vehicle_id}<br/><b>Route:</b> {route_display}<br/><b>Speed:</b> {speed_display} km/h<br/><b>Bearing:</b> {bearing_display}°<br/><b>Last reported:</b> {last_report_display}",
                 "style": {"backgroundColor": "steelblue", "color": "white"},
             },
-        )
+        ),
+        selection_mode="single-object",
+        on_select="rerun",
+        key="live_map_deck",
     )
+
+    # Secondary view: one tapped vehicle, against the user's nearest stop on
+    # its own trip.
+    #
+    # A tap is reported for exactly one render; every auto-refresh afterwards
+    # returns an empty selection. The selection is therefore held in session
+    # state and the vehicle re-resolved from the current frame each render, so
+    # the bus advances without the panel disappearing. The broad except guards
+    # against a real selection payload not matching this assumed shape.
+    picked = None
+    try:
+        objects = selection.selection.objects.get("vehicles", [])
+        picked = objects[0].get("vehicle_id") if objects else None
+    except (AttributeError, KeyError, IndexError, TypeError):
+        picked = None
+
+    if picked:
+        st.session_state['selected_vehicle_id'] = picked
+    else:
+        picked = st.session_state.get('selected_vehicle_id')
+
+    if picked:
+        if st.button("✕ Clear bus selection", key="clear_vehicle_selection"):
+            st.session_state.pop('selected_vehicle_id', None)
+            st.rerun()
+
+        row = df_map[df_map['vehicle_id'] == picked]
+        if row.empty:
+            # df_map has already been through the region filter, the stale/
+            # hidden-freshness filter, and any active route search — a
+            # selection surviving from before one of those changed can miss
+            # here while the vehicle is still very much live in df_live.
+            # Asserting "no longer reporting" in that case would be a
+            # confidently wrong claim, which this feature must never make.
+            if picked in df_live['vehicle_id'].values:
+                st.info(
+                    f"Vehicle {picked} is still reporting, but is not shown in "
+                    f"the current view — it may be filtered out by a route "
+                    f"search, belong to another region, or be too stale to draw."
+                )
+            else:
+                st.info(f"Vehicle {picked} is no longer reporting.")
+        elif not st.session_state.get('user_location'):
+            st.info("Tap **📍 Locate Me** to see when this bus reaches you.")
+        else:
+            loc = st.session_state['user_location']
+            v = row.iloc[0].to_dict()
+            stops = gtfs_static.get_trip_stops(agency_slug, str(v.get('trip_id') or ''))
+            if not stops:
+                st.info(
+                    f"Vehicle {picked} has no timetable entry for its current trip, "
+                    f"so its arrival cannot be estimated."
+                )
+            else:
+                # Bounded by the same radius as the panel below. Unbounded,
+                # "your nearest stop on this trip" could name one 6 km away
+                # and quote a 75-minute walk to it, which is not an answer to
+                # the question being asked.
+                nearby = [
+                    dict(s, distance_m=d) for s, d in (
+                        (s, eta.haversine_m(loc['lat'], loc['lon'],
+                                            s['stop_lat'], s['stop_lon']))
+                        for s in stops)
+                    if d <= NEARBY_STOP_RADIUS_M
+                ]
+                if not nearby:
+                    st.info(
+                        f"Vehicle {picked} does not come within "
+                        f"{NEARBY_STOP_RADIUS_M} m of you on its current trip."
+                    )
+                else:
+                    arrivals, _ = eta.arrivals_for_stops(
+                        [v], nearby,
+                        lambda t: stops, int(time.time()), UTC_OFFSET_HOURS,
+                        headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
+                        frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
+                    )
+                    best = None
+                    for s in sorted(nearby, key=lambda s: s['distance_m']):
+                        rows = arrivals.get(s['stop_id'], [])
+                        if rows:
+                            best = (s, rows[0])
+                            break
+                    if best is None:
+                        st.info(
+                            f"Vehicle {picked} has already passed the stops nearest you."
+                        )
+                    else:
+                        s, a = best
+                        # Deliberately not st.success: a green confirmation box
+                        # reads as certainty, and this is an estimate that may
+                        # rest on a position several minutes old.
+                        st.info(
+                            f"{format_arrival(a)} at **{s['stop_name']}** — "
+                            f"~{int(s['distance_m'])} m from you "
+                            f"(~{eta.walking_minutes(s['distance_m'])} min walk)."
+                        )
+                        st.caption(ARRIVAL_ACCURACY_NOTE)
 
     # While a search is filtering the frame, len(df_map) is the match count, not
     # the region total — the success banner above already states it, so don't
@@ -525,9 +698,66 @@ def show():
             f"Showing {len(df_map)} active vehicles in {selected_region}{stale_note}"
         )
 
-    # ===== ROUTE VIEWER SECTION =====
-    # Maps selected_region display names to GTFS static agency slugs
-    REGION_TO_SLUG = gtfs_static.STATIC_API_SOURCES
+    # ── What can I catch from here? ─────────────────────────────────────────
+    with st.expander("📍 Arrivals near you", expanded=True):
+        loc = st.session_state.get('user_location')
+        if not loc:
+            st.info("Tap **📍 Locate Me** above to see what is arriving near you.")
+        elif not agency_slug:
+            st.info(f"No timetable is published for {selected_region}.")
+        else:
+            nearby = gtfs_static.get_stops_near(
+                agency_slug, loc['lat'], loc['lon'],
+                radius_m=NEARBY_STOP_RADIUS_M, limit=5)
+            if not nearby:
+                st.info(
+                    f"No stops found within {NEARBY_STOP_RADIUS_M} m of you "
+                    f"in {selected_region}."
+                )
+            else:
+                vehicles = df_map.to_dict('records')
+                arrivals, skipped = eta.arrivals_for_stops(
+                    vehicles, nearby,
+                    lambda t: gtfs_static.get_trip_stops(agency_slug, t),
+                    int(time.time()), UTC_OFFSET_HOURS,
+                    headsign_lookup=lambda t: gtfs_static.get_trip_headsign(agency_slug, t),
+                    frequency_lookup=lambda t: gtfs_static.is_frequency_based(agency_slug, t),
+                )
+
+                any_arrival = False
+                for stop in nearby:
+                    walk = eta.walking_minutes(stop['distance_m'])
+                    st.markdown(
+                        f"**{stop['stop_name']}** · ~{int(stop['distance_m'])} m "
+                        f"· ~{walk} min walk"
+                    )
+                    rows = arrivals.get(stop['stop_id'], [])
+                    if not rows:
+                        st.caption("  nothing inbound right now")
+                        continue
+                    any_arrival = True
+                    for a in rows[:3]:
+                        st.caption("  " + format_arrival(a))
+
+                st.caption(ARRIVAL_ACCURACY_NOTE)
+                # skipped has three keys — no_trip_id, trip_not_in_schedule and
+                # bad_position. Report every non-zero one; a vehicle omitted
+                # without explanation is indistinguishable from one that simply
+                # is not coming, which is the whole reason these are counted.
+                if any(skipped.values()):
+                    reasons = []
+                    if skipped.get('no_trip_id'):
+                        reasons.append(f"{skipped['no_trip_id']} without trip info")
+                    if skipped.get('trip_not_in_schedule'):
+                        reasons.append(
+                            f"{skipped['trip_not_in_schedule']} on a trip missing "
+                            f"from the timetable")
+                    if skipped.get('bad_position'):
+                        reasons.append(
+                            f"{skipped['bad_position']} with unusable telemetry")
+                    st.caption("Not shown: " + ", ".join(reasons) + ".")
+                if not any_arrival:
+                    st.caption("No buses are currently inbound to these stops.")
 
     with st.expander("🚌 Route Viewer", expanded=False):
         vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())
@@ -550,8 +780,7 @@ def show():
                     trip_id = str(vehicle_row.iloc[0].get('trip_id', '') or '')
                     route_id = str(vehicle_row.iloc[0].get('route_id', '') or '')
 
-                # ---- Determine agency slug for the selected region ----
-                agency_slug = REGION_TO_SLUG.get(selected_region, '')
+                # agency_slug was already resolved from selected_region above.
 
                 # ---- Try to fetch planned route shapes from GTFS Static ----
                 planned_shapes = []
