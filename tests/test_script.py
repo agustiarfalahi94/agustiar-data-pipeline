@@ -1704,6 +1704,85 @@ def test_a_cleared_bus_can_be_selected_again(monkeypatch):
         "clearing a bus permanently blocked reselecting it"
 
 
+# ── tap-a-stop: clearing must stick, and must not blacklist the stop ─────────
+#
+# Cloned from the bus-clearing pair above. The stop path originally bumped
+# deck_generation on clear but had no belt-and-braces ignore for a repeated
+# payload -- exactly the half-mechanism the bus path's own comment warns
+# against ("Bumping the widget key should be enough ... but the payload is
+# Streamlit's to deliver").
+#
+# button.return_value = True presses every button, including "🗑️ Clear
+# Location" (rendered because these tests need user_location set), which
+# raises on `del st.session_state.user_location`. Press only the button
+# under test via side_effect instead.
+
+def test_clearing_a_stop_selection_survives_a_repeated_payload(monkeypatch):
+    """
+    Companion to test_clearing_a_bus_selection_survives_a_repeated_payload:
+    the deck's selection lives in widget state keyed by the element id, and
+    that id is derived from the deck spec. When nothing on the map changed
+    between renders the id is unchanged, so the *same* payload is returned on
+    the very next run -- and the stop path re-adopted it immediately,
+    rewriting the session key it had just popped. The clear looked ignored.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
+            'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"nearby-stops": [{"stop_id": "S1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    # First render: the tap registers.
+    live_map.show()
+    assert st_stub.session_state.get('selected_stop_id') == 'S1'
+
+    # The user clicks "Clear stop selection".
+    st_stub.button.side_effect = lambda label, *a, **k: label == "Clear stop selection"
+    live_map.show()
+    st_stub.button.side_effect = None
+    st_stub.button.return_value = False
+
+    # Next render still receives the identical payload naming S1, because the
+    # deck spec did not change. It must NOT come back.
+    live_map.show()
+    assert st_stub.session_state.get('selected_stop_id') is None, \
+        "a cleared stop selection was re-adopted from the repeated payload"
+
+
+def test_a_cleared_stop_can_be_selected_again(monkeypatch):
+    """
+    Clearing must not blacklist a stop. Once the stale payload has been
+    shrugged off, tapping the same stop again has to work -- otherwise the fix
+    for the repeated-payload bug would quietly cost the user the ability to
+    reselect it.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
+            'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"nearby-stops": [{"stop_id": "S1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    live_map.show()                       # tap S1
+    st_stub.button.side_effect = lambda label, *a, **k: label == "Clear stop selection"
+    live_map.show()                       # clear it
+    st_stub.button.side_effect = None
+    st_stub.button.return_value = False
+    live_map.show()                       # stale payload shrugged off
+    assert st_stub.session_state.get('selected_stop_id') is None
+
+    live_map.show()                       # user taps S1 again
+    assert st_stub.session_state.get('selected_stop_id') == 'S1', \
+        "clearing a stop permanently blocked reselecting it"
+
+
 def test_a_served_stop_beyond_the_nearest_few_is_still_shown(monkeypatch):
     """
     Stops are chosen by usefulness, not raw proximity.
@@ -2425,3 +2504,30 @@ def test_a_sticky_stop_selection_survives_a_render_that_reports_none(monkeypatch
     said = _texts(st_stub.info)
     assert 'Persisted Stop' in said, \
         "the stop selection was dropped on a render that reported no tap"
+
+
+def test_a_selected_stop_out_of_range_clears_itself(monkeypatch):
+    """
+    The user walked away from a stop they had selected, so it fell out of
+    _nearby_stops on this render. Reachable in normal use: the selection is
+    sticky across auto-refresh (see the test above) but the nearby-stop scan
+    is recomputed every render from the user's current location. The panel
+    must clear the stale selection rather than fail to look the stop up, and
+    must not render a panel for a stop that is no longer confirmed nearby.
+    """
+    other_stop = {'stop_id': 'S2', 'stop_name': 'A Different Stop',
+                  'stop_lat': 3.20, 'stop_lon': 101.70, 'distance_m': 50.0}
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # As if a previous render had recorded a tap on a stop no longer in range.
+    st_stub.session_state['selected_stop_id'] = 'S1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [other_stop])
+
+    live_map.show()
+
+    assert st_stub.session_state.get('selected_stop_id') is None, \
+        "a selection for a stop that fell out of range must clear itself"
+    said = _texts(st_stub.info)
+    assert 'A Different Stop' not in said and '📍' not in said, \
+        "no stop panel should render once the selected stop is out of range"

@@ -784,6 +784,12 @@ def show():
     if cleared is not None and picked == cleared:
         picked = None
 
+    # Same belt and braces for the stop path: the widget-key bump on clear is
+    # not trusted alone (see above), so the dismissed stop is also ignored for
+    # exactly one render. Read here, before `_picked_stop_id` runs below, so a
+    # repeated payload naming the just-cleared stop cannot be re-adopted.
+    cleared_stop = st.session_state.pop('cleared_stop_id', None)
+
     # Captured before the sticky re-resolution below overwrites `picked` with
     # whatever vehicle is *currently* selected. Last-tap-wins must compare a
     # fresh tap against a fresh tap -- comparing it against a sticky selection
@@ -801,6 +807,8 @@ def show():
     # and a stop panel at once, each answering a question the user did not ask
     # most recently.
     picked_stop = _picked_stop_id(selection)
+    if cleared_stop is not None and picked_stop == cleared_stop:
+        picked_stop = None
     if fresh_vehicle_tap is not None:
         st.session_state['selected_stop_id'] = None
     elif picked_stop is not None:
@@ -958,6 +966,7 @@ def show():
             st.info("  \n".join(body))
             st.caption(ARRIVAL_ACCURACY_NOTE)
             if st.button("Clear stop selection"):
+                st.session_state['cleared_stop_id'] = selected_stop_id
                 st.session_state['selected_stop_id'] = None
                 # Bump the widget key so Streamlit stops handing back the stale
                 # payload. Without it, clearing appears to do nothing whenever
