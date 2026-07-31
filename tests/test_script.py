@@ -2595,3 +2595,58 @@ def test_a_selected_stop_out_of_range_clears_itself(monkeypatch):
     said = _texts(st_stub.info)
     assert 'A Different Stop' not in said and '📍' not in said, \
         "no stop panel should render once the selected stop is out of range"
+
+
+def test_a_selection_clears_itself_when_no_stops_are_in_range_at_all(monkeypatch):
+    """
+    Companion to the test above, and a real hole it did not cover: the panel's
+    guard required a non-empty _nearby_stops before it would even look the
+    selection up, so walking entirely out of range (or clearing the location)
+    short-circuited past the self-heal and left the stale id in session state.
+    The panel then reappeared *without a tap* as soon as the user walked back
+    into range or pressed Locate Me again.
+    """
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    st_stub.session_state['selected_stop_id'] = 'S1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+
+    live_map.show()
+
+    assert st_stub.session_state.get('selected_stop_id') is None, \
+        "a selection must clear itself when no stop can confirm it"
+    assert '📍 **' not in _texts(st_stub.info), \
+        "no stop panel should render with nothing in range"
+
+
+def test_a_blank_stop_id_is_not_a_stop_id():
+    """
+    get_stops_near takes stop_id straight from stops.txt with only a .strip(),
+    so a feed row with a blank id yields stop_id == ''. That is falsy but not
+    None, which made the guards downstream disagree about the same value.
+    """
+    from app_pages import live_map
+    assert live_map._picked_stop_id(_Sel({'nearby-stops': [{'stop_id': ''}]})) is None
+
+
+def test_a_blank_stop_id_does_not_eat_the_bus_selection(monkeypatch):
+    """
+    The tap was recorded (`'' is not None`), the sticky bus selection was
+    cleared to make room for it, and then the panel's own truthiness check
+    declined to render anything. A dead tap that destroyed the previous
+    selection.
+    """
+    blank = SimpleNamespace(
+        selection=SimpleNamespace(objects={"nearby-stops": [{"stop_id": ""}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, blank)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    live_map.show()
+
+    assert st_stub.session_state.get('selected_vehicle_id') == 'V1', \
+        "a blank stop id must not destroy the existing bus selection"

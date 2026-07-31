@@ -174,13 +174,21 @@ def _picked_stop_id(selection):
     Mirrors the vehicle path exactly, including coercing to str before the id
     can meet a pandas comparison and a broad except for a payload that does not
     match the assumed shape.
+
+    An empty id is rejected rather than returned. get_stops_near takes stop_id
+    straight from stops.txt with only a .strip(), so a feed row with a blank id
+    really does produce '' — and '' is falsy but not None, so returning it made
+    the two guards downstream disagree: the selection was stored, the sticky
+    bus selection was cleared to make room for it, and then the panel's own
+    truthiness check declined to render anything. A dead tap that ate the
+    previous selection.
     """
     try:
         objects = selection.selection.objects.get("nearby-stops", [])
         raw = objects[0].get("stop_id") if objects else None
     except (AttributeError, KeyError, IndexError, TypeError):
         return None
-    return str(raw) if isinstance(raw, (str, int)) else None
+    return str(raw) if isinstance(raw, (str, int)) and str(raw) else None
 
 
 def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
@@ -770,7 +778,13 @@ def show():
         # NotImplementedError rather than comparing false, so an unexpected
         # payload type would take the whole page down instead of matching
         # nothing.
-        picked = str(raw) if isinstance(raw, (str, int)) else None
+        #
+        # An empty id is rejected for the same reason as in _picked_stop_id:
+        # `if picked:` below and `is not None` in the stop path must never be
+        # able to disagree about the same value. ingestion.py defaults a
+        # missing vehicle id to 'Unknown', so '' is not reachable here today —
+        # this keeps the two parse sites identical so it cannot become so.
+        picked = str(raw) if isinstance(raw, (str, int)) and str(raw) else None
     except (AttributeError, KeyError, IndexError, TypeError):
         picked = None
 
@@ -931,11 +945,20 @@ def show():
                         st.caption(ARRIVAL_ACCURACY_NOTE)
 
     loc = st.session_state.get('user_location')
-    if selected_stop_id and _nearby_stops and agency_slug and loc:
-        stop = next((s for s in _nearby_stops
-                     if s['stop_id'] == selected_stop_id), None)
+    if selected_stop_id:
+        # The confirmation and the clearing are one decision, not two. The
+        # guard used to require _nearby_stops, agency_slug and loc *before*
+        # looking the stop up, so walking out of range entirely (an empty
+        # nearby list) or clearing the location short-circuited past the
+        # self-heal below and left the stale id in session state — and the
+        # panel then reappeared without a tap the moment the user walked back
+        # into range or pressed Locate Me again.
+        stop = (next((s for s in (_nearby_stops or [])
+                      if s['stop_id'] == selected_stop_id), None)
+                if (agency_slug and loc) else None)
         if stop is None:
-            # The user walked out of range of a stop they had selected.
+            # The user walked out of range of a stop they had selected, or the
+            # selection can no longer be confirmed at all.
             st.session_state['selected_stop_id'] = None
         else:
             walk = walking.walk_times(
