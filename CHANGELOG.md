@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] - 2026-08-01
+
+### Fixed
+- **Every map tooltip rendered literal markup — the vehicle tooltip too, not only stops.**
+  2.7.0 moved tooltip markup out of the Deck-level template and into a per-row `tip_html` data
+  field so that stops, once pickable, wouldn't show a vehicle-only template's unmatched
+  `{vehicle_id}` as raw text. What that change missed: Streamlit escapes HTML found inside pydeck
+  tooltip *interpolations* as an injection defence (Streamlit bug fix #15820), but not markup
+  written into the template itself. deck.gl assigns `tooltip.html` via `innerHTML`, so template
+  markup renders — but the `<b>` and `<br/>` moved into `tip_html` were substituted values, and
+  came out on screen as the literal text `<b>Stop:</b> KL1743 GREEN AVENUE CONDOMINIUM`. Since the
+  vehicle tooltip was rebuilt the same way, hovering a bus showed the same raw tags where it had
+  worked correctly before 2.7.0. The fix drops HTML from the tooltip entirely: `_tip_html` is now
+  `_tip_text`, returns `"Label: value"` with no tags, and the Deck tooltip switches from
+  `{"html": "{tip_html}"}` to `{"text": "{tip_text}"}`, which deck.gl assigns via `innerText` —
+  markup cannot render there even by accident. `white-space: pre-line` is set on the tooltip style
+  so the vehicle's five facts, joined with real `\n` characters, still show one per line
+- **A stop or route name containing `&` displayed as the literal text `A &amp; B`.** `_tip_html`
+  called `html.escape()` on every value on top of Streamlit's own escaping of the interpolation, so
+  an `&` was escaped twice. `_tip_text` never escapes: Streamlit escaping the value is now the only
+  escaping that happens, and it belongs there because the value only ever reaches the page through
+  an interpolation, never through markup this code writes
+- **The network guard in `tests/test_script.py` was inert.** It raised `AssertionError` when a page
+  test reached OpenRouteService, but `walking._routed_distances` wraps its request in a bare
+  `except Exception`, which catches `AssertionError` and returns the fallback distance in silence —
+  the guard fired and nothing ever saw it fire. It now raises `PageTestReachedNetwork`, defined in
+  the test module and deriving from `BaseException`, which passes straight through that handler.
+  Verified by temporarily making a page test call `walking.walk_times` with a key: the test failed
+  loudly with a `PageTestReachedNetwork` traceback, confirming the guard now surfaces a violation
+  instead of swallowing it; the probe was then removed
+
 ## [2.7.0] - 2026-08-01
 
 ### Added

@@ -1,4 +1,3 @@
-import html
 import time
 import streamlit as st
 import pydeck as pdk
@@ -163,14 +162,21 @@ def format_arrival(arrival, fresh_seconds=LIVE_FRESH_SECONDS):
     return line
 
 
-def _tip_html(label, value):
+def _tip_text(label, value):
     """
-    One labelled line of tooltip markup, with the value escaped.
+    One labelled line of plain tooltip text — no HTML tags, and the value is
+    never escaped.
 
-    Stop and route names come from third-party feeds and go straight into HTML
-    the browser renders.
+    Streamlit escapes HTML found inside pydeck tooltip *interpolations*
+    (Streamlit bug fix #15820, an injection defence) but not markup written
+    into the template itself. That means markup belongs in the template or
+    nowhere: putting it in a per-row value like this one gets it escaped once
+    by us and left alone by Streamlit, or — as shipped in 2.7.0 — escaped by
+    both, so a stop named "A & B" rendered as the literal text "A &amp; B".
+    This function deliberately picks nowhere. Stop and route names come from
+    third-party feeds and are used exactly as given.
     """
-    return f"<b>{html.escape(str(label))}:</b> {html.escape(str(value))}"
+    return f"{label}: {value}"
 
 
 def _picked_stop_id(selection):
@@ -608,16 +614,25 @@ def show():
     # Each row carries its own rendered tooltip. A single Deck-level template
     # can only name fields of one layer, and pydeck prints unmatched keys
     # literally — so a shared vehicle template made every other layer
-    # unpickable. Per-row markup lets stops be tapped without touching this.
-    df_map['tip_html'] = (
-        df_map['vehicle_id'].map(lambda v: _tip_html('Vehicle', v))
-        + '<br/>' + df_map['route_display'].map(lambda v: _tip_html('Route', v))
-        + '<br/>' + df_map['speed_display'].map(lambda v: _tip_html('Speed', v + ' km/h'))
-        + '<br/>' + df_map['bearing_display'].map(lambda v: _tip_html('Bearing', v + '°'))
-        + '<br/>' + df_map['last_report_display'].map(lambda v: _tip_html('Last reported', v))
+    # unpickable. Per-row text lets stops be tapped without touching this.
+    #
+    # Plain text, not markup: Streamlit escapes HTML found inside pydeck
+    # tooltip interpolations but not markup written into the template, so
+    # markup belongs in the template or nowhere — and this design chooses
+    # nowhere. See `_tip_text` for the double-escaping bug that shipping HTML
+    # here caused in 2.7.0. The five facts are joined with real newlines;
+    # deck.gl assigns tooltip.text via innerText, whose setter turns '\n'
+    # into line breaks on its own, and the Deck's `white-space: pre-line`
+    # style is belt-and-braces in case that ever changes.
+    df_map['tip_text'] = (
+        df_map['vehicle_id'].map(lambda v: _tip_text('Vehicle', v))
+        + '\n' + df_map['route_display'].map(lambda v: _tip_text('Route', v))
+        + '\n' + df_map['speed_display'].map(lambda v: _tip_text('Speed', v + ' km/h'))
+        + '\n' + df_map['bearing_display'].map(lambda v: _tip_text('Bearing', v + '°'))
+        + '\n' + df_map['last_report_display'].map(lambda v: _tip_text('Last reported', v))
     )
     vehicle_columns = [
-        'longitude', 'latitude', 'dot_color', 'vehicle_id', 'tip_html',
+        'longitude', 'latitude', 'dot_color', 'vehicle_id', 'tip_text',
     ]
     vehicle_data = df_map[[c for c in vehicle_columns if c in df_map.columns]].copy()
 
@@ -713,7 +728,7 @@ def show():
                        'stop_name': s['stop_name'],
                        'stop_lat': s['stop_lat'],
                        'stop_lon': s['stop_lon'],
-                       'tip_html': _tip_html('Stop', s['stop_name'])}
+                       'tip_text': _tip_text('Stop', s['stop_name'])}
                       for s in _nearby_stops],
                 get_position=['stop_lon', 'stop_lat'],
                 # Hollow rings, not dots: buses are filled circles, so a stop
@@ -784,9 +799,16 @@ def show():
             map_style=map_style,
             initial_view_state=view_state,
             layers=layers,
+            # "text", not "html": deck.gl assigns tooltip.html via innerHTML
+            # (markup renders) but tooltip.text via innerText (markup would
+            # show as literal characters, which is exactly what plain text
+            # wants). white-space: pre-line is belt-and-braces — innerText's
+            # setter already turns the '\n' in tip_text into line breaks, and
+            # this CSS guarantees it even if that assignment ever changes.
             tooltip={
-                "html": "{tip_html}",
-                "style": {"backgroundColor": "steelblue", "color": "white"},
+                "text": "{tip_text}",
+                "style": {"backgroundColor": "steelblue", "color": "white",
+                          "white-space": "pre-line"},
             },
         ),
         selection_mode="single-object",

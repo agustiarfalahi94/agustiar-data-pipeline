@@ -994,6 +994,19 @@ class _SessionState(dict):
         self[name] = value
 
 
+class PageTestReachedNetwork(BaseException):
+    """
+    Raised by the network guard in `_stub_streamlit` when a page test reaches
+    OpenRouteService. Deliberately derives from BaseException, not Exception:
+    `walking._routed_distances` wraps its request in a bare `except Exception`,
+    which would silently swallow a plain AssertionError (itself an Exception
+    subclass) and return the fallback distance — the guard would then be inert,
+    and a future regression that reintroduced a real network call would pass
+    the test suite quietly. BaseException is never caught by that handler, so
+    a violation surfaces as a loud test failure instead.
+    """
+
+
 def _stub_streamlit(monkeypatch, module):
     """Replace a page module's `st` with a recorder and stop it fetching."""
     st_stub = MagicMock()
@@ -1028,13 +1041,20 @@ def _stub_streamlit(monkeypatch, module):
     # network a loud failure rather than a silently-swallowed one. A test that
     # genuinely wants the routed path must opt in by overriding this mock with
     # a canned response of its own.
+    #
+    # The exception raised here must not be a plain AssertionError: that is an
+    # Exception subclass, and `walking._routed_distances` wraps the request in
+    # a bare `except Exception`, which would catch it and return the fallback
+    # distance in silence — the guard would fire but nothing would ever see it
+    # fire. PageTestReachedNetwork derives from BaseException instead, so it
+    # passes straight through that handler.
     st_stub.secrets = {}
     if hasattr(module, '_config'):
         monkeypatch.setattr(module, '_config', None)
     monkeypatch.setattr(
         walking.requests, 'post',
         lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError('page test reached the network')))
+            PageTestReachedNetwork('page test reached the network')))
     # Cached routed distances would otherwise leak between tests and let one
     # test's canned response answer another's lookup.
     walking._clear_cache()
@@ -1604,9 +1624,11 @@ def test_the_deck_data_excludes_columns_recomputed_every_render(monkeypatch):
         f"the deck carries more than the layer draws: {sorted(columns)}"
     # It still carries what the tooltip actually shows — now pre-rendered into
     # one field, per row, shared with every other layer's tooltip.
-    assert {'vehicle_id', 'tip_html'} <= columns
-    assert 'Route' in vehicles.data[0]['tip_html']
-    assert 'Last reported' in vehicles.data[0]['tip_html']
+    assert {'vehicle_id', 'tip_text'} <= columns
+    tip_text = vehicles.data[0]['tip_text']
+    for label in ('Vehicle', 'Route', 'Speed', 'Bearing', 'Last reported'):
+        assert label in tip_text
+    assert '\n' in tip_text, "the five facts must be separated by real newlines"
 
 
 def test_tapped_vehicle_filtered_out_is_distinguished_from_genuinely_gone(monkeypatch):
@@ -2026,11 +2048,11 @@ def test_the_stops_layer_is_tappable_and_carries_its_own_tooltip(monkeypatch):
     assert stops is not None, "the nearby-stops layer is missing from the deck"
     assert stops.pickable is True, \
         "stops must be pickable or a tap on a stop ring does nothing"
-    assert 'tip_html' in stops.data[0], \
-        "each stop row must carry its own rendered tooltip markup"
-    assert 'A STOP' in stops.data[0]['tip_html']
+    assert 'tip_text' in stops.data[0], \
+        "each stop row must carry its own rendered tooltip text"
+    assert 'A STOP' in stops.data[0]['tip_text']
 
-    assert deck._tooltip['html'] == '{tip_html}', \
+    assert deck._tooltip['text'] == '{tip_text}', \
         ("the Deck tooltip must name the shared per-row field; a "
          "vehicle-specific template renders literally on a stop")
 
@@ -2415,19 +2437,22 @@ def test_arrival_row_survives_a_missing_route_display():
     assert line.startswith('Route —')
 
 
-def test_tip_html_escapes_a_name_that_would_break_the_markup():
-    # Stop names come from a third-party feed. One containing < or & must not
-    # be able to inject markup into the tooltip.
+def test_tip_text_does_not_escape_a_name_containing_markup_characters():
+    # Streamlit escapes interpolated tooltip values itself (bug fix #15820).
+    # If _tip_text also escaped, the result would be double-escaped and a stop
+    # named "A & B" would render as the literal text "A &amp; B". So the raw
+    # value — '&' and '<' included — must appear verbatim: no HTML entities,
+    # because _tip_text itself must never escape anything.
     from app_pages import live_map
-    out = live_map._tip_html('Stop', 'A & B <Terminal>')
-    assert '&amp;' in out
-    assert '&lt;Terminal&gt;' in out
-    assert '<Terminal>' not in out
+    out = live_map._tip_text('Stop', 'A & B <Terminal>')
+    assert out == 'Stop: A & B <Terminal>'
+    assert '&amp;' not in out
+    assert '&lt;' not in out
 
 
-def test_tip_html_labels_the_value():
+def test_tip_text_labels_the_value():
     from app_pages import live_map
-    assert live_map._tip_html('Stop', 'KL2324') == '<b>Stop:</b> KL2324'
+    assert live_map._tip_text('Stop', 'KL2324') == 'Stop: KL2324'
 
 
 class _Sel:
