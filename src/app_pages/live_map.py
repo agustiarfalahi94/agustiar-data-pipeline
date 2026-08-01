@@ -7,6 +7,7 @@ from streamlit_js_eval import get_geolocation as js_get_geolocation
 from utils import db, data_processor, eta
 from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
+from utils import route_view
 from utils import walking
 
 try:
@@ -1044,6 +1045,69 @@ def show():
                 )
             st.info("  \n".join(body))
             st.caption(ARRIVAL_ACCURACY_NOTE)
+
+            # Every route the timetable says calls here, not only those with a
+            # bus running right now. A rider at this stop saw three arrivals
+            # and could not learn that a fourth route — the only one reaching
+            # their destination — serves the stop at all.
+            routes = gtfs_static.get_routes_at_stop(agency_slug, stop['stop_id'])
+            if routes:
+                st.markdown("**Serves:** " + " · ".join(
+                    r['short'] or r['long'] or r['route_id'] for r in routes))
+
+                # Marking stops near the user costs no extra routing request:
+                # _nearby_stops was already resolved for this render and
+                # walking.walk_times caches per stop.
+                nearby_walks = walking.walk_times(
+                    loc['lat'], loc['lon'], _nearby_stops or [], agency_slug,
+                    api_key=ors_key)
+                nearby_by_id = {
+                    s['stop_id']: {
+                        'distance_m': nearby_walks[s['stop_id']]['distance_m'],
+                        'walk_label': _walk_label(nearby_walks[s['stop_id']]),
+                    }
+                    for s in (_nearby_stops or [])
+                    if s['stop_id'] in nearby_walks
+                }
+
+                for route in routes:
+                    patterns = gtfs_static.get_route_patterns(
+                        agency_slug, route['route_id'], stop['stop_id'])
+                    if not patterns:
+                        continue
+                    headsigns = [gtfs_static.get_trip_headsign(agency_slug, p['trip_id'])
+                                 for p in patterns]
+                    titles = route_view.pattern_titles(patterns, headsigns)
+                    label = route['short'] or route['long'] or route['route_id']
+
+                    for pattern, title in zip(patterns, titles):
+                        with st.expander(f"{label} — {title}"):
+                            for row in route_view.build_stop_rows(
+                                    pattern['stops'], stop['stop_id'], nearby_by_id):
+                                line = f"`{row['seq']:>2}`  {row['stop_name']}"
+                                offset = row['offset_minutes']
+                                if row['is_tapped']:
+                                    line += "  ← you tapped this"
+                                elif offset is not None and offset < 0:
+                                    # Stops the bus passes before reaching the
+                                    # tapped one. "+-5 min" is not a time.
+                                    line += f"  · {abs(offset)} min earlier"
+                                elif offset is not None:
+                                    line += f"  · +{offset} min"
+                                st.markdown(line)
+                                if row['near']:
+                                    st.caption(
+                                        f"       ~{int(row['near']['distance_m'])} m "
+                                        f"from you · {row['near']['walk_label']}")
+                            # Differences between timetabled stop times, not a
+                            # live prediction, and for a headway service there
+                            # is no published departure to state at all.
+                            note = ("Journey times from the published timetable, "
+                                    "measured from the stop you tapped.")
+                            if gtfs_static.is_frequency_based(agency_slug, pattern['trip_id']):
+                                note += " This route runs to a headway, not a fixed timetable."
+                            st.caption(note)
+
             if st.button("Clear stop selection", key="clear_stop_selection"):
                 st.session_state['cleared_stop_id'] = selected_stop_id
                 st.session_state['selected_stop_id'] = None

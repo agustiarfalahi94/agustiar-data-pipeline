@@ -2876,3 +2876,121 @@ def test_a_failed_build_stores_neither_new_index(monkeypatch):
     gtfs_static._build_trip_index('kl')
     assert 'kl' not in gtfs_static._STOP_ROUTES_INDEX
     assert 'kl' not in gtfs_static._ROUTE_TRIPS_INDEX
+
+
+# ── tap-a-stop panel: every serving route, not only those with a live bus ───
+#
+# test_a_selected_stop_out_of_range_clears_itself already shows the shape
+# these tests need: _live_map_with_selection with an empty vehicle selection,
+# a stop pinned into session_state['selected_stop_id'], and get_stops_near
+# stubbed to confirm it. _render_stop_panel below is exactly that scaffolding,
+# factored out so each test only has to stub the GTFS lookups it cares about.
+
+def _render_stop_panel(monkeypatch):
+    """
+    Run live_map.show() with a stop already selected, so the tapped-stop panel
+    renders. Mirrors the setup test_a_selected_stop_out_of_range_clears_itself
+    uses: an empty vehicle selection via _live_map_with_selection, plus a
+    stop pinned in session state and confirmed by get_stops_near.
+    """
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.06, 'lon': 101.67, 'accuracy': 10}
+    st_stub.session_state['selected_stop_id'] = 'S1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR',
+                                          'stop_lat': 3.0621, 'stop_lon': 101.6706,
+                                          'distance_m': 560.0}])
+    live_map.show()
+    return st_stub
+
+
+def test_the_stop_panel_names_every_route_that_serves_the_stop(monkeypatch):
+    # The reported failure: the panel listed the routes with a live bus and so
+    # omitted the only route that reaches the rider's destination.
+    from app_pages import live_map
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [
+                            {'route_id': 'T5800', 'short': 'T580', 'long': 'Awan Besar ~ TPM'},
+                            {'route_id': 'S6060', 'short': 'PAVBJ', 'long': 'Awan Besar ~ Pavilion'},
+                        ])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns', lambda *a, **k: [])
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.info) + _texts(st_stub.markdown) + _texts(st_stub.caption)
+    assert 'T580' in said, "a route with no live bus must still be listed"
+    assert 'PAVBJ' in said
+
+
+def test_the_stop_panel_opens_a_route_to_its_stop_sequence(monkeypatch):
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL', 'arrival_seconds': 60},
+             {'stop_id': 'S3', 'stop_name': 'GREEN AVENUE', 'arrival_seconds': 1920},
+             {'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 2400}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'T5800', 'short': 'T580', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: True)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.markdown) + _texts(st_stub.caption)
+    assert 'KM1 BUKIT JALIL' in said
+    assert '+1 min' in said, "the useful stop is one minute out"
+    assert '+32 min' in said, "the stop named after the destination is 32 minutes out"
+
+
+def test_stops_before_the_tapped_one_are_not_rendered_as_plus_minus(monkeypatch):
+    # A stop the bus passes before reaching yours has a negative offset.
+    # Rendering it through the "+N min" branch would print "+-5 min".
+    from app_pages import live_map
+    stops = [{'stop_id': 'S0', 'stop_name': 'BEFORE', 'arrival_seconds': 0},
+             {'stop_id': 'S1', 'stop_name': 'YOURS', 'arrival_seconds': 300},
+             {'stop_id': 'S2', 'stop_name': 'AFTER', 'arrival_seconds': 720}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'R', 'short': 'R1', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: False)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.markdown)
+    assert '+-' not in said, said
+    assert '5 min earlier' in said
+    assert '+7 min' in said
+
+
+def test_the_stop_panel_says_journey_times_come_from_the_timetable(monkeypatch):
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'A', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'B', 'arrival_seconds': 60}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'R', 'short': 'R1', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: False)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.caption)
+    assert 'timetable' in said.lower()
+
+
+def test_the_stop_panel_never_invents_a_departure_time_for_a_headway_route(monkeypatch):
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'A', 'arrival_seconds': 21600},
+             {'stop_id': 'S2', 'stop_name': 'B', 'arrival_seconds': 21660}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'R', 'short': 'R1', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: True)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.markdown) + _texts(st_stub.caption)
+    assert '06:00' not in said, "a headway trip has no published departure to show"
