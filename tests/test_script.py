@@ -2703,3 +2703,176 @@ def test_a_blank_stop_id_does_not_eat_the_bus_selection(monkeypatch):
 
     assert st_stub.session_state.get('selected_vehicle_id') == 'V1', \
         "a blank stop id must not destroy the existing bus selection"
+
+
+def _make_timetable_zip(tmp_path, name):
+    """
+    A minimal GTFS static ZIP with a loop route and a second route.
+
+    Models the real shape that motivated this feature: T580 leaves LRT Awan
+    Besar, reaches KM1 Bukit Jalil one minute later, and returns past Green
+    Avenue Condominium 32 minutes later before ending where it began. Two trips
+    share that pattern so de-duplication has something to collapse.
+    """
+    import zipfile
+    p = tmp_path / f"{name}.zip"
+    stops = (
+        "stop_id,stop_name,stop_lat,stop_lon\n"
+        "S1,LRT AWAN BESAR,3.0621,101.6706\n"
+        "S2,KM1 BUKIT JALIL,3.0584,101.6744\n"
+        "S3,GREEN AVENUE CONDOMINIUM,3.0587,101.6740\n"
+        "S4,ELSEWHERE,3.0700,101.6800\n"
+    )
+    routes = (
+        "route_id,route_short_name,route_long_name\n"
+        "T5800,T580,Awan Besar ~ TPM\n"
+        "U6000,650,Elsewhere ~ Awan Besar\n"
+    )
+    trips = (
+        "route_id,trip_id,trip_headsign\n"
+        "T5800,t_loop_a,\n"
+        "T5800,t_loop_b,\n"
+        "T5800,t_short,\n"
+        "U6000,t_other,Awan Besar\n"
+    )
+    # t_loop_a and t_loop_b are the same sequence at different times of day —
+    # one pattern. t_short is a genuinely different sequence on the same route,
+    # so the fixture exercises both collapsing and keeping.
+    stop_times = (
+        "trip_id,stop_sequence,arrival_time,stop_id\n"
+        "t_loop_a,1,06:00:00,S1\n"
+        "t_loop_a,2,06:01:00,S2\n"
+        "t_loop_a,3,06:32:00,S3\n"
+        "t_loop_a,4,06:40:00,S1\n"
+        "t_loop_b,1,07:00:00,S1\n"
+        "t_loop_b,2,07:01:00,S2\n"
+        "t_loop_b,3,07:32:00,S3\n"
+        "t_loop_b,4,07:40:00,S1\n"
+        "t_short,1,09:00:00,S1\n"
+        "t_short,2,09:05:00,S4\n"
+        "t_short,3,09:12:00,S1\n"
+        "t_other,1,08:00:00,S4\n"
+        "t_other,2,08:10:00,S1\n"
+    )
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('stops.txt', stops)
+        zf.writestr('routes.txt', routes)
+        zf.writestr('trips.txt', trips)
+        zf.writestr('stop_times.txt', stop_times)
+    return str(p)
+
+
+def _use_timetable_zip(monkeypatch, path):
+    """Point gtfs_static at a fixture ZIP and clear every index it fills."""
+    import zipfile
+    from utils import gtfs_static
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(path))
+    monkeypatch.setattr(gtfs_static, '_zip_mtime', lambda slug: 1000.0)
+    gtfs_static._TRIP_STOPS_INDEX.clear()
+    gtfs_static._TRIP_HEADSIGN_INDEX.clear()
+    gtfs_static._TRIP_FREQUENCY_INDEX.clear()
+    gtfs_static._TRIP_INDEX_MTIME.clear()
+    gtfs_static._STOP_ROUTES_INDEX.clear()
+    gtfs_static._ROUTE_TRIPS_INDEX.clear()
+    gtfs_static._ROUTE_PARTS_INDEX.clear()
+    gtfs_static._ROUTE_PARTS_MTIME.clear()
+    return gtfs_static
+
+
+def test_routes_at_stop_lists_every_route_serving_it(tmp_path, monkeypatch):
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    names = [r['short'] for r in g.get_routes_at_stop('kl', 'S1')]
+    assert names == ['650', 'T580']
+
+
+def test_routes_at_stop_returns_the_only_route_that_serves_a_stop(tmp_path, monkeypatch):
+    # The reported failure in miniature: three routes reach the interchange,
+    # exactly one reaches the destination.
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    served = g.get_routes_at_stop('kl', 'S3')
+    assert [r['short'] for r in served] == ['T580']
+    assert served[0]['route_id'] == 'T5800'
+    assert served[0]['long'] == 'Awan Besar ~ TPM'
+
+
+def test_routes_at_stop_is_empty_for_an_unknown_stop(tmp_path, monkeypatch):
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    assert g.get_routes_at_stop('kl', 'NOPE') == []
+    assert g.get_routes_at_stop('kl', '') == []
+
+
+def test_routes_at_stop_is_empty_when_the_feed_is_unavailable(monkeypatch):
+    from utils import gtfs_static
+    def boom(slug):
+        raise OSError('no zip')
+    monkeypatch.setattr(gtfs_static, '_load_zip', boom)
+    monkeypatch.setattr(gtfs_static, '_zip_mtime', lambda slug: 1.0)
+    gtfs_static._STOP_ROUTES_INDEX.clear()
+    gtfs_static._TRIP_INDEX_MTIME.clear()
+    assert gtfs_static.get_routes_at_stop('kl', 'S1') == []
+
+
+def test_route_patterns_collapse_trips_that_share_a_sequence(tmp_path, monkeypatch):
+    # t_loop_a and t_loop_b visit the same stops at different times of day.
+    # That is one pattern, not two.
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    sequences = [[s['stop_id'] for s in p['stops']]
+                 for p in g.get_route_patterns('kl', 'T5800')]
+    assert sequences.count(['S1', 'S2', 'S3', 'S1']) == 1
+
+
+def test_route_patterns_returns_each_genuinely_different_sequence(tmp_path, monkeypatch):
+    # 37 of Rapid KL's 136 routes run two patterns and one runs three. Showing
+    # a single "the" sequence would be wrong for a quarter of the network.
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    sequences = [[s['stop_id'] for s in p['stops']]
+                 for p in g.get_route_patterns('kl', 'T5800')]
+    assert len(sequences) == 2
+    assert ['S1', 'S2', 'S3', 'S1'] in sequences
+    assert ['S1', 'S4', 'S1'] in sequences
+
+
+def test_route_patterns_carry_arrival_seconds_for_journey_times(tmp_path, monkeypatch):
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    loop = next(p for p in g.get_route_patterns('kl', 'T5800')
+                if [s['stop_id'] for s in p['stops']] == ['S1', 'S2', 'S3', 'S1'])
+    base = loop['stops'][0]['arrival_seconds']
+    assert [(s['arrival_seconds'] - base) // 60 for s in loop['stops']] == [0, 1, 32, 40]
+
+
+def test_route_patterns_can_be_filtered_to_one_stop(tmp_path, monkeypatch):
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    # S2 is on the long loop only; S4 on the short one only; S9 on neither.
+    assert len(g.get_route_patterns('kl', 'T5800', stop_id='S2')) == 1
+    assert len(g.get_route_patterns('kl', 'T5800', stop_id='S4')) == 1
+    assert g.get_route_patterns('kl', 'T5800', stop_id='S9') == []
+
+
+def test_route_patterns_is_empty_for_an_unknown_route(tmp_path, monkeypatch):
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    assert g.get_route_patterns('kl', 'NOPE') == []
+    assert g.get_route_patterns('kl', '') == []
+
+
+def test_the_new_indexes_are_filled_by_the_same_pass_as_the_old_ones(tmp_path, monkeypatch):
+    # They must be written together. An index built independently could survive
+    # a rebuild of its siblings and serve a superseded timetable.
+    g = _use_timetable_zip(monkeypatch, _make_timetable_zip(tmp_path, 'kl'))
+    assert g._STOP_ROUTES_INDEX == {}
+    g.get_trip_stops('kl', 't_loop_a')          # touches only the old API
+    assert g._STOP_ROUTES_INDEX.get('kl'), "the new index was not filled by the shared pass"
+    assert g._ROUTE_TRIPS_INDEX.get('kl')
+
+
+def test_a_failed_build_stores_neither_new_index(monkeypatch):
+    from utils import gtfs_static
+    def boom(slug):
+        raise OSError('no zip')
+    monkeypatch.setattr(gtfs_static, '_load_zip', boom)
+    monkeypatch.setattr(gtfs_static, '_zip_mtime', lambda slug: 1.0)
+    gtfs_static._STOP_ROUTES_INDEX.clear()
+    gtfs_static._ROUTE_TRIPS_INDEX.clear()
+    gtfs_static._TRIP_INDEX_MTIME.clear()
+    gtfs_static._build_trip_index('kl')
+    assert 'kl' not in gtfs_static._STOP_ROUTES_INDEX
+    assert 'kl' not in gtfs_static._ROUTE_TRIPS_INDEX

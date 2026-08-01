@@ -346,6 +346,15 @@ _TRIP_STOPS_INDEX = {}
 _TRIP_HEADSIGN_INDEX = {}
 # agency slug -> {trip_id} for trips published in frequencies.txt
 _TRIP_FREQUENCY_INDEX = {}
+# agency slug -> {stop_id: {route_id, ...}}
+_STOP_ROUTES_INDEX = {}
+# agency slug -> {route_id: [trip_id, ...]}
+#
+# Both are filled by _build_trip_index alongside the three above, never
+# independently: they are derived from the same stop_times.txt pass, and an
+# index that could be rebuilt on its own would let a stale entry survive a
+# refresh of its siblings and serve a superseded timetable.
+_ROUTE_TRIPS_INDEX = {}
 # agency slug -> mtime of the ZIP the index above was built from
 _TRIP_INDEX_MTIME = {}
 
@@ -401,6 +410,8 @@ def _build_trip_index(agency_slug):
     trip_stops = {}
     headsigns = {}
     frequency_trips = set()
+    stop_routes = {}
+    route_trips = {}
     try:
         with _load_zip(agency_slug) as zf:
             for row in _read_csv_from_zip(zf, 'stops.txt') or []:
@@ -441,6 +452,19 @@ def _build_trip_index(agency_slug):
                 tid = (row.get('trip_id') or '').strip()
                 if tid:
                     headsigns[tid] = (row.get('trip_headsign') or '').strip()
+                    rid = (row.get('route_id') or '').strip()
+                    if rid:
+                        route_trips.setdefault(rid, []).append(tid)
+
+            # Derived from trip_stops, which is already built: no second parse
+            # of stop_times.txt, which is 87,935 rows for Rapid Bus KL alone.
+            trip_route = {tid: rid for rid, tids in route_trips.items() for tid in tids}
+            for trip_id, entries in trip_stops.items():
+                rid = trip_route.get(trip_id)
+                if not rid:
+                    continue
+                for entry in entries:
+                    stop_routes.setdefault(entry['stop_id'], set()).add(rid)
 
             # frequencies.txt marks trips that run to a headway rather than to
             # the clock. For these the times in stop_times.txt are a
@@ -458,6 +482,8 @@ def _build_trip_index(agency_slug):
     _TRIP_STOPS_INDEX[agency_slug] = trip_stops
     _TRIP_HEADSIGN_INDEX[agency_slug] = headsigns
     _TRIP_FREQUENCY_INDEX[agency_slug] = frequency_trips
+    _STOP_ROUTES_INDEX[agency_slug] = stop_routes
+    _ROUTE_TRIPS_INDEX[agency_slug] = route_trips
     # Recorded after the load, which may itself have downloaded a fresh ZIP.
     _TRIP_INDEX_MTIME[agency_slug] = _zip_mtime(agency_slug)
 
@@ -500,6 +526,76 @@ def is_frequency_based(agency_slug: str, trip_id: str) -> bool:
     if not _trip_index_is_current(agency_slug):
         _build_trip_index(agency_slug)
     return trip_id.strip() in _TRIP_FREQUENCY_INDEX.get(agency_slug, set())
+
+
+def get_routes_at_stop(agency_slug: str, stop_id: str) -> list:
+    """
+    Every route whose timetable calls at *stop_id*, sorted by display name.
+
+    This is the timetable's answer, not the live feed's. The arrivals panels
+    show buses currently en route, which is a different and much smaller set —
+    a rider at LRT Awan Besar saw three routes arriving and could not learn
+    that a fourth, the only one reaching their destination, serves the stop at
+    all. Empty list on any missing or malformed data; never raises.
+    """
+    if not stop_id:
+        return []
+    if not _trip_index_is_current(agency_slug):
+        _build_trip_index(agency_slug)
+    route_ids = _STOP_ROUTES_INDEX.get(agency_slug, {}).get(stop_id.strip(), set())
+
+    routes = []
+    for route_id in route_ids:
+        parts = get_route_parts(agency_slug, route_id)
+        routes.append({'route_id': route_id,
+                       'short': parts['short'],
+                       'long': parts['long']})
+    routes.sort(key=lambda r: (r['short'] or r['long'] or r['route_id']))
+    return routes
+
+
+def get_route_patterns(agency_slug: str, route_id: str, stop_id: str = None) -> list:
+    """
+    The distinct stop sequences *route_id* runs, optionally only those calling
+    at *stop_id*.
+
+    A route can run more than one pattern — 37 of Rapid KL's 136 routes run
+    two and one runs three — so picking a single "the" sequence would be wrong
+    for a quarter of the network, in a feature whose whole purpose is to stop
+    the app misdirecting someone. Trips that visit the same stops in the same
+    order are one pattern however many times a day they run.
+
+    Each result carries a representative trip_id, because the headsign and
+    whether the service runs to a headway are per-trip facts the caller needs
+    and would otherwise have to re-derive.
+
+    Empty list on any missing or malformed data; never raises.
+    """
+    if not route_id:
+        return []
+    if not _trip_index_is_current(agency_slug):
+        _build_trip_index(agency_slug)
+
+    trip_ids = _ROUTE_TRIPS_INDEX.get(agency_slug, {}).get(route_id.strip(), [])
+    all_stops = _TRIP_STOPS_INDEX.get(agency_slug, {})
+    wanted = stop_id.strip() if stop_id else None
+
+    seen = set()
+    patterns = []
+    for trip_id in trip_ids:
+        stops = all_stops.get(trip_id) or []
+        if not stops:
+            continue
+        key = tuple(s['stop_id'] for s in stops)
+        if key in seen:
+            continue
+        # Recorded before the filter, so de-duplication does not depend on
+        # which stop was asked for.
+        seen.add(key)
+        if wanted and wanted not in key:
+            continue
+        patterns.append({'trip_id': trip_id, 'stops': stops})
+    return patterns
 
 
 def get_stops_near(agency_slug: str, lat: float, lon: float,
