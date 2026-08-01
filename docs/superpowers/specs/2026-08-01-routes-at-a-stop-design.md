@@ -118,13 +118,18 @@ get_routes_at_stop(agency_slug, stop_id)
     -> [{'route_id': str, 'short': str, 'long': str}, ...]      # sorted by short name
 
 get_route_patterns(agency_slug, route_id, stop_id=None)
-    -> [[stop_entry, ...], ...]
+    -> [{'trip_id': str, 'stops': [stop_entry, ...]}, ...]
 ```
 
 `get_route_patterns` returns **distinct** sequences, de-duplicated on the tuple of their stop ids,
 and filtered to those containing `stop_id` when one is given. Each `stop_entry` is what
 `get_trip_stops` already returns — `stop_id`, `stop_name`, `stop_lat`, `stop_lon`,
 `arrival_seconds` — so journey times need no new parsing.
+
+The representative `trip_id` is carried alongside so the caller can reach the two facts that live
+per trip rather than per pattern: `get_trip_headsign` for the operator's own destination wording,
+and `is_frequency_based` for whether the pattern runs to a headway. Without it the panel would have
+to re-derive both.
 
 Both return `[]` on any missing or malformed data, matching `get_stops_near` and `get_trip_stops`.
 Neither raises into a render.
@@ -136,10 +141,13 @@ Neither raises into a render.
 `live_map.py` is 1,311 lines. The logic does not go there.
 
 ```python
-build_stop_rows(pattern, tapped_stop_id, nearby_by_id)
+build_stop_rows(stops, tapped_stop_id, nearby_by_id=None)
     -> [{'seq': int, 'stop_id': str, 'stop_name': str,
-         'offset_minutes': int, 'is_tapped': bool,
+         'offset_minutes': int | None, 'is_tapped': bool,
          'near': {'distance_m': float, 'walk_label': str} | None}, ...]
+
+pattern_label(stops, headsign='') -> str
+pattern_titles(patterns, headsigns) -> [str]      # unique, same order
 ```
 
 No Streamlit, no GTFS, no I/O — a pure function over dicts, so loops, duplicate stops and
@@ -152,9 +160,11 @@ it is what makes the loop legible instead of merely puzzling.
 
 `is_tapped` is set on **every** occurrence of the tapped stop, so a loop shows both ends marked.
 
-**Negative offsets cannot occur** given the first-occurrence anchor, because `arrival_seconds` is
-non-decreasing along a trip. If a malformed feed ever produced one, the row renders without an
-offset rather than showing a negative journey time.
+**Negative offsets are expected and meaningful.** When the tapped stop sits mid-route, every stop
+before it has already been passed by a bus travelling this pattern, and its offset is negative.
+Those rows render as `N min earlier` — never as `+-N min`, and never suppressed, because a rider
+needs to see where the route came from to know they are facing the right way. Only a missing
+`arrival_seconds`, or a pattern that never calls at the tapped stop, produces no offset at all.
 
 `nearby_by_id` is `{stop_id: {'distance_m', 'walk_label'}}` supplied by the caller. The formatter
 neither computes distances nor calls a routing API; it only annotates.
@@ -176,13 +186,15 @@ The tapped-stop panel gains:
    explain nothing. The rule is therefore:
 
    - a pattern whose first and last stop are the same is labelled **`loop from <first stop>`**;
-   - otherwise it is labelled **`→ <last stop>`**;
+   - otherwise it is labelled **`to <last stop>`**;
    - `trip_headsign` is preferred over both when the feed publishes a non-empty one, since it is
      the operator's own wording — falling back to the rule above when it is blank, which is common
      in these feeds;
    - if two patterns of the same route still carry identical labels, the stop count disambiguates
-     them (`loop from LRT Awan Besar · 35 stops` versus `· 31 stops`). Two patterns must never
-     render as two visually identical expanders.
+     them (`loop from LRT Awan Besar · 35 stops` versus `· 31 stops`), and a numbered suffix
+     settles any remaining tie. **Two patterns must never render as two visually identical
+     expanders** — a rider could not tell which one they had opened. Uniqueness is guaranteed by
+     construction in `route_view.pattern_titles`, not left to chance in the data.
 3. Inside each expander, the rows from `build_stop_rows`.
 
 **Routes with no live bus are listed and say so.** They are not omitted. That omission is the
@@ -229,7 +241,7 @@ Unit tests, no network and no browser:
 - **`get_route_patterns`:** two trips sharing a pattern collapse to one; two genuinely different
   patterns both returned; filtering by `stop_id` excludes patterns that do not contain it;
   unknown route id returns `[]`.
-- **Pattern labelling:** a loop is labelled `loop from <first stop>` and not `→ <last stop>`; a
+- **Pattern labelling:** a loop is labelled `loop from <first stop>` and not `to <last stop>`; a
   non-loop is labelled by its last stop; a published `trip_headsign` wins over both; a blank
   headsign falls back; two same-route patterns never produce identical labels.
 - **Index construction:** the new indexes are populated by the same pass as the existing ones, and
