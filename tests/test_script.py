@@ -2949,6 +2949,36 @@ def test_the_stop_panel_opens_a_route_to_its_stop_sequence(monkeypatch):
     assert '+32 min' in said, "the stop named after the destination is 32 minutes out"
 
 
+def test_the_stop_panel_escapes_a_stop_name_from_the_feed(monkeypatch):
+    # The panel joins every row into one markdown block with a hard break,
+    # which is an inline <br> rather than a new block -- so an unescaped
+    # metacharacter in a stop name (untrusted GTFS feed text) could pair with
+    # a matching character several rows away and swallow the rows between
+    # into unintended formatting. This confirms the panel actually calls the
+    # escape on the way in, not only that route_view.escape_markdown works
+    # in isolation.
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'Depot *Alpha', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'closes* there', 'arrival_seconds': 60}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'R', 'short': 'R1', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: False)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.markdown)
+    assert 'Depot \\*Alpha' in said, \
+        "the panel must escape asterisks from stop names, not pass them through"
+    assert 'closes\\* there' in said
+    # The raw, unescaped forms must not appear at all -- that is exactly the
+    # shape that could pair up across the joined block and swallow the rows
+    # between into unintended formatting.
+    assert 'Depot *Alpha' not in said, said
+    assert 'closes* there' not in said, said
+
+
 def test_the_stop_panel_marks_a_pattern_stop_that_is_also_near_the_rider(monkeypatch):
     # This is the mark that makes the real case legible: at LRT Awan Besar,
     # KM1 Bukit Jalil (+1 min) is near the rider's building just as much as
@@ -2978,6 +3008,11 @@ def test_the_stop_panel_marks_a_pattern_stop_that_is_also_near_the_rider(monkeyp
     said = _texts(st_stub.markdown)
     assert '120 m from you' in said, said
     assert f'~{expected_minutes} min walk (estimated)' in said, said
+    # The subordination has to be visual, not whitespace: HTML collapses
+    # runs of spaces to one, and this line lost st.caption's muted styling
+    # when it moved into the joined markdown block. Without the arrow and
+    # italics it reads as a peer stop rather than a note about one.
+    assert f'*↳ ~120 m from you · ~{expected_minutes} min walk (estimated)*' in said, said
 
 
 def test_stops_before_the_tapped_one_are_not_rendered_as_plus_minus(monkeypatch):

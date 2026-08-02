@@ -146,3 +146,50 @@ def test_distinct_patterns_keep_their_natural_titles():
 
 def test_titles_tolerate_a_short_headsign_list():
     assert len(route_view.pattern_titles([LOOP, LINE], [])) == 2
+
+
+# ── escaping untrusted feed text for a joined markdown block ────────────
+#
+# Stop names come straight from a third-party GTFS feed and are joined with
+# other rows into a single st.markdown call via a hard break ("  \n"), which
+# is an inline <br> rather than a new block -- so an unmatched *, _ or ` in
+# one row's name can pair with a matching character several rows away and
+# swallow the rows between into unintended bold, italic or code-span
+# formatting. Before rows were joined, each was its own st.markdown call and
+# a stray character could only corrupt its own row.
+
+def test_escape_markdown_escapes_asterisks():
+    assert route_view.escape_markdown('Bus * Stop') == 'Bus \\* Stop'
+
+
+def test_escape_markdown_escapes_backticks():
+    assert route_view.escape_markdown('Stop `code`') == 'Stop \\`code\\`'
+
+
+def test_escape_markdown_escapes_underscores():
+    assert route_view.escape_markdown('KM1_BUKIT_JALIL') == 'KM1\\_BUKIT\\_JALIL'
+
+
+def test_escape_markdown_escapes_brackets_and_tilde():
+    assert route_view.escape_markdown('[LRT] ~Awan~') == '\\[LRT\\] \\~Awan\\~'
+
+
+def test_escape_markdown_escapes_a_literal_backslash():
+    assert route_view.escape_markdown('back\\slash') == 'back\\\\slash'
+
+
+def test_escape_markdown_survives_none_and_empty():
+    assert route_view.escape_markdown('') == ''
+    assert route_view.escape_markdown(None) == ''
+
+
+def test_two_rows_with_unmatched_asterisks_cannot_combine_into_a_span():
+    # The failure mode this exists to prevent: one row's name opens a bold
+    # span, and the next row's name happens to close it, swallowing whatever
+    # sits between into unintended formatting.
+    row1 = route_view.escape_markdown('Opens *here')
+    row2 = route_view.escape_markdown('closes* there')
+    joined = row1 + "  \n" + row2
+    # Every asterisk must have been escaped -- none can be left bare to pair
+    # up across the join.
+    assert '*' not in joined.replace('\\*', '')

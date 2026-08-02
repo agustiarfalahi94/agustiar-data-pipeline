@@ -1095,7 +1095,17 @@ def show():
                             lines = []
                             for row in route_view.build_stop_rows(
                                     pattern['stops'], stop['stop_id'], nearby_by_id):
-                                line = f"`{row['seq']:>2}`  {row['stop_name']}"
+                                # A hard break ("  \n") is an inline <br>, not
+                                # a new markdown block, so inline constructs
+                                # parse across the whole joined string. An
+                                # unescaped stop name -- untrusted GTFS feed
+                                # text, same class of problem the tooltip fix
+                                # in 2.7.0 addressed -- could pair an
+                                # unmatched *, _ or ` with a matching
+                                # character several rows away and swallow the
+                                # rows between into unintended formatting.
+                                name = route_view.escape_markdown(row['stop_name'])
+                                line = f"`{row['seq']:>2}`  {name}"
                                 offset = row['offset_minutes']
                                 if row['is_tapped']:
                                     line += "  ← you tapped this"
@@ -1107,9 +1117,21 @@ def show():
                                     line += f"  · +{offset} min"
                                 lines.append(line)
                                 if row['near']:
+                                    # Italics plus an indent glyph, not
+                                    # leading spaces: HTML collapses runs of
+                                    # spaces to one, and moving this line out
+                                    # of its own st.caption (the widget
+                                    # collapse above) also lost the smaller
+                                    # muted styling that used to mark it as
+                                    # subordinate. Without a visual cue here
+                                    # it would read as a peer stop rather
+                                    # than a note about one. These are our
+                                    # own formatted numbers and label, not
+                                    # feed text, so nothing here needs
+                                    # escaping.
                                     lines.append(
-                                        f"       ~{int(row['near']['distance_m'])} m "
-                                        f"from you · {row['near']['walk_label']}")
+                                        f"*↳ ~{int(row['near']['distance_m'])} m "
+                                        f"from you · {row['near']['walk_label']}*")
                             st.markdown("  \n".join(lines))
                             # Differences between timetabled stop times, not a
                             # live prediction, and for a headway service there

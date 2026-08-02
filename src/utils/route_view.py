@@ -15,6 +15,27 @@ the normal shape of the network rather than an oddity.
 """
 
 
+def escape_markdown(text):
+    """
+    Escape the characters that can open inline markdown formatting.
+
+    Stop names come straight from a third-party GTFS feed, and the panel
+    joins several rows into a single markdown block using a hard break
+    ("  \\n" -- an inline <br>, not a new block). Without escaping, an
+    unmatched *, _ or ` in one row's name could pair with a matching
+    character several rows away and swallow everything between into
+    unintended bold, italic or code-span formatting.
+
+    The backslash escape must run first: escaping it after the others would
+    double-escape the backslashes those escapes themselves insert.
+    """
+    if not text:
+        return ''
+    for ch in ('\\', '`', '*', '_', '[', ']', '~'):
+        text = text.replace(ch, '\\' + ch)
+    return text
+
+
 def build_stop_rows(stops, tapped_stop_id, nearby_by_id=None):
     """
     Display rows for one stop sequence, timed from *tapped_stop_id*.
