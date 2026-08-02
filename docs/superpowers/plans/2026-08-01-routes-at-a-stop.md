@@ -995,7 +995,10 @@ In the section describing the tapped-stop panel, document that it now lists ever
 State these limits plainly, in the project's established voice:
 
 - Journey times are differences between timetabled stop times, not live predictions.
-- A route that runs to a headway shows its frequency, never a fabricated departure time.
+- A route that runs to a headway is **flagged** as one — never given a fabricated departure time,
+  and never given a frequency figure either. `headway_secs` is not read from `frequencies.txt` and
+  no interval is retained anywhere in the codebase, so the panel states only that the route runs to
+  a headway rather than to a fixed timetable.
 - A route with more than one stop pattern appears once per pattern; they are not merged.
 - This is not a journey planner: it answers "does this bus stop at X and how far along is it", not "how do I get from A to B".
 
