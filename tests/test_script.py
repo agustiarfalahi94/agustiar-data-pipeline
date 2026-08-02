@@ -2949,6 +2949,35 @@ def test_the_stop_panel_opens_a_route_to_its_stop_sequence(monkeypatch):
     assert '+32 min' in said, "the stop named after the destination is 32 minutes out"
 
 
+def test_the_returning_row_of_a_loop_renders_its_journey_time(monkeypatch):
+    # build_stop_rows computes +40 for the row where a loop comes back to the
+    # stop you tapped, but the render used to mark that row "you tapped this"
+    # and stop there -- so rows 1 and 4 came out as identical text and the
+    # loop's closure, the one thing this panel exists to make visible, never
+    # reached the page. The unit test proved the data layer; only a render
+    # assertion proves the number survives to the markdown.
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL', 'arrival_seconds': 60},
+             {'stop_id': 'S3', 'stop_name': 'GREEN AVENUE', 'arrival_seconds': 1920},
+             {'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 2400}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'T5800', 'short': 'T580', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: True)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    said = _texts(st_stub.markdown)
+    assert '+40 min' in said, \
+        f"the returning row must state the loop's length, not just repeat the mark: {said}"
+    # The anchor row itself is 0 minutes out -- "+0 min" would be noise.
+    assert '+0 min' not in said, said
+    # Both ends stay marked, so the rider can see it is the same stop.
+    assert said.count('← you tapped this') == 2, said
+
+
 def test_the_stop_panel_escapes_a_stop_name_from_the_feed(monkeypatch):
     # The panel joins every row into one markdown block with a hard break,
     # which is an inline <br> rather than a new block -- so an unescaped

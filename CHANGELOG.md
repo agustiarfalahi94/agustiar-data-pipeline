@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   100 of the 136 Rapid KL routes with timetable data are loops, so this is the network's ordinary
   shape, not one route's quirk. `get_route_patterns` supplies the distinct stop sequences and
   `route_view.build_stop_rows` turns one into display rows, marking every occurrence of the tapped
-  stop rather than only the nearest one, so both ends of a loop are visible together
+  stop rather than only the nearest one, so both ends of a loop are visible together — the
+  returning row also states how far round the circuit it is (`+40 min` on T580), which is what
+  distinguishes it from the row you actually tapped
 - **A route with more than one stop pattern is shown once per pattern — never merged.** 37 of the
   136 routes run two distinct stop sequences and one runs three; picking a single "the" sequence
   would misrepresent a quarter of the network, exactly the failure this feature exists to remove.

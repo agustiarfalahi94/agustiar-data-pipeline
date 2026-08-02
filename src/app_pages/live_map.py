@@ -1109,6 +1109,18 @@ def show():
                                 offset = row['offset_minutes']
                                 if row['is_tapped']:
                                     line += "  ← you tapped this"
+                                    if offset:
+                                        # Non-zero only, so the first
+                                        # occurrence (offset 0, the anchor)
+                                        # stays a bare mark. On a loop the
+                                        # tapped stop appears at both ends,
+                                        # and the returning row is where the
+                                        # circuit's length becomes visible:
+                                        # without this, rows 1 and 35 render
+                                        # as identical text and the +40 min
+                                        # closure -- the one thing this panel
+                                        # exists to show -- is thrown away.
+                                        line += f"  · +{offset} min"
                                 elif offset is not None and offset < 0:
                                     # Stops the bus passes before reaching the
                                     # tapped one. "+-5 min" is not a time.
