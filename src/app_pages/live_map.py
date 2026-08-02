@@ -1052,8 +1052,16 @@ def show():
             # their destination — serves the stop at all.
             routes = gtfs_static.get_routes_at_stop(agency_slug, stop['stop_id'])
             if routes:
+                # Several feed-derived route names in ONE markdown call, so an
+                # unmatched * or _ in one name can pair with one in another
+                # and swallow the names between -- the same cross-row bleed
+                # already fixed for the stop rows below. The "each name is its
+                # own isolated call" reasoning that covers older lines in this
+                # panel does not apply here, because this line joins them.
                 st.markdown("**Serves:** " + " · ".join(
-                    r['short'] or r['long'] or r['route_id'] for r in routes))
+                    route_view.escape_markdown(
+                        r['short'] or r['long'] or r['route_id'])
+                    for r in routes))
 
                 # Resolve every pattern first, so the walk-time lookup below
                 # can be narrowed to the stops that will actually carry a
@@ -1102,7 +1110,16 @@ def show():
                     label = route['short'] or route['long'] or route['route_id']
 
                     for pattern, title in zip(patterns, titles):
-                        with st.expander(f"{label} — {title}"):
+                        # st.expander renders markdown in its label, and both
+                        # halves interpolate feed text: the route name, and a
+                        # title built from the published headsign or a stop
+                        # name. Escaping the assembled title also escapes the
+                        # "~" in our own "~40 min" suffix, which markdown then
+                        # renders as a plain "~" -- the same character, at no
+                        # risk of opening a strikethrough.
+                        with st.expander(
+                                f"{route_view.escape_markdown(label)} — "
+                                f"{route_view.escape_markdown(title)}"):
                             # Streamlit re-runs this whole function body on
                             # every auto-refresh whether or not the expander
                             # is open -- collapsing is only visual disclosure,

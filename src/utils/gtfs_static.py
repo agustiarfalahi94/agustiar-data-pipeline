@@ -10,6 +10,7 @@ Streamlit rerun.  All ZIP parsing is done in-memory via zipfile + io.BytesIO.
 
 import io
 import os
+import re
 import time
 import zipfile
 import csv
@@ -501,7 +502,8 @@ def get_trip_headsign(agency_slug: str, trip_id: str) -> str:
     """Destination text for *trip_id* — what a rider reads on the front of the bus."""
     if not trip_id:
         return ''
-    # All three indexes are always populated together by _build_trip_index, so
+    # All five indexes -- trip stops, headsigns, frequency trips, stop→routes
+    # and route→trips -- are always populated together by _build_trip_index, so
     # _trip_index_is_current is the single source of truth for "already built
     # from the ZIP on disk" — checking _TRIP_HEADSIGN_INDEX independently here
     # would let a stale headsign entry survive a rebuild of the stops index for
@@ -528,9 +530,37 @@ def is_frequency_based(agency_slug: str, trip_id: str) -> bool:
     return trip_id.strip() in _TRIP_FREQUENCY_INDEX.get(agency_slug, set())
 
 
+_DIGIT_RUN = re.compile(r'(\d+)')
+
+
+def _natural_key(text: str) -> list:
+    """
+    Sort key that orders embedded digit runs numerically.
+
+    Riders read bus numbers as numbers. Sorted as text, '10' comes before '2'
+    and a `Serves:` line reads as though it were shuffled. Splitting on digit
+    runs and comparing those as integers puts '2' before '10' while the
+    letters around them still order as text, so T580 stays among the T routes.
+
+    Every part is the same 3-tuple shape, so an int is never compared against
+    a str — that would raise on a name like '10' beside 'PAVBJ'.
+    """
+    parts = []
+    for chunk in _DIGIT_RUN.split(text or ''):
+        if chunk.isdigit():
+            parts.append((0, int(chunk), ''))
+        elif chunk:
+            parts.append((1, 0, chunk.casefold()))
+    return parts
+
+
 def get_routes_at_stop(agency_slug: str, stop_id: str) -> list:
     """
     Every route whose timetable calls at *stop_id*, sorted by display name.
+
+    The sort is natural, not lexicographic — '2' before '10', the way a rider
+    reads bus numbers — and falls back to route_id so the order is the same on
+    every process.
 
     This is the timetable's answer, not the live feed's. The arrivals panels
     show buses currently en route, which is a different and much smaller set —
@@ -550,7 +580,11 @@ def get_routes_at_stop(agency_slug: str, stop_id: str) -> list:
         routes.append({'route_id': route_id,
                        'short': parts['short'],
                        'long': parts['long']})
-    routes.sort(key=lambda r: (r['short'] or r['long'] or r['route_id']))
+    # route_id breaks the tie: two route_ids can share a route_short_name, and
+    # without it the order falls out of set iteration, which varies between
+    # processes — the same stop would list its routes differently on a rerun.
+    routes.sort(key=lambda r: (_natural_key(r['short'] or r['long'] or r['route_id']),
+                               r['route_id']))
     return routes
 
 
@@ -568,6 +602,16 @@ def get_route_patterns(agency_slug: str, route_id: str, stop_id: str = None) -> 
     Each result carries a representative trip_id, because the headsign and
     whether the service runs to a headway are per-trip facts the caller needs
     and would otherwise have to re-derive.
+
+    Caveat — the times are one arbitrary trip's. De-duplication keys on the
+    stop-id tuple alone, so a pattern's stop times come from whichever of its
+    trips appears first in trips.txt. A route with different peak and off-peak
+    running times therefore shows that one representative trip's offsets, not
+    the ones for the time of day the rider is standing there. The impact is
+    small on this network — 2,099 of Rapid Bus KL's 2,102 trips are headway
+    templates, where the stop times *are* a template repeated across the
+    operating window rather than a time-of-day-specific schedule — but it is a
+    real limit on a route that publishes genuinely distinct trip timings.
 
     Empty list on any missing or malformed data; never raises.
     """

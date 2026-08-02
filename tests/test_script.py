@@ -2812,6 +2812,47 @@ def test_routes_at_stop_is_empty_when_the_feed_is_unavailable(monkeypatch):
     assert gtfs_static.get_routes_at_stop('kl', 'S1') == []
 
 
+def _stub_routes_at_stop(monkeypatch, parts_by_route_id):
+    """Point get_routes_at_stop at a hand-built index, no ZIP involved."""
+    from utils import gtfs_static
+    monkeypatch.setattr(gtfs_static, '_trip_index_is_current', lambda slug: True)
+    monkeypatch.setattr(gtfs_static, '_STOP_ROUTES_INDEX',
+                        {'kl': {'S1': set(parts_by_route_id)}})
+    monkeypatch.setattr(gtfs_static, 'get_route_parts',
+                        lambda slug, rid: dict(parts_by_route_id[rid]))
+    return gtfs_static
+
+
+def test_routes_at_stop_orders_bus_numbers_as_numbers(monkeypatch):
+    # Lexicographically '10' sorts before '2', which is wrong for a rider
+    # reading a list of bus numbers -- and '9' would land after '100'.
+    g = _stub_routes_at_stop(monkeypatch, {
+        'R10': {'short': '10', 'long': ''},
+        'R2': {'short': '2', 'long': ''},
+        'R100': {'short': '100', 'long': ''},
+        'R9': {'short': '9', 'long': ''},
+        'T580': {'short': 'T580', 'long': ''},
+        'T99': {'short': 'T99', 'long': ''},
+    })
+    assert [r['short'] for r in g.get_routes_at_stop('kl', 'S1')] == \
+        ['2', '9', '10', '100', 'T99', 'T580']
+
+
+def test_routes_at_stop_orders_two_routes_sharing_a_short_name_the_same_way_every_time(monkeypatch):
+    # The route ids come out of a set, whose iteration order varies between
+    # processes. Without route_id as a final tiebreak the same stop would list
+    # its routes in a different order on a rerun.
+    g = _stub_routes_at_stop(monkeypatch, {
+        'B_SECOND': {'short': 'T580', 'long': 'Awan Besar ~ TPM'},
+        'A_FIRST': {'short': 'T580', 'long': 'Awan Besar ~ Bukit Jalil'},
+    })
+    first = [r['route_id'] for r in g.get_routes_at_stop('kl', 'S1')]
+    assert first == ['A_FIRST', 'B_SECOND'], first
+    # Same answer however the set happens to iterate.
+    for _ in range(5):
+        assert [r['route_id'] for r in g.get_routes_at_stop('kl', 'S1')] == first
+
+
 def test_route_patterns_collapse_trips_that_share_a_sequence(tmp_path, monkeypatch):
     # t_loop_a and t_loop_b visit the same stops at different times of day.
     # That is one pattern, not two.
@@ -3042,6 +3083,38 @@ def test_the_stop_panel_marks_a_pattern_stop_that_is_also_near_the_rider(monkeyp
     # when it moved into the joined markdown block. Without the arrow and
     # italics it reads as a peer stop rather than a note about one.
     assert f'*↳ ~120 m from you · ~{expected_minutes} min walk (estimated)*' in said, said
+
+
+def test_the_serves_line_and_expander_label_escape_feed_text(monkeypatch):
+    # Two sites this branch added that interpolate feed text into markdown.
+    # The Serves: line joins several route names into ONE st.markdown call, so
+    # an unmatched * in one name can pair with one in another and swallow the
+    # names between. st.expander renders markdown in its label too, and that
+    # label carries both the route name and a headsign-derived title.
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL', 'arrival_seconds': 60}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [
+                            {'route_id': 'R1', 'short': 'T*580', 'long': ''},
+                            {'route_id': 'R2', 'short': '65*0', 'long': ''},
+                        ])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign',
+                        lambda *a: 'to _Pavilion_')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: False)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    serves = _texts(st_stub.markdown)
+    assert 'T\\*580' in serves and '65\\*0' in serves, serves
+    # The raw pair is what could bleed across the joined line.
+    assert 'T*580' not in serves, serves
+
+    labels = _texts(st_stub.expander)
+    assert 'to \\_Pavilion\\_' in labels, labels
+    assert 'to _Pavilion_' not in labels, labels
+    assert 'T\\*580' in labels, labels
 
 
 def test_the_tapped_row_does_not_repeat_the_walk_distance_already_in_the_header(monkeypatch):

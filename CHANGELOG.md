@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route that does, `T580`, was invisible for as long as no T580 vehicle happened to be moving. A
   new `Serves:` line lists all four, built from `get_routes_at_stop`, a `{stop_id: {route_id,
   ...}}` index constructed inside the same pass over `stop_times.txt` that already builds the
-  trip-stops index — no second parse of an 87,935-row file for Rapid Bus KL
+  trip-stops index — no second parse of an 87,935-row file for Rapid Bus KL. The list is ordered
+  the way a rider reads bus numbers, `2` before `10` rather than the other way round, and ties
+  between two routes sharing a short name settle on `route_id` so the order does not change
+  between reruns
 - **Tapping a served route opens its full stop sequence, timed from the stop you tapped.** On
   T580 — a 35-stop, 40-minute loop — anchored at LRT Awan Besar: KM1 BUKIT JALIL reads `+1 min`,
   GREEN AVENUE CONDOMINIUM reads `+32 min`. The two stops sit about 60 m apart on the ground, on
@@ -45,7 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than one call per row, keeping the widget count the same as before this feature shipped
 - Stop names come from a third-party feed and are joined into one markdown block with hard line
   breaks; `route_view.escape_markdown` escapes the characters that could open unmatched
-  bold/italic/code-span formatting across rows, the same class of fix 2.7.1 made to map tooltips
+  bold/italic/code-span formatting across rows, the same class of fix 2.7.1 made to map tooltips.
+  The same escape covers the other two new sites that interpolate feed text into markdown: the
+  `Serves:` line, which joins several route names into one call, and each expander's label, built
+  from a route name and a published headsign
 
 ### Known Limitations
 - **Journey times are differences between timetabled stop times, not live predictions.** They
@@ -56,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is nothing to compute a specific departure from; the stop sequence's caption says *"This route
   runs to a headway, not a fixed timetable."* rather than inventing a time. It does not state the
   headway interval either — the app does not read `headway_secs`, so it has no figure to give
+- **A pattern's journey times come from one representative trip.** Patterns are de-duplicated on
+  the stop-id sequence alone, so the times shown are those of whichever of the pattern's trips
+  appears first in `trips.txt` — not the trip running at the time of day the rider is standing
+  there. On this network the effect is small, since 2,099 of Rapid Bus KL's 2,102 trips are headway
+  templates whose stop times already *are* a template rather than a time-of-day schedule, but a
+  route publishing genuinely different peak and off-peak running times would show only one of them
 - **A route with more than one stop pattern appears once per pattern; patterns are never merged.**
   Choosing to keep them separate means a route serving a stop twice a day on two different
   sequences shows two expanders, not one
