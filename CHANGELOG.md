@@ -49,10 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Journey times are differences between timetabled stop times, not live predictions.** They
   describe the schedule, not where a bus actually is right now — for that, the arrival list and the
   tapped-bus panel remain the places to look
-- **A route running to a headway states its frequency, never a fabricated departure time.** 2,099
-  of Rapid Bus KL's 2,102 trips publish no absolute start time in `frequencies.txt`, so there is
-  nothing to compute a specific departure from; the stop sequence's caption says so rather than
-  inventing one
+- **A route running to a headway is flagged as one, never given a fabricated departure time.**
+  2,099 of Rapid Bus KL's 2,102 trips publish no absolute start time in `frequencies.txt`, so there
+  is nothing to compute a specific departure from; the stop sequence's caption says *"This route
+  runs to a headway, not a fixed timetable."* rather than inventing a time. It does not state the
+  headway interval either — the app does not read `headway_secs`, so it has no figure to give
 - **A route with more than one stop pattern appears once per pattern; patterns are never merged.**
   Choosing to keep them separate means a route serving a stop twice a day on two different
   sequences shows two expanders, not one

@@ -216,9 +216,12 @@ route planning and is not.
 
 - **Journey times come from the published timetable, not from live positions.** Labelled with the
   same caveat the arrivals panels already carry.
-- **A headway route never shows a fabricated departure time.** `T580` shows "about every 50 min".
-  A trip with no published start time has none invented for it, consistent with the existing rule
-  that an unknowable delay renders as nothing.
+- **A headway route never shows a fabricated departure time.** `T580` is flagged as running to a
+  headway rather than a fixed timetable — a flag, not a figure. No interval is stated: the app
+  does not read `headway_secs` from `frequencies.txt`, so it holds no frequency to print, and
+  writing one into a caption would be a claim the code cannot support. A trip with no published
+  start time has none invented for it, consistent with the existing rule that an unknowable delay
+  renders as nothing.
 - **Multiple patterns are never merged.** Each carries a distinct label. A route may legitimately
   appear twice in one panel; that is the honest rendering, not a bug.
 - **A near-you mark states a distance.** It never says "get off here", which is an instruction the
