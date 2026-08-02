@@ -1055,26 +1055,47 @@ def show():
                 st.markdown("**Serves:** " + " · ".join(
                     r['short'] or r['long'] or r['route_id'] for r in routes))
 
-                # Marking stops near the user costs no extra routing request:
-                # _nearby_stops was already resolved for this render and
-                # walking.walk_times caches per stop.
-                nearby_walks = walking.walk_times(
-                    loc['lat'], loc['lon'], _nearby_stops or [], agency_slug,
-                    api_key=ors_key)
-                nearby_by_id = {
-                    s['stop_id']: {
-                        'distance_m': nearby_walks[s['stop_id']]['distance_m'],
-                        'walk_label': _walk_label(nearby_walks[s['stop_id']]),
-                    }
-                    for s in (_nearby_stops or [])
-                    if s['stop_id'] in nearby_walks
-                }
-
+                # Resolve every pattern first, so the walk-time lookup below
+                # can be narrowed to the stops that will actually carry a
+                # near-you mark. Patterns come from an in-memory index built
+                # from the ZIP already on disk, so this costs no I/O.
+                by_route = []
+                pattern_stop_ids = set()
                 for route in routes:
                     patterns = gtfs_static.get_route_patterns(
                         agency_slug, route['route_id'], stop['stop_id'])
                     if not patterns:
                         continue
+                    by_route.append((route, patterns))
+                    for pattern in patterns:
+                        pattern_stop_ids.update(
+                            s.get('stop_id') for s in pattern['stops'])
+
+                # The marks reuse the nearby-stop scan this render already ran
+                # — not walk data already computed, which on a cold grid cell
+                # does not exist yet. Asking for all ~40 nearby stops would
+                # make *this* the request that creates it, 8x larger and
+                # earlier than the Arrivals-near-you panel below that used to;
+                # and a failure here arms walking._FAIL_UNTIL for 60 s, which
+                # would drop that panel to "(estimated)" for stops its own
+                # smaller, likelier-to-succeed request would have routed. So
+                # ask only about the stops a rendered pattern actually calls
+                # at — the rest could not show a mark anyway.
+                marked_stops = [s for s in (_nearby_stops or [])
+                                if s['stop_id'] in pattern_stop_ids]
+                nearby_walks = walking.walk_times(
+                    loc['lat'], loc['lon'], marked_stops, agency_slug,
+                    api_key=ors_key) if marked_stops else {}
+                nearby_by_id = {
+                    s['stop_id']: {
+                        'distance_m': nearby_walks[s['stop_id']]['distance_m'],
+                        'walk_label': _walk_label(nearby_walks[s['stop_id']]),
+                    }
+                    for s in marked_stops
+                    if s['stop_id'] in nearby_walks
+                }
+
+                for route, patterns in by_route:
                     headsigns = [gtfs_static.get_trip_headsign(agency_slug, p['trip_id'])
                                  for p in patterns]
                     titles = route_view.pattern_titles(patterns, headsigns)
@@ -1128,7 +1149,14 @@ def show():
                                 elif offset is not None:
                                     line += f"  · +{offset} min"
                                 lines.append(line)
-                                if row['near']:
+                                if row['near'] and not row['is_tapped']:
+                                    # Not on the tapped row: it is in
+                                    # _nearby_stops too, so its mark would
+                                    # repeat verbatim the "~560 m · ~9 min
+                                    # walk" the panel header printed two lines
+                                    # above. The mark exists to point out
+                                    # *other* stops within walking distance.
+                                    #
                                     # Italics plus an indent glyph, not
                                     # leading spaces: HTML collapses runs of
                                     # spaces to one, and moving this line out

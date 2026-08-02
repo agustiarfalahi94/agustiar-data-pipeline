@@ -3044,6 +3044,73 @@ def test_the_stop_panel_marks_a_pattern_stop_that_is_also_near_the_rider(monkeyp
     assert f'*↳ ~120 m from you · ~{expected_minutes} min walk (estimated)*' in said, said
 
 
+def test_the_tapped_row_does_not_repeat_the_walk_distance_already_in_the_header(monkeypatch):
+    # The tapped stop is in _nearby_stops -- that is how it was confirmed at
+    # all -- so its own row would carry a near-you mark repeating verbatim the
+    # "~560 m · ~9 min walk" the panel header printed two lines above. The
+    # mark exists to point out *other* stops within walking distance.
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL', 'arrival_seconds': 60}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'T5800', 'short': 'T580', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: False)
+    st_stub = _render_stop_panel(monkeypatch)
+
+    # 560 m is the tapped stop's own distance, stated once in the header.
+    assert _texts(st_stub.info).count('560 m') == 1, _texts(st_stub.info)
+    assert '560 m from you' not in _texts(st_stub.markdown), _texts(st_stub.markdown)
+
+
+def test_the_near_you_lookup_asks_only_about_stops_a_pattern_calls_at(monkeypatch):
+    # This lookup runs before the Arrivals-near-you panel makes its own,
+    # smaller one. On a cold grid cell it is therefore the request that
+    # *creates* the walk data -- and a failure arms walking._FAIL_UNTIL for
+    # 60 s, dropping that panel to "(estimated)" for stops its own request
+    # would have routed. Asking only about stops a rendered pattern actually
+    # calls at keeps this request no larger than the marks it can draw.
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL', 'arrival_seconds': 60}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'T5800', 'short': 'T580', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: False)
+
+    asked = []
+    real_walk_times = live_map.walking.walk_times
+
+    def spy(user_lat, user_lon, stop_list, agency_slug, api_key=None):
+        asked.append([s['stop_id'] for s in stop_list])
+        return real_walk_times(user_lat, user_lon, stop_list, agency_slug,
+                               api_key=api_key)
+    monkeypatch.setattr(live_map.walking, 'walk_times', spy)
+
+    # S9 is nearby but on no pattern this panel renders; S2 is on the pattern.
+    extra_nearby = [
+        {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL',
+         'stop_lat': 3.063, 'stop_lon': 101.671, 'distance_m': 120.0},
+        {'stop_id': 'S9', 'stop_name': 'UNRELATED STOP',
+         'stop_lat': 3.064, 'stop_lon': 101.672, 'distance_m': 700.0},
+    ]
+    _render_stop_panel(monkeypatch, extra_nearby=extra_nearby)
+
+    # Three lookups in order: the header's own single tapped stop, the
+    # pattern-mark lookup, then the Arrivals-near-you panel's full scan. Only
+    # the middle one is under test -- the panel below is entitled to ask about
+    # every nearby stop, since it lists them all.
+    assert ['S1'] in asked, asked
+    assert ['S1', 'S2'] in asked, \
+        f"the mark lookup must cover the pattern's nearby stops and no others: {asked}"
+    assert asked.index(['S1', 'S2']) < asked.index(['S1', 'S2', 'S9']), \
+        f"the narrowed lookup must precede the panel's full scan: {asked}"
+
+
 def test_stops_before_the_tapped_one_are_not_rendered_as_plus_minus(monkeypatch):
     # A stop the bus passes before reaching yours has a negative offset.
     # Rendering it through the "+N min" branch would print "+-5 min".

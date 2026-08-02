@@ -33,9 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `route_view.pattern_titles` gives each pattern a distinct heading — stop count and running time
   separate most collisions, a numbered suffix settles the rest — so two openable panels never read
   as the same route twice
-- **Stops within walking distance are marked inside the sequence**, reusing the walk-time data the
-  panel already resolved for the nearby-stops list — no extra routing request is issued to draw the
-  mark
+- **Stops within walking distance are marked inside the sequence**, reusing the nearby-stop scan
+  this render already ran rather than searching again. The walk times themselves are resolved for
+  the marked stops only — those a rendered pattern actually calls at — so the request stays no
+  larger than the marks it can draw, and `walking`'s per-stop cache means an already-resolved stop
+  costs nothing
 - Each pattern's stop sequence renders inside a single collapsed `st.expander`, closed on arrival:
   a 35-row list opened by default would push the map off a phone screen before anyone asked for it.
   Streamlit still re-runs the whole page body on every auto-refresh regardless of whether the

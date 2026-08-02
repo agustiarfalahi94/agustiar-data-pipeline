@@ -46,8 +46,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   GREEN AVENUE CONDOMINIUM. Each served route opens to a collapsed expander per stop pattern (a
   route running more than one distinct stop sequence gets one expander per sequence, never merged)
   showing the full stop list with journey times measured from the stop you tapped, every occurrence
-  of that stop marked, and stops within walking distance annotated with the same distance and walk
-  time the panel already computed. Journey times are differences between timetabled stop times, not
+  of that stop marked, and stops within walking distance annotated with a distance and walk time —
+  drawn from the same nearby-stop scan the panel below uses, resolved for the marked stops only. Journey times are differences between timetabled stop times, not
   live predictions; a route running to a headway is labelled as such rather than showing a fabricated
   departure time. This is not a journey planner — it answers "does this bus stop at X and how far
   along is it", not "how do I get from A to B"
