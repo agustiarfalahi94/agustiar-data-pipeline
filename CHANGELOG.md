@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-08-01
+
+### Added
+- **The tapped-stop panel now names every route the timetable says calls there, not only the
+  routes with a bus currently running.** The arrival list above it reads the live feed, which is a
+  much smaller set — at KL2324 LRT AWAN BESAR that meant three routes on screen, `651`, `652` and
+  `PAVILION BUKIT JALIL (PAVBJ)`, none of which reach KL1743 GREEN AVENUE CONDOMINIUM. The one
+  route that does, `T580`, was invisible for as long as no T580 vehicle happened to be moving. A
+  new `Serves:` line lists all four, built from `get_routes_at_stop`, a `{stop_id: {route_id,
+  ...}}` index constructed inside the same pass over `stop_times.txt` that already builds the
+  trip-stops index — no second parse of an 87,935-row file for Rapid Bus KL
+- **Tapping a served route opens its full stop sequence, timed from the stop you tapped.** On
+  T580 — a 35-stop, 40-minute loop — anchored at LRT Awan Besar: KM1 BUKIT JALIL reads `+1 min`,
+  GREEN AVENUE CONDOMINIUM reads `+32 min`. The two stops sit about 60 m apart on the ground, on
+  opposite legs of the same loop. A rider trusting the stop name rides 32 minutes instead of 1, and
+  T580's next bus is about 50 minutes behind (headway ~50 min, 07:30–23:20; ~40 min 06:00–06:40).
+  100 of the 136 Rapid KL routes with timetable data are loops, so this is the network's ordinary
+  shape, not one route's quirk. `get_route_patterns` supplies the distinct stop sequences and
+  `route_view.build_stop_rows` turns one into display rows, marking every occurrence of the tapped
+  stop rather than only the nearest one, so both ends of a loop are visible together
+- **A route with more than one stop pattern is shown once per pattern — never merged.** 37 of the
+  136 routes run two distinct stop sequences and one runs three; picking a single "the" sequence
+  would misrepresent a quarter of the network, exactly the failure this feature exists to remove.
+  `route_view.pattern_titles` gives each pattern a distinct heading — stop count and running time
+  separate most collisions, a numbered suffix settles the rest — so two openable panels never read
+  as the same route twice
+- **Stops within walking distance are marked inside the sequence**, reusing the walk-time data the
+  panel already resolved for the nearby-stops list — no extra routing request is issued to draw the
+  mark
+- Each pattern's stop sequence renders inside a single collapsed `st.expander`, closed on arrival:
+  a 35-row list opened by default would push the map off a phone screen before anyone asked for it.
+  Streamlit still re-runs the whole page body on every auto-refresh regardless of whether the
+  expander is open, so the rows are built once and joined into a single `st.markdown` call rather
+  than one call per row, keeping the widget count the same as before this feature shipped
+- Stop names come from a third-party feed and are joined into one markdown block with hard line
+  breaks; `route_view.escape_markdown` escapes the characters that could open unmatched
+  bold/italic/code-span formatting across rows, the same class of fix 2.7.1 made to map tooltips
+
+### Known Limitations
+- **Journey times are differences between timetabled stop times, not live predictions.** They
+  describe the schedule, not where a bus actually is right now — for that, the arrival list and the
+  tapped-bus panel remain the places to look
+- **A route running to a headway states its frequency, never a fabricated departure time.** 2,099
+  of Rapid Bus KL's 2,102 trips publish no absolute start time in `frequencies.txt`, so there is
+  nothing to compute a specific departure from; the stop sequence's caption says so rather than
+  inventing one
+- **A route with more than one stop pattern appears once per pattern; patterns are never merged.**
+  Choosing to keep them separate means a route serving a stop twice a day on two different
+  sequences shows two expanders, not one
+- **This is still not a journey planner.** It answers "does this bus stop at X, and how far along
+  is it" for one route at a time — not "how do I get from A to B". Origin→destination planning
+  remains explicitly out of scope (see Roadmap)
+
 ## [2.7.1] - 2026-08-01
 
 ### Fixed

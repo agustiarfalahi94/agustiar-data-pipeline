@@ -38,6 +38,19 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   lateness on a headway service* under Design Decisions). While a route search is active the panel
   names the searched route in its "nothing inbound" wording, because with the map filtered to one
   route it has no evidence about the others
+- **🚏 Serves** — the tapped-stop panel lists every route the timetable says calls at that stop,
+  including a route with no bus currently running. The arrival list above it only ever shows a
+  route with a live vehicle inbound, which is a much smaller set: at KL2324 LRT AWAN BESAR that
+  used to mean three routes on screen — `651`, `652`, `PAVILION BUKIT JALIL (PAVBJ)` — and no way
+  to learn that a fourth, `T580`, also serves the stop and is the only one that reaches KL1743
+  GREEN AVENUE CONDOMINIUM. Each served route opens to a collapsed expander per stop pattern (a
+  route running more than one distinct stop sequence gets one expander per sequence, never merged)
+  showing the full stop list with journey times measured from the stop you tapped, every occurrence
+  of that stop marked, and stops within walking distance annotated with the same distance and walk
+  time the panel already computed. Journey times are differences between timetabled stop times, not
+  live predictions; a route running to a headway is labelled as such rather than showing a fabricated
+  departure time. This is not a journey planner — it answers "does this bus stop at X and how far
+  along is it", not "how do I get from A to B"
 - **🚶 Walk times** — each nearby stop's walk time comes from OpenRouteService's Matrix API routed
   along real footpaths (`~9 min walk`) when `ORS_API_KEY` is configured, falling back to a
   straight-line estimate (`~5 min walk (estimated)`) otherwise or on any request failure. Straight
@@ -259,6 +272,10 @@ Live Map      Data Table        Analytics     Network Health
 | **Walk time is honest about its source** | A routed figure reads `~9 min walk`; a fallback figure (no key configured, or the request failed) reads `~5 min walk (estimated)`. The label is load-bearing, not decorative — an estimate cannot see that a stop 60 m away in a straight line is 634 m on foot |
 | **Nearby-stop radius stays straight-line even when routing is available** | The 800 m cutoff that decides which stops are "nearby" is computed before any routing request is made, so it is always straight-line. Only the walk time shown for an already-selected stop is routed. Making the radius itself routed would mean a Matrix API call for every stop in range before knowing which are in range — an unbounded cost for a bound that exists to keep the panel small |
 | **Stops are tappable, not hoverable** | 2.6.0 shipped nearby-stop markers as visible but unpickable, because hover doesn't exist on the touch devices this app is used on. 2.7.0 makes the layer pickable instead of adding hover: tapping a stop ring opens a panel below the map with its name, distance, walk time, and buses en route, the same interaction the map already used for buses. Last tap wins between a bus panel and a stop panel |
+| **Serves lists the timetable, not the live feed** | The arrival list answers "what bus is coming"; `Serves:` answers "what buses call here at all", built from a `{stop_id: {route_id, ...}}` index constructed in the same pass over `stop_times.txt` that already builds the trip-stops index, so listing every serving route costs no second parse of an 87,935-row file. Measured on Rapid Bus KL, KL2324 LRT AWAN BESAR is served by four routes and KL1743 GREEN AVENUE CONDOMINIUM by exactly one — `T580` — which the arrival list alone could go an entire refresh cycle without ever showing |
+| **One expander per stop pattern, never merged** | A route can run more than one distinct stop sequence — 37 of Rapid KL's 136 timetabled routes run two, one runs three. Merging them into a single sequence would silently pick one and misrepresent the rest, exactly the failure this feature exists to remove. `get_route_patterns` de-duplicates identical sequences and returns each distinct one with a representative trip_id; `pattern_titles` gives each a unique heading (stop count and running time separate most collisions, a numbered suffix settles the rest) |
+| **Journey times are anchored to the first occurrence of the tapped stop** | On a loop the tapped stop appears at both ends of the sequence. Anchoring to the later occurrence would make every earlier stop read as a negative offset. T580 is the measured case: anchored at LRT Awan Besar, KM1 Bukit Jalil reads `+1 min` and Green Avenue Condominium — 60 m away on the ground — reads `+32 min`, the same 40-minute loop on opposite legs |
+| **Expanders collapsed on arrival** | A stop pattern is a full stop list — up to 35 rows for T580 — repeated once per route serving the stop. Rendered open by default it would push the map off a phone screen before the rider asked for it; `st.expander(...)` defaults to collapsed and only the heading (route, pattern title, stop count, running time) is visible until tapped |
 
 ### Route Viewer — How It Works
 
@@ -425,6 +442,9 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 | Tapping a nearby-stop marker does nothing | Stop rings are tappable — a tap opens a panel below the map with that stop's walk time and the buses en route to it. If nothing happens, the stop may have fallen out of the 800 m range since the map was drawn; press **📍 Locate Me** again. On a desktop pointer, hovering a stop also shows its name, but tap is the designed interaction — hover does not exist on the touch devices this app is used on |
 | Walk times are labelled "(estimated)" | No `ORS_API_KEY` is configured (or the request failed), so the figure is a straight-line estimate, not a routed one. A stop across an uncrossable barrier — a highway, a river, a fenced compound — will read as far nearer than it actually is. Set `ORS_API_KEY` (see *Configuration* above) to get a real footpath figure instead. If a key *is* set, a failed lookup also stops further requests for 60 seconds, so walk times can stay estimated for up to a minute after the routing service recovers |
 | A "nearby" stop is further to walk to than it looks, or a closer one is missing | The 800 m radius that decides which stops count as nearby is straight-line even when routing is configured — only the walk time shown for each already-selected stop is routed. This is a known limitation, not a bug |
+| A route is listed under `Serves:` but I can't find where it goes | Tap it — a route can run more than one distinct stop pattern (37 of Rapid KL's 136 timetabled routes run two, one runs three), so it may appear as more than one expander with different titles. Each opens to the full stop sequence with journey times from the stop you tapped |
+| A route under `Serves:` shows no departure time, only "runs to a headway" | That route publishes no `frequencies.txt` start time to compute a departure from — this app states the frequency it runs at rather than inventing a time. This is the same headway-honesty rule the arrival list already follows, see *No lateness on a headway service* under Design Decisions |
+| The same stop name appears twice in a route's stop sequence, at very different times | The route is a loop — it passes the same physical area twice on one circuit. Both occurrences are marked in the list; check which one is the one you tapped and which one is not before boarding. 100 of Rapid KL's 136 timetabled routes are loops, so this is the network's ordinary shape, not a data error |
 | Database errors | Delete `agustiar_analytics.duckdb` and click "Refresh Data" |
 
 ---
@@ -448,6 +468,9 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
       configured or a request fails
 - [x] Tappable nearby stops — tap a stop ring for its own panel below the map, same interaction as
       tapping a bus
+- [x] Routes at a stop — the tapped-stop panel names every route the timetable says calls there,
+      whether or not a bus is currently running, and each opens to its full stop sequence with
+      journey times from the tapped stop
 
 > **Not planned: a full route planner.** Origin→destination journey planning is well served
 > by Google Maps and this app would not improve on it. The gap worth filling is the opposite
