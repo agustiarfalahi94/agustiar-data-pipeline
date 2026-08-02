@@ -3318,3 +3318,45 @@ def test_sparkline_keeps_the_score_axis_pinned_to_the_full_range():
     fig = network_health._sparkline(_trend([100, 60]), '#00ff00')
     assert tuple(fig.layout.yaxis.range) == (0, 100)
     assert fig.layout.yaxis.visible is False
+
+
+# ── Network health: when did this region last have buses? ─────────────────
+#
+# A region scores 100 "Reliable" while reporting zero vehicles, because an
+# EMPTY cycle is a correct answer from a healthy feed. Read off the card that
+# is indistinguishable from "buses are running", which is what sent a reader
+# to the Live Map expecting vehicles and finding none.
+
+def test_last_vehicles_label_says_plainly_when_there_were_none():
+    from app_pages import network_health
+    assert network_health._last_vehicles_label(None, 1_000_000) == \
+        'no buses reported in this window'
+
+
+def test_last_vehicles_label_handles_a_missing_value_from_the_mart():
+    import pandas as pd
+    from app_pages import network_health
+    assert network_health._last_vehicles_label(pd.NA, 1_000_000) == \
+        'no buses reported in this window'
+
+
+def test_last_vehicles_label_reads_as_current_when_buses_are_reporting():
+    from app_pages import network_health
+    assert network_health._last_vehicles_label(999_970, 1_000_000) == 'buses reporting now'
+
+
+def test_last_vehicles_label_counts_minutes_then_hours():
+    from app_pages import network_health
+    assert network_health._last_vehicles_label(1_000_000 - 300, 1_000_000) == \
+        'buses last seen 5 min ago'
+    assert network_health._last_vehicles_label(1_000_000 - 3 * 3600, 1_000_000) == \
+        'buses last seen 3h ago'
+    assert network_health._last_vehicles_label(1_000_000 - (3 * 3600 + 20 * 60), 1_000_000) == \
+        'buses last seen 3h 20m ago'
+
+
+def test_last_vehicles_label_does_not_report_a_negative_age():
+    # Clock skew between the feed's timestamp and ours must not produce
+    # "buses last seen -2 min ago".
+    from app_pages import network_health
+    assert network_health._last_vehicles_label(1_000_060, 1_000_000) == 'buses reporting now'

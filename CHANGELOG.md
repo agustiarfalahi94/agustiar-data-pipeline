@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-08-02
+
+### Added
+- **Each reliability scorecard now says when that region last reported a bus.** The score answers
+  one question — is the feed answering? — and an `EMPTY` cycle, the feed correctly reporting that
+  no service is running, is deliberately not counted against it. So Rapid Bus KL could show a
+  green **100 · Reliable** at 23:00 while the Live Map said *"No vehicle in Rapid Bus KL has
+  reported in the last 15 minutes"*. Both statements were true and the card gave a reader no way
+  to see that they were answering different questions. Cards now carry a second line —
+  `🚌 buses last seen 3h ago`, or `🚌 no buses reported in this window` — so feed health and
+  service activity are stated separately instead of one being read as the other
+- `mart_network_health` gains `last_vehicle_timestamp`: the newest cycle that actually carried
+  vehicles, which is not the same as `last_fetch_timestamp`, the newest cycle that answered. It is
+  `NULL` — never `0`, never the fetch time — when the window holds no such cycle, because
+  inventing a moment a bus was seen is precisely the false reassurance the column exists to
+  prevent
+- The dbt schema sentinel gains the new column, so a database created by an earlier release
+  rebuilds its mart views instead of serving the old SQL forever. Without it the card would have
+  read "no buses reported in this window" for every region, permanently and silently
+
 ## [2.8.1] - 2026-08-02
 
 ### Fixed

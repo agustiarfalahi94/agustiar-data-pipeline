@@ -23,7 +23,8 @@ _REQUIRED_MARTS = (
 # These columns exist only in the current mart definitions, so a
 # `mart_network_health` missing any of them is a stale view that must be rebuilt.
 _SCHEMA_SENTINEL_MART = "mart_network_health"
-_SCHEMA_SENTINEL_COLUMNS = ("feed_unavailable", "no_feed_count", "throttled_count")
+_SCHEMA_SENTINEL_COLUMNS = ("feed_unavailable", "no_feed_count", "throttled_count",
+                            "last_vehicle_timestamp")
 
 # Ingestion calls ensure_dbt_models() after every fetch, and the page auto-
 # refreshes every ~20s. Without a guard, a permanently failing bootstrap would

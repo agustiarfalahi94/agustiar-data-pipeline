@@ -207,3 +207,38 @@ def test_unavailable_feeds_carry_their_cause(built_db):
     assert rows['DeadFeed'] == (True, 2, 0)
     assert rows['ThrottledFeed'] == (True, 0, 2)
     assert rows['TestRegion'] == (False, 0, 0)
+
+
+def test_last_vehicle_timestamp_marks_the_newest_cycle_carrying_vehicles(built_db):
+    """The score answers "is the feed answering", not "are buses running".
+
+    An EMPTY cycle is a healthy feed reporting no service and is deliberately
+    not counted against availability, so a region can hold a perfect score
+    while no bus has been seen. The scorecard needs a separate fact to say so,
+    and it must be the newest cycle that actually carried vehicles -- not the
+    newest cycle overall, which is what last_fetch_timestamp already gives.
+    """
+    seen, fetched = built_db.execute(
+        "SELECT last_vehicle_timestamp, last_fetch_timestamp "
+        "FROM main.mart_network_health WHERE region = 'TestRegion'"
+    ).fetchone()
+    # Both TestRegion cycles carried vehicles, so the two agree here.
+    assert seen == 1750000060
+    assert seen == fetched
+
+
+def test_last_vehicle_timestamp_is_null_for_a_feed_that_reported_no_vehicles(built_db):
+    """QuietFeed answered every cycle and carried no vehicles in any of them.
+
+    NULL, not 0 and not the fetch time: the window holds no moment at which a
+    bus was seen, and inventing one would be exactly the false reassurance the
+    column exists to prevent.
+    """
+    seen, fetched, score = built_db.execute(
+        "SELECT last_vehicle_timestamp, last_fetch_timestamp, reliability_score "
+        "FROM main.mart_network_health WHERE region = 'QuietFeed'"
+    ).fetchone()
+    assert seen is None, seen
+    assert fetched == 1750000060, "the feed did answer -- only the buses were absent"
+    assert score is not None and score > 0, \
+        "a quiet feed is still a healthy feed; this is the gap the column explains"

@@ -32,7 +32,15 @@ agg as (
         -- otherwise flatter the region's freshness term.
         coalesce(avg(case when is_scoreable
             then avg_data_lag_seconds end), 0)                as avg_data_lag_seconds,
-        max(fetch_timestamp)                                  as last_fetch_timestamp
+        max(fetch_timestamp)                                  as last_fetch_timestamp,
+        -- The last cycle that actually carried vehicles, which is a different
+        -- question from the last cycle that succeeded. An EMPTY fetch is a
+        -- healthy feed reporting no service, so a region can hold a perfect
+        -- score while no bus has been seen for hours -- and a green
+        -- "Reliable" then reads as "buses are running". NULL when the window
+        -- holds no cycle with vehicles at all.
+        max(case when vehicles_received > 0
+            then fetch_timestamp end)                         as last_vehicle_timestamp
     from q
     group by region
 ),
@@ -57,6 +65,7 @@ select
     availability,
     avg_data_lag_seconds,
     last_fetch_timestamp,
+    last_vehicle_timestamp,
     case
         when feed_unavailable then null
         -- No cycle received anything: score on the terms that apply, exactly

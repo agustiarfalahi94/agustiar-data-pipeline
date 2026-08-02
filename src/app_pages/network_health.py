@@ -1,3 +1,5 @@
+import time
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -25,6 +27,40 @@ def _score_label(score):
     elif score >= 50:
         return 'Degraded'
     return 'Unreliable'
+
+
+def _last_vehicles_label(last_vehicle_timestamp, now_ts):
+    """
+    When this region last reported a bus, phrased for the scorecard.
+
+    The score answers "is the feed working", and an EMPTY cycle — the feed
+    answering correctly that nothing is running — is deliberately not counted
+    against it. A region can therefore show a green 100 "Reliable" while no
+    bus has reported for hours, which reads as "buses are running" and sent a
+    reader to the Live Map expecting vehicles. This line is what separates the
+    two claims, so the card states the freshness of the buses as well as the
+    health of the feed.
+
+    now_ts is passed rather than read from the clock so the wording is
+    testable without freezing time.
+    """
+    if last_vehicle_timestamp is None or pd.isna(last_vehicle_timestamp):
+        return 'no buses reported in this window'
+
+    # Clamped: the feed's clock and ours disagree by a few seconds routinely,
+    # and "last seen -2 min ago" would be worse than saying nothing.
+    seconds = max(0, int(now_ts) - int(last_vehicle_timestamp))
+    if seconds < 90:
+        return 'buses reporting now'
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f'buses last seen {minutes} min ago'
+
+    hours, remainder = divmod(minutes, 60)
+    if remainder:
+        return f'buses last seen {hours}h {remainder}m ago'
+    return f'buses last seen {hours}h ago'
 
 
 def _sparkline(trend_df, color):
@@ -177,6 +213,10 @@ def show():
                 # is a healthy feed with no service running. Labelled as such so
                 # the number can't be read as "the score should be lower".
                 quiet     = int(row['dropout_count']) if pd.notna(row['dropout_count']) else 0
+                # Separates "the feed is healthy" from "buses are running" —
+                # the score only ever claimed the first.
+                vehicles  = _last_vehicles_label(row.get('last_vehicle_timestamp'),
+                                                 int(time.time()))
 
                 st.markdown(f"""
                 <div style="border:1px solid {color};border-radius:8px;padding:12px;margin-bottom:8px;">
@@ -188,6 +228,9 @@ def show():
                     </div>
                     <div style="font-size:0.68em;margin-top:2px;color:#888;" title="Fetch cycles where the feed answered but reported no vehicles. Informational — not part of the score.">
                         💤 {quiet} quiet cycles
+                    </div>
+                    <div style="font-size:0.68em;margin-top:2px;color:#888;" title="The score measures whether the feed is answering, not whether buses are running. A feed that correctly reports no service scores full marks, so this line says when vehicles were last seen.">
+                        🚌 {vehicles}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
