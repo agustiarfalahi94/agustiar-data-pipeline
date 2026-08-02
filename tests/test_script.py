@@ -2886,22 +2886,28 @@ def test_a_failed_build_stores_neither_new_index(monkeypatch):
 # stubbed to confirm it. _render_stop_panel below is exactly that scaffolding,
 # factored out so each test only has to stub the GTFS lookups it cares about.
 
-def _render_stop_panel(monkeypatch):
+def _render_stop_panel(monkeypatch, extra_nearby=None):
     """
     Run live_map.show() with a stop already selected, so the tapped-stop panel
     renders. Mirrors the setup test_a_selected_stop_out_of_range_clears_itself
     uses: an empty vehicle selection via _live_map_with_selection, plus a
     stop pinned in session state and confirmed by get_stops_near.
+
+    extra_nearby lets a test add more stops to the confirmed-nearby scan
+    (get_stops_near returns them alongside the tapped stop itself), so a
+    pattern's stop rows can exercise the near-you mark for a second, genuinely
+    nearby stop -- the tapped stop alone never produces one, since it's never
+    a *different* row in its own pattern.
     """
     from app_pages import live_map
     empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
     live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
     st_stub.session_state['user_location'] = {'lat': 3.06, 'lon': 101.67, 'accuracy': 10}
     st_stub.session_state['selected_stop_id'] = 'S1'
-    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
-                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR',
-                                          'stop_lat': 3.0621, 'stop_lon': 101.6706,
-                                          'distance_m': 560.0}])
+    nearby = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR',
+               'stop_lat': 3.0621, 'stop_lon': 101.6706, 'distance_m': 560.0}]
+    nearby += extra_nearby or []
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: nearby)
     live_map.show()
     return st_stub
 
@@ -2941,6 +2947,37 @@ def test_the_stop_panel_opens_a_route_to_its_stop_sequence(monkeypatch):
     assert 'KM1 BUKIT JALIL' in said
     assert '+1 min' in said, "the useful stop is one minute out"
     assert '+32 min' in said, "the stop named after the destination is 32 minutes out"
+
+
+def test_the_stop_panel_marks_a_pattern_stop_that_is_also_near_the_rider(monkeypatch):
+    # This is the mark that makes the real case legible: at LRT Awan Besar,
+    # KM1 Bukit Jalil (+1 min) is near the rider's building just as much as
+    # Green Avenue Condominium (+32 min) is -- seeing both marked is what
+    # makes the right choice obvious, rather than trusting the stop name.
+    # get_stops_near must return a *second* stop distinct from the tapped one
+    # for this to be exercised at all; the tapped stop itself never produces
+    # a near-you mark on its own row.
+    from app_pages import live_map
+    stops = [{'stop_id': 'S1', 'stop_name': 'LRT AWAN BESAR', 'arrival_seconds': 0},
+             {'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL', 'arrival_seconds': 60}]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_routes_at_stop',
+                        lambda slug, sid: [{'route_id': 'T5800', 'short': 'T580', 'long': ''}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_route_patterns',
+                        lambda *a, **k: [{'trip_id': 't1', 'stops': stops}])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a: True)
+
+    extra_nearby = [{'stop_id': 'S2', 'stop_name': 'KM1 BUKIT JALIL',
+                      'stop_lat': 3.063, 'stop_lon': 101.671, 'distance_m': 120.0}]
+    st_stub = _render_stop_panel(monkeypatch, extra_nearby=extra_nearby)
+
+    # No ORS key in the test harness, so this resolves through the
+    # straight-line fallback -- computed the same way live_map does, rather
+    # than hardcoding a minute figure that would drift if the constants move.
+    expected_minutes = live_map.walking.estimate_minutes(120.0)
+    said = _texts(st_stub.markdown)
+    assert '120 m from you' in said, said
+    assert f'~{expected_minutes} min walk (estimated)' in said, said
 
 
 def test_stops_before_the_tapped_one_are_not_rendered_as_plus_minus(monkeypatch):

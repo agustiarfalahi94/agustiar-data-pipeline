@@ -1082,6 +1082,17 @@ def show():
 
                     for pattern, title in zip(patterns, titles):
                         with st.expander(f"{label} — {title}"):
+                            # Streamlit re-runs this whole function body on
+                            # every auto-refresh whether or not the expander
+                            # is open -- collapsing is only visual disclosure,
+                            # not deferred work. One st.markdown call per row
+                            # (~35 stops per pattern, times every route
+                            # serving the stop) meant ~140 widget calls per
+                            # 20-second refresh for a panel nobody had opened.
+                            # Building the lines and joining them into a
+                            # single call costs the same rendered text at a
+                            # small fraction of the widget count.
+                            lines = []
                             for row in route_view.build_stop_rows(
                                     pattern['stops'], stop['stop_id'], nearby_by_id):
                                 line = f"`{row['seq']:>2}`  {row['stop_name']}"
@@ -1094,11 +1105,12 @@ def show():
                                     line += f"  · {abs(offset)} min earlier"
                                 elif offset is not None:
                                     line += f"  · +{offset} min"
-                                st.markdown(line)
+                                lines.append(line)
                                 if row['near']:
-                                    st.caption(
+                                    lines.append(
                                         f"       ~{int(row['near']['distance_m'])} m "
                                         f"from you · {row['near']['walk_label']}")
+                            st.markdown("  \n".join(lines))
                             # Differences between timetabled stop times, not a
                             # live prediction, and for a headway service there
                             # is no published departure to state at all.
