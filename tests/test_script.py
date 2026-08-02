@@ -2853,6 +2853,34 @@ def test_routes_at_stop_orders_two_routes_sharing_a_short_name_the_same_way_ever
         assert [r['route_id'] for r in g.get_routes_at_stop('kl', 'S1')] == first
 
 
+def test_routes_at_stop_survives_a_digit_that_int_cannot_parse(monkeypatch):
+    # str.isdigit() is True for a superscript or a circled digit, but int()
+    # raises on both -- and \d does not match them, so they arrive in a chunk
+    # the digit branch should never have claimed. This sort runs inside the
+    # tapped-stop panel, where nothing may raise into the render.
+    g = _stub_routes_at_stop(monkeypatch, {
+        'R_ODD': {'short': 'T580³', 'long': ''},      # superscript three
+        'R_CIRCLED': {'short': '④', 'long': ''},      # circled four
+        'R2': {'short': '2', 'long': ''},
+    })
+    shorts = [r['short'] for r in g.get_routes_at_stop('kl', 'S1')]
+    assert '2' in shorts and len(shorts) == 3
+
+
+def test_natural_key_treats_an_unparseable_digit_as_text(monkeypatch):
+    from utils import gtfs_static
+    # Sorted as text, not silently dropped, and still ordering real numbers.
+    assert gtfs_static._natural_key('T580³')
+    assert gtfs_static._natural_key('2') < gtfs_static._natural_key('10')
+
+
+def test_natural_key_still_reads_arabic_indic_digits_as_numbers(monkeypatch):
+    from utils import gtfs_static
+    # These DO match \d and int() parses them, so the fix must not send every
+    # non-ASCII digit down the text branch.
+    assert gtfs_static._natural_key('٢') == gtfs_static._natural_key('2')
+
+
 def test_route_patterns_collapse_trips_that_share_a_sequence(tmp_path, monkeypatch):
     # t_loop_a and t_loop_b visit the same stops at different times of day.
     # That is one pattern, not two.

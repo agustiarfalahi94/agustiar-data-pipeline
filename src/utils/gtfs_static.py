@@ -544,10 +544,19 @@ def _natural_key(text: str) -> list:
 
     Every part is the same 3-tuple shape, so an int is never compared against
     a str — that would raise on a name like '10' beside 'PAVBJ'.
+
+    The digit branch is chosen by re-matching the split pattern, not by
+    str.isdigit(). isdigit() is True for characters int() cannot parse —
+    superscripts like '³', circled digits like '④' — and \\d does not match
+    those, so they arrive here inside a *text* chunk that isdigit() would
+    nonetheless claim. int() then raises, in a sort that runs inside the
+    tapped-stop panel where nothing may raise into the render. Matching the
+    pattern keeps Arabic-Indic digits numeric, since those do match \\d and
+    int() does parse them.
     """
     parts = []
     for chunk in _DIGIT_RUN.split(text or ''):
-        if chunk.isdigit():
+        if _DIGIT_RUN.fullmatch(chunk):
             parts.append((0, int(chunk), ''))
         elif chunk:
             parts.append((1, 0, chunk.casefold()))
