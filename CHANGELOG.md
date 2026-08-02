@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.1] - 2026-08-02
+
+### Fixed
+- **Hovering a health sparkline showed an array index.** The tooltip read `(1035, 100)`. The
+  second number was the reliability score; the first was the point's position in the underlying
+  array — the 1,036th fetch cycle counting from zero — an internal offset with no meaning outside
+  the process that produced it. The chart supplied only a `y` series, and Plotly substitutes the
+  row index when no `x` is given. `get_region_health_trend` already returned a timezone-converted
+  `datetime` for every row; the chart was ignoring it. The hover now reads `18:20 · score 100`,
+  naming the clock time the score was measured at. Where a trend genuinely carries no timestamps
+  the number is labelled `cycle 1035` rather than printed bare, because an unlabelled number is
+  the original fault
+
 ## [2.8.0] - 2026-08-01
 
 ### Added

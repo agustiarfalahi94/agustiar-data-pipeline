@@ -83,7 +83,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 ### 📡 Network Health
 - **Per-region reliability scorecards** — composite score (0–100) for each of the 14 transit regions
 - **Score breakdown** — reporting rate (40%), availability (40%), average data lag (20%). The count of *quiet cycles* (feed answered, no vehicles running) is shown alongside as context — it is not an input to the score
-- **24h sparklines** — at-a-glance trend per region, computed by the same rule as the score above it
+- **24h sparklines** — at-a-glance trend per region, computed by the same rule as the score above it. Hovering a point names the clock time it was measured at and the score then, e.g. `18:20 · score 100`
 - **Region drill-down** — reliability score over time, vehicles received vs. rejected per cycle, data lag trend. A region with no scoreable fetch in the window shows a "not scored" note rather than an empty chart
 - **Raw Fetch Log** — every API fetch event with full quality metadata **including its `fetch_status`**, CSV export
 - **Honest scoring** — feeds withdrawn upstream (HTTP 404) and self-inflicted rate limiting (HTTP 429) are excluded from reliability scores rather than blamed on the agency; a healthy feed reporting no vehicles out of service hours is not counted as an outage. Such a region's card says which of the two happened instead of asserting a cause

@@ -3263,3 +3263,58 @@ def test_the_stop_panel_never_invents_a_departure_time_for_a_headway_route(monke
 
     said = _texts(st_stub.markdown) + _texts(st_stub.caption)
     assert '06:00' not in said, "a headway trip has no published departure to show"
+
+
+# ── Network health sparkline ──────────────────────────────────────────────
+#
+# The hover used to read "(1035, 100)". The first number was the row's
+# position in the array, which Plotly substitutes when no x is supplied --
+# an internal offset with no meaning to a reader.
+
+def _trend(scores, with_times=True):
+    import pandas as pd
+    df = pd.DataFrame({'reliability_score': scores})
+    if with_times:
+        df['datetime'] = pd.to_datetime(
+            [1754130000 + i * 83 for i in range(len(scores))], unit='s', utc=True)
+    return df
+
+
+def test_sparkline_hover_states_the_clock_time_not_an_array_index():
+    from app_pages import network_health
+    fig = network_health._sparkline(_trend([100, 90, 100]), '#00ff00')
+    trace = fig.data[0]
+    import pandas as pd
+    assert trace.x is not None, "no x means Plotly falls back to the array index"
+    # Plotly stores these as numpy datetime64, so compare the instants rather
+    # than the container types.
+    expected = _trend([100, 90, 100])['datetime']
+    assert list(pd.to_datetime(trace.x, utc=True)) == list(expected)
+    assert '%{x|' in trace.hovertemplate, trace.hovertemplate
+    assert 'score' in trace.hovertemplate
+
+
+def test_sparkline_hover_names_what_the_score_is():
+    # "(1035, 100)" gave the reader two bare numbers and no units.
+    from app_pages import network_health
+    trace = network_health._sparkline(_trend([100, 90]), '#00ff00').data[0]
+    assert '<extra></extra>' in trace.hovertemplate, \
+        "the trace-name box would otherwise sit beside the value"
+
+
+def test_sparkline_labels_the_cycle_number_when_there_are_no_timestamps():
+    # A bare number is what caused the confusion; if the datetime column is
+    # missing, say the number is a cycle rather than printing it naked.
+    from app_pages import network_health
+    trace = network_health._sparkline(_trend([100, 90], with_times=False), '#00ff00').data[0]
+    assert list(trace.x) == [0, 1]
+    assert 'cycle' in trace.hovertemplate, trace.hovertemplate
+
+
+def test_sparkline_keeps_the_score_axis_pinned_to_the_full_range():
+    # The trace must stay comparable with the headline score above it: a dip
+    # to 60 has to look like a dip, not fill the box because the axis rescaled.
+    from app_pages import network_health
+    fig = network_health._sparkline(_trend([100, 60]), '#00ff00')
+    assert tuple(fig.layout.yaxis.range) == (0, 100)
+    assert fig.layout.yaxis.visible is False

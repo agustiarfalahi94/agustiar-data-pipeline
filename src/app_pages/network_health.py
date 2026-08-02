@@ -27,6 +27,53 @@ def _score_label(score):
     return 'Unreliable'
 
 
+def _sparkline(trend_df, color):
+    """
+    The 24-hour reliability trace drawn under a region's card.
+
+    The x values are fetch times, not row positions. Plotly substitutes the
+    array index when no x is supplied, and that offset reached the reader: a
+    hover on this chart read "(1035, 100)", two bare numbers of which the
+    first was the 1,036th element of an array and meant nothing outside this
+    process. get_region_health_trend already returns a timezone-converted
+    `datetime`, so the hover can name the clock time the score was measured
+    at instead.
+
+    <extra></extra> suppresses Plotly's trace-name box, which would otherwise
+    sit beside the value with nothing useful in it on a single-series chart.
+
+    The y axis stays pinned to 0-100 rather than fitting the data, so a dip to
+    60 reads as a dip instead of filling the box — the trace has to stay
+    comparable with the headline score printed directly above it.
+    """
+    if 'datetime' in trend_df.columns:
+        x = trend_df['datetime']
+        hovertemplate = '%{x|%H:%M} · score %{y:.0f}<extra></extra>'
+    else:
+        # No timestamps to show. Fall back to the position, but say that is
+        # what it is — an unlabelled number here is the original bug.
+        x = list(range(len(trend_df)))
+        hovertemplate = 'cycle %{x} · score %{y:.0f}<extra></extra>'
+
+    fig = go.Figure(go.Scatter(
+        x=x,
+        y=trend_df['reliability_score'],
+        mode='lines',
+        line=dict(color=color, width=1.5),
+        hovertemplate=hovertemplate,
+    ))
+    fig.update_layout(
+        height=55,
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=False,
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False, range=[0, 100]),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+    )
+    return fig
+
+
 def _unavailable_reason(row):
     """Explain an unscored feed without asserting a cause we cannot support.
 
@@ -147,22 +194,11 @@ def show():
 
                 t_df = db.get_region_health_trend(row['region'], window_hours=24)
                 if not t_df.empty and 'reliability_score' in t_df.columns:
-                    fig = go.Figure(go.Scatter(
-                        y=t_df['reliability_score'],
-                        mode='lines',
-                        line=dict(color=color, width=1.5),
-                    ))
-                    fig.update_layout(
-                        height=55,
-                        margin=dict(l=0, r=0, t=0, b=0),
-                        showlegend=False,
-                        xaxis=dict(visible=False),
-                        yaxis=dict(visible=False, range=[0, 100]),
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        paper_bgcolor='rgba(0,0,0,0)',
-                    )
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False},
-                                    key=f"sparkline_{row['region']}")
+                    st.plotly_chart(
+                        _sparkline(t_df, color),
+                        use_container_width=True,
+                        config={'displayModeBar': False},
+                        key=f"sparkline_{row['region']}")
 
     st.divider()
 
