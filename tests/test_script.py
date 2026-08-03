@@ -3686,3 +3686,114 @@ def test_a_quiet_region_does_not_yank_the_camera_back_on_every_refresh(monkeypat
 
     assert st_stub.session_state['map_view_state']['latitude'] == 5.99, \
         "an auto-refresh during an outage pulled the viewport back"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: progressive radius and the region hint
+#
+# Standing in Bukit Jalil with KTM Berhad selected, the arrivals panel said
+# only "No stops found within 800 m of you in KTM Berhad" -- true, and
+# useless, since Rapid Bus KL had 15 stops within that same 800 m and the app
+# had the data to know it. These tests cover the widened second search and
+# the region hint at the true dead end.
+# ---------------------------------------------------------------------------
+
+def _render_live_map(monkeypatch, route_query=''):
+    """Drive live_map.show() through the stop-resolution and arrivals code:
+    a selected region with vehicles, plus a known user_location, so the page
+    reaches the stop-resolution and arrivals branches rather than exiting
+    early on "no location" or "no vehicles".
+
+    Built from the same parts as `_live_map_with_selection` -- a realistic
+    (non-MagicMock) pydeck_chart selection payload, so tap-a-bus takes its
+    real parsing path -- plus a `route_query` forwarded to the search box
+    stub, defaulting to no active search. Task 4 reuses this with
+    route_query='GOKL14'.
+
+    Callers monkeypatch `live_map.gtfs_static` (get_stops_near, and where
+    relevant find_regions_with_stops_near) *before* calling this, since
+    show() runs inside it; the stubbed `st` is returned so a test can read
+    the text mocks afterward.
+    """
+    from app_pages import live_map
+
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.text_input.return_value = route_query
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    # A stop is only ever reached via nearby/_arrivals in these tests, never
+    # via the tapped-vehicle trip lookup (the selection is always empty) --
+    # but arrivals_for_stops still calls these for the one live vehicle, so
+    # they must be safe to call rather than touching a real GTFS zip.
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+
+    live_map.show()
+    return st_stub
+
+
+def test_the_stop_search_widens_when_the_first_radius_finds_nothing(monkeypatch):
+    from app_pages import live_map
+    asked = []
+
+    def fake(slug, lat, lon, radius_m=800, limit=5):
+        asked.append(radius_m)
+        return [] if radius_m <= live_map.NEARBY_STOP_RADIUS_M else [
+            {'stop_id': 'S1', 'stop_name': 'FAR STOP', 'stop_lat': 3.0,
+             'stop_lon': 101.0, 'distance_m': 900.0}]
+
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', fake)
+    st_stub = _render_live_map(monkeypatch)
+
+    assert live_map.NEARBY_STOP_RADIUS_M in asked
+    assert live_map.NEARBY_STOP_WIDE_RADIUS_M in asked
+    said = _texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+    assert 'FAR STOP' in said
+    assert str(live_map.NEARBY_STOP_WIDE_RADIUS_M) in said, \
+        "the panel must name the radius it actually used"
+
+
+def test_the_stop_search_does_not_widen_when_the_first_radius_finds_stops(monkeypatch):
+    from app_pages import live_map
+    asked = []
+
+    def fake(slug, lat, lon, radius_m=800, limit=5):
+        asked.append(radius_m)
+        return [{'stop_id': 'S1', 'stop_name': 'NEAR STOP', 'stop_lat': 3.0,
+                 'stop_lon': 101.0, 'distance_m': 200.0}]
+
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', fake)
+    _render_live_map(monkeypatch)
+    assert live_map.NEARBY_STOP_WIDE_RADIUS_M not in asked, \
+        "widening when the near search succeeded costs a second scan for nothing"
+
+
+def test_the_dead_end_names_regions_that_do_have_stops_near_you(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'find_regions_with_stops_near',
+                        lambda *a, **k: [
+                            {'region': 'Rapid Bus KL', 'slug': 's1',
+                             'count': 15, 'nearest_m': 152.0}])
+    st_stub = _render_live_map(monkeypatch)
+
+    said = _texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+    assert 'Rapid Bus KL' in said
+    assert '15' in said
+    assert 'Switch region' in said
+
+
+def test_the_region_scan_runs_only_at_the_dead_end(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [{'stop_id': 'S1', 'stop_name': 'NEAR',
+                                          'stop_lat': 3.0, 'stop_lon': 101.0,
+                                          'distance_m': 100.0}])
+
+    def explode(*a, **k):
+        raise AssertionError('scanned every region when stops were already found')
+
+    monkeypatch.setattr(live_map.gtfs_static, 'find_regions_with_stops_near', explode)
+    _render_live_map(monkeypatch)

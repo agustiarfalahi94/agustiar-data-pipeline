@@ -72,6 +72,16 @@ def _walk_label(entry):
 # from the number actually applied.
 NEARBY_STOP_RADIUS_M = 800
 
+# Tried only when the primary radius finds nothing. A rider who would happily
+# walk a kilometre was being told nothing existed, because 800 m was chosen
+# conservatively and never revisited.
+#
+# This widens an inaccuracy as well as the search: the radius is straight-line,
+# and at 1500 m the gap between crow-flight and footpath is larger than at 800.
+# KL1291 sits 60 m away by crow and 634 m on foot. Routing corrects the walk
+# time displayed; it does not correct which stops are selected.
+NEARBY_STOP_WIDE_RADIUS_M = 1500
+
 # Evaluate the nearest NEARBY_STOP_SCAN_LIMIT stops in range, then show the
 # useful ones. Truncating by distance first hid a stop that had a bus inbound
 # behind five closer stops that had none.
@@ -777,10 +787,17 @@ def show():
     stops_layer = None
     _loc = st.session_state.get('user_location')
     _nearby_stops = None
+    _nearby_radius_used = NEARBY_STOP_RADIUS_M
     if _loc and agency_slug:
         _nearby_stops = gtfs_static.get_stops_near(
             agency_slug, _loc['lat'], _loc['lon'],
             radius_m=NEARBY_STOP_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
+        if not _nearby_stops:
+            _nearby_stops = gtfs_static.get_stops_near(
+                agency_slug, _loc['lat'], _loc['lon'],
+                radius_m=NEARBY_STOP_WIDE_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
+            if _nearby_stops:
+                _nearby_radius_used = NEARBY_STOP_WIDE_RADIUS_M
         if _nearby_stops:
             stops_layer = pdk.Layer(
                 "ScatterplotLayer",
@@ -1340,11 +1357,35 @@ def show():
             # the map layer can never list a different set of stops.
             nearby = _nearby_stops
             if not nearby:
+                # Reaching here means both the primary and the widened search
+                # ran and both found nothing, so the widest radius actually
+                # applied is the honest number to quote — naming the primary
+                # radius would understate how hard the app looked.
                 st.info(
-                    f"No stops found within {NEARBY_STOP_RADIUS_M} m of you "
+                    f"No stops found within {NEARBY_STOP_WIDE_RADIUS_M} m of you "
                     f"in {selected_region}."
                 )
+                loc_now = st.session_state.get('user_location')
+                if loc_now:
+                    with st.spinner("Checking other regions…"):
+                        elsewhere = gtfs_static.find_regions_with_stops_near(
+                            loc_now['lat'], loc_now['lon'],
+                            radius_m=NEARBY_STOP_WIDE_RADIUS_M,
+                            exclude_slug=agency_slug)
+                    if elsewhere:
+                        for r in elsewhere:
+                            st.markdown(
+                                f"→ **{r['region']}** — {r['count']} stop(s), "
+                                f"nearest ~{int(r['nearest_m'])} m")
+                        st.caption("Switch region above to see them.")
+                    else:
+                        st.caption(
+                            "No other region has stops near you either.")
             else:
+                if _nearby_radius_used != NEARBY_STOP_RADIUS_M:
+                    st.caption(
+                        f"Nothing within {NEARBY_STOP_RADIUS_M} m — showing stops "
+                        f"up to {_nearby_radius_used} m.")
                 arrivals, skipped = _arrivals(nearby)
 
                 # Rank by usefulness: stops with a bus actually coming, nearest
@@ -1423,14 +1464,14 @@ def show():
                     if filter_active:
                         st.caption(
                             f"No buses matching '{filter_label}' are currently "
-                            f"en route to any stop within {NEARBY_STOP_RADIUS_M} m "
+                            f"en route to any stop within {_nearby_radius_used} m "
                             f"of you. Other routes are hidden while the route "
                             f"search is active."
                         )
                     else:
                         st.caption(
                             f"No buses are currently en route to any stop within "
-                            f"{NEARBY_STOP_RADIUS_M} m of you."
+                            f"{_nearby_radius_used} m of you."
                         )
 
     with st.expander("🚌 Route Viewer", expanded=False):
