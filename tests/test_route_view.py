@@ -122,6 +122,14 @@ def test_pattern_label_survives_an_empty_pattern():
     assert route_view.pattern_label([]) == ''
 
 
+def test_a_single_stop_pattern_is_not_labelled_a_loop():
+    # first == last trivially when there is only one stop -- there is no
+    # circuit to describe, so "loop from X" would claim a return trip that
+    # never happens.
+    single = _stops(('S1', 'LRT AWAN BESAR', 0))
+    assert route_view.pattern_label(single) == 'LRT AWAN BESAR'
+
+
 # ── unique titles ──────────────────────────────────────────────────────
 
 def test_titles_state_the_stop_count_and_running_time():

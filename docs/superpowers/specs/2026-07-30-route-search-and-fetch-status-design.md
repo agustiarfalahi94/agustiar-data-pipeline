@@ -192,25 +192,22 @@ hours from GTFS `calendar.txt`. Recorded as a follow-up, not built here.
 
 ---
 
-## Backlog — Airflow orchestration (blocked)
+## Airflow orchestration — decided against
 
-Not planned for a release. **Blocked on hosting:** Airflow cannot run on Streamlit Cloud; it needs
-an always-on scheduler (VM, Cloud Composer, or Astronomer), which is not currently available.
+Not a backlog item; not being re-proposed. Airflow cannot run on Streamlit Cloud — it needs an
+always-on scheduler (VM, Cloud Composer, or Astronomer), and the owner has decided not to pay for
+one just to run this project's ingestion. The reasoning is recorded here so it does not get
+raised again without new information changing the hosting constraint:
 
-When unblocked:
-
-| Phase | Work |
-|---|---|
-| A | Provision a host — the actual blocker |
-| B | Extract ingestion into a callable task (`fetch_and_store_transit_data()` is already a clean entry point) |
-| C | DAG `ingest → dbt run → dbt test` on a ~5-minute schedule, replacing Streamlit-triggered fetch |
-| D | Retries, alerting, backfill — where Airflow earns its place |
-| E | Streamlit becomes read-only, removing the DuckDB single-writer contention entirely |
-
-**Zero-cost alternative worth evaluating first:** a GitHub Actions scheduled workflow
-(`on: schedule`) can run ingestion and `dbt run` on a cron for free on public repos, and CI is
-already configured. It offers no backfill UI and weaker retry semantics than Airflow, but it would
-demonstrate an orchestrated pipeline without provisioning anything.
+- **The actual blocker is hosting, not the orchestration design.** `fetch_and_store_transit_data()`
+  is already a clean entry point a DAG could call, and `ingest → dbt run → dbt test` is a
+  straightforward ~5-minute schedule. None of that requires a server running 24/7 — Airflow itself
+  does.
+- **A zero-cost alternative exists if this is ever revisited:** a GitHub Actions scheduled workflow
+  (`on: schedule`) can run ingestion and `dbt run` on a cron for free on public repos, and CI is
+  already configured. It offers no backfill UI and weaker retry semantics than Airflow, but it
+  would demonstrate an orchestrated pipeline without provisioning anything — the option worth
+  evaluating first if the hosting constraint ever changes.
 
 ## Follow-ups (not in this version)
 

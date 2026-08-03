@@ -75,12 +75,34 @@ _FAIL_UNTIL = 0.0
 # stops it had never seen on the straight-line fallback forever.
 _WALK_CACHE = {}
 
+# Checked only when the dict has grown past this many keys, so an ordinary
+# render never pays for it. This process auto-refreshes every ~20 s and never
+# restarts between deploys; with no eviction, every distinct (grid cell,
+# agency, stop) a visitor has ever asked about stays in memory forever, long
+# after CACHE_TTL_SECONDS has made the entry useless. "A few thousand" is
+# generous headroom, not a tuned figure -- there is no production traffic data
+# to tune it against yet.
+_WALK_CACHE_EVICT_THRESHOLD = 5000
+
 
 def _clear_cache():
     """Drop every cached lookup and any failure backoff. For tests."""
     global _FAIL_UNTIL
     _WALK_CACHE.clear()
     _FAIL_UNTIL = 0.0
+
+
+def _evict_expired(now):
+    """
+    Drop cache entries older than CACHE_TTL_SECONDS.
+
+    Only called once the dict exceeds _WALK_CACHE_EVICT_THRESHOLD keys, so
+    this walks the whole cache rarely rather than on every lookup.
+    """
+    expired = [key for key, (stored_at, _distance) in _WALK_CACHE.items()
+               if (now - stored_at) >= CACHE_TTL_SECONDS]
+    for key in expired:
+        del _WALK_CACHE[key]
 
 
 def _now():
@@ -177,6 +199,10 @@ def _routed_distances(user_lat, user_lon, stops, agency_slug, api_key):
         _WALK_CACHE[(glat, glon, agency_slug, stop['stop_id'])] = (
             _now(), float(distance))
         found[stop['stop_id']] = float(distance)
+
+    if len(_WALK_CACHE) > _WALK_CACHE_EVICT_THRESHOLD:
+        _evict_expired(_now())
+
     return found
 
 

@@ -389,3 +389,41 @@ def test_cached_stops_are_still_served_when_the_key_is_removed(monkeypatch):
     out = walking.walk_times(3.0586, 101.6739, _stops(('a', 60)), 'slug')
     assert out['a']['routed'] is True
     assert out['a']['distance_m'] == 634.0
+
+
+# ── cache eviction ────────────────────────────────────────────────────────
+
+def test_expired_entries_are_evicted_once_the_cache_grows_large(monkeypatch):
+    # No eviction meant a long-running process (this app never restarts
+    # between deploys) accumulated every (grid cell, agency, stop) anyone had
+    # ever asked about, long after CACHE_TTL_SECONDS made the entry useless.
+    monkeypatch.setattr(walking, '_WALK_CACHE_EVICT_THRESHOLD', 2)
+
+    def respond(url, json=None, headers=None, timeout=None):
+        # Distances must match the number of destinations requested, or the
+        # length check in _routed_distances discards the whole response.
+        return _ok([634.0] * len(json['destinations']))
+
+    monkeypatch.setattr(walking.requests, 'post', respond)
+
+    walking.walk_times(3.0586, 101.6739, _stops(('a', 60)), 'slug', api_key='k')
+    stale_key = next(iter(walking._WALK_CACHE))
+
+    # Age that entry past the TTL, then push the cache over the threshold
+    # with a fresh lookup -- eviction only runs on the write path.
+    monkeypatch.setattr(walking, '_now',
+                        lambda: time.time() + walking.CACHE_TTL_SECONDS + 1)
+    walking.walk_times(3.0586, 101.6739, _stops(('b', 60), ('c', 60)),
+                        'slug', api_key='k')
+
+    assert stale_key not in walking._WALK_CACHE
+
+
+def test_eviction_leaves_fresh_entries_in_place(monkeypatch):
+    monkeypatch.setattr(walking, '_WALK_CACHE_EVICT_THRESHOLD', 1)
+    monkeypatch.setattr(walking.requests, 'post', lambda *a, **k: _ok([634.0]))
+
+    walking.walk_times(3.0586, 101.6739, _stops(('a', 60)), 'slug', api_key='k')
+    walking.walk_times(3.0586, 101.6739, _stops(('b', 60)), 'slug', api_key='k')
+
+    assert len(walking._WALK_CACHE) == 2

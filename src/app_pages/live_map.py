@@ -1192,11 +1192,19 @@ def show():
                 # near-you mark. Patterns come from an in-memory index built
                 # from the ZIP already on disk, so this costs no I/O.
                 by_route = []
+                routes_without_patterns = []
                 pattern_stop_ids = set()
                 for route in routes:
                     patterns = gtfs_static.get_route_patterns(
                         agency_slug, route['route_id'], stop['stop_id'])
                     if not patterns:
+                        # Listed under Serves: because stop_times.txt names
+                        # this route at this stop, but get_route_patterns
+                        # found no usable sequence for it (e.g. a trip with
+                        # too few timed stops to form one). Without this note
+                        # the route appeared in the Serves: line and then
+                        # simply had no expander, with nothing saying why.
+                        routes_without_patterns.append(route)
                         continue
                     by_route.append((route, patterns))
                     for pattern in patterns:
@@ -1322,6 +1330,12 @@ def show():
                             if gtfs_static.is_frequency_based(agency_slug, pattern['trip_id']):
                                 note += " This route runs to a headway, not a fixed timetable."
                             st.caption(note)
+
+                for route in routes_without_patterns:
+                    label = route['short'] or route['long'] or route['route_id']
+                    st.caption(
+                        f"{route_view.escape_markdown(label)} — no stop "
+                        f"sequence available for this stop in the timetable")
 
             if st.button("Clear stop selection", key="clear_stop_selection"):
                 st.session_state['cleared_stop_id'] = selected_stop_id

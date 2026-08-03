@@ -5,15 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.9.1] - 2026-08-03
+## [2.10.0] - 2026-08-03
+
+Rapid Bus KL's realtime feed went quiet upstream — confirmed at 12:49 on a Monday: `rapid-bus-kl`
+returned HTTP 200 with a 15-byte body and zero entities, while `rapid-bus-mrtfeeder` returned 102
+vehicles and `rapid-bus-penang` 147 in the same second. The outage was Prasarana's. What the app
+did with it was ours.
 
 ### Fixed
-- **A pasted OpenRouteService key with no `[routing]` section header is no longer silently
-  ignored.** `_ors_api_key` now also reads a flat top-level `api_key`, which is what a reader
-  reaches for when pasting a single copied line into Streamlit Secrets. The sectioned `[routing]`
-  form stays canonical and wins when both are present; a missing key in either form still returns
-  `None` with no network call. Previously, a flat key failed indistinguishably from having no key
-  configured at all — every walk time stayed `(estimated)` with nothing saying why
+- **An empty vehicle frame no longer deletes the map.** Three early returns in `live_map.py` — no
+  rows in the window, the selected region reporting nothing usable, or everything on hand too old
+  to draw — each took the whole map with them, including the user's own location marker, the
+  nearby stop rings, and the tapped-stop panel, none of which reads a live vehicle. Reported
+  verbatim: *"i cannot test to tap a bus stop in rapid KL area because the map disappear entirely
+  as the data is empty."* The three returns are now a single `no_vehicles` flag: the deck, the
+  location marker, the stop rings and the tapped-stop panel still render; only the vehicle layer,
+  its tooltip column, and the "Showing N active vehicles" caption are skipped, replaced by a
+  warning naming which of the three causes applied. `df_live` being empty network-wide keeps its
+  own return — with no data at all there is no region context to render into
+- **Three latent crashes surfaced by that change, fixed along the way.** `prepare_map_data` returns
+  a frame with *no columns at all* on an empty region, so anything still reading a vehicle column
+  needed to skip wholesale rather than being guarded row-by-row: the view-state centring read
+  `df_map['latitude'].mean()` and `df_map['longitude'].mean()`, the tooltip column read
+  `df_map['vehicle_id']`, and the Route Viewer's vehicle picker read `df_map['vehicle_id']` too —
+  all three now short-circuit on `no_vehicles` instead of raising `KeyError`
+- **The camera re-centres when a quiet region's vehicles come back.** Removing the early return
+  meant a quiet render started consuming the "something changed, move the camera" trigger by
+  itself — it correctly centres on the user, the only anchor there is, but with the region and
+  search unchanged, the *next* render (the one where the feed recovered) saw no change at all, left
+  the camera parked on the user, and drew the recovered buses off-screen under a "Showing N active
+  vehicles" caption. Gaining or losing vehicles is now itself a third re-centre trigger alongside a
+  region switch and a route search, with its own remembered flag so an ordinary auto-refresh during
+  the outage does not fight a pan the user made
+- **Streamlit Secrets now accepts a flat `api_key`, not only the sectioned `[routing]` form.**
+  `_ors_api_key` reads `st.secrets['routing']['api_key']` only, so a key pasted as a bare top-level
+  `api_key = '...'` — what a reader reaches for when pasting one copied line — was invisible to it,
+  and the deliberately broad `except` swallowed the miss. The sectioned form stays canonical and
+  wins when both are present; a missing key in either form still returns `None` with no network
+  call. Previously this failed silently and indistinguishably from having no key configured at all
+  — every walk time stayed `(estimated)` with nothing saying why
 - **Route search now finds a route by the name painted on the bus, not just the name the feed
   publishes.** `GOKL14` is Rapid KL's livery for the route the feed calls `PAVILION BUKIT JALIL
   (PAVBJ)`; no `GOKL` route exists anywhere in the feed. The Live Map now resolves the query once,
@@ -23,6 +53,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a caption naming both the searched term and the resolved route, so a guess from that table
   is never presented as feed data. A real feed name (e.g. `T580`) is never rewritten and produces
   no such caption
+- **A dead end now names a region that works.** Standing in Bukit Jalil with KTM Berhad selected,
+  the app said only *"No stops found within 800 m of you in KTM Berhad"* — true, and useless. Rapid
+  Bus KL has 15 stops within that same 800 m and the app already knew it. The panel now lists the
+  regions `find_regions_with_stops_near` found, nearest first, e.g. *"Rapid Bus KL — 15 stops,
+  nearest ~152 m"*, so there is somewhere to go instead of a dead end
+
+### Added
+- `gtfs_static.find_regions_with_stops_near(lat, lon, radius_m, exclude_slug, limit)` — which other
+  regions have stops near a point, nearest first. Walks every agency's cached timetable and skips
+  any whose feed raises or is unreadable, so one dead feed cannot cost the user the other twelve
+  answers. Called only at the dead end described above, behind a spinner — never on a normal render
+- `gtfs_static.resolve_route_alias` and a hand-maintained `ROUTE_ALIASES` table, currently holding
+  exactly one entry: `GOKL14 → PAVILION BUKIT JALIL (PAVBJ)`, the route's `route_id` is `S6060` and
+  no `GOKL` route exists anywhere in the feed — the connection lives only on the vehicle's livery
+- **Progressive nearby-stop radius.** The search that used to stop at a fixed 800 m now widens once
+  to 1500 m when 800 m finds nothing, and the panel always names the radius it actually applied
+  (2.6.0 already fixed one version of copy and applied number disagreeing; this reuses that
+  discipline rather than reintroducing the bug)
+
+### Changed — Airflow leaves the backlog
+Recorded as decided against, not deleted, so it is not re-proposed without new information: Airflow
+cannot run on Streamlit Cloud, it needs a server running 24/7, and the owner has decided not to pay
+for one just to orchestrate this project's ingestion. The actual blocker is hosting, not the DAG
+design — `fetch_and_store_transit_data()` is already a clean entry point a DAG could call. A
+zero-cost alternative worth evaluating first if the hosting constraint ever changes: a GitHub
+Actions scheduled workflow can run ingestion and `dbt run` on a free cron, using the CI setup that
+already exists, at the cost of no backfill UI and weaker retry semantics than Airflow.
+
+### Cosmetic sweep
+Deferred across the 2.7–2.10 reviews, swept in one pass:
+- `route_view.pattern_titles`'s docstring claimed its titles were "guaranteed unique"; softened to
+  the actual guarantee — unique among the patterns passed in a single call, not globally
+- A single-stop pattern has `first == last` trivially, the same condition `pattern_label` uses to
+  detect a loop, so it was labelled `loop from X` for a circuit that never happens. Single-stop
+  patterns are now named for their one stop instead
+- A route listed under `Serves:` whose `get_route_patterns` returns `[]` got no expander and no
+  explanation — it simply vanished from the loop that builds them. It now gets a one-line note
+  saying no stop sequence is available for it at that stop
+- `_WALK_CACHE` had no eviction. This process auto-refreshes every ~20s and never restarts between
+  deploys, so every (grid cell, agency, stop) anyone had ever asked about stayed in memory forever,
+  long after `CACHE_TTL_SECONDS` made the entry useless. Entries older than the TTL are now dropped
+  once the dict exceeds a few thousand keys — checked only past that threshold, so an ordinary
+  render pays nothing for it
+- The over-long README line introduced in 2.8.1 (the 24h sparklines bullet, one unwrapped ~200
+  character line) is re-wrapped to match the rest of the document
+
+### Documentation
+- Added a "How to Use This App" section to the README, written for a rider rather than a developer
+  and placed before the developer setup section: what each page answers, why **Locate Me** should
+  be tapped first, what `(estimated)` on a walk time means and how to remove it, why a green
+  **Reliable** score and an empty map are not a contradiction, what to do when a region has no
+  stops near you, that journey times come from the timetable rather than live positions, and that
+  route search accepts a hand-maintained, unofficial livery alias where one is known
+
+### Known Limitations
+- **The widened 1500 m radius is still straight-line, and more wrong than the 800 m one was.** The
+  gap between crow-flight and footpath grows with distance — one measured stop sits 60 m away by
+  crow and 634 m on foot. Routing corrects the walk time *displayed* for a stop once it is selected;
+  it does not correct *which* stops get selected in the first place. A stop listed at 1400 m may be
+  a 3 km walk
 
 ## [2.9.0] - 2026-08-02
 

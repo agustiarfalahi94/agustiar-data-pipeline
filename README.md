@@ -31,8 +31,22 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   (PAVBJ)**."* — so a guess from this table is never mistaken for feed data. Only names in that
   table are ever rewritten; searching a real feed name (`T580`) behaves exactly as before with no
   such caption
-- **📍 Arrivals near you** — with your location set, see nearby stops within 800 m (straight-line)
-  and the next buses to each, each with a route-first, labelled line: `Route T580 → Awan Besar ·
+- **🗺️ The map survives a quiet feed** — a region reporting zero vehicles (an upstream outage, or
+  simply no service running right now) no longer takes the whole map down with it. Your location
+  marker, the nearby stop rings, and the tapped-stop panel all come from the published timetable
+  and your own GPS, neither of which needs a live vehicle to exist — only the vehicle layer itself
+  and its "Showing N active vehicles" caption are skipped, replaced by a warning naming which of
+  three things happened: nothing reported, what reported had unusable coordinates, or everything on
+  hand is too old to draw. The camera also re-centres correctly the moment a quiet region's buses
+  start reporting again, rather than staying parked on your marker while vehicles are drawn
+  off-screen
+- **📍 Arrivals near you** — with your location set, see nearby stops, starting at 800 m
+  (straight-line) and widening once to 1500 m if nothing is found there, with the panel naming
+  which radius was actually used. If neither radius finds a stop, the app checks the other regions
+  and names one that does have stops nearby — with a stop count and distance — rather than leaving
+  a dead end; this cross-region scan skips any agency whose timetable can't be read, so one broken
+  feed can't cost you the other thirteen answers. The panel also lists the next buses to each stop,
+  each with a route-first, labelled line: `Route T580 → Awan Besar ·
   arrives ~6 min · 2 min late · position 3 min old`. Up to five stops are shown, those with a bus
   inbound first; if more than five have buses coming, the panel says how many were left out rather
   than dropping them silently. Each nearby stop is also drawn on the map as a hollow gold ring so
@@ -92,7 +106,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Per-region reliability scorecards** — composite score (0–100) for each of the 14 transit regions
 - **Score breakdown** — reporting rate (40%), availability (40%), average data lag (20%). The count of *quiet cycles* (feed answered, no vehicles running) is shown alongside as context — it is not an input to the score
 - **When buses were last seen** — each card also states `buses last seen 3h ago` or `no buses reported in this window`. The score measures whether the **feed** is answering, not whether **buses** are running: a feed correctly reporting no service scores full marks, so a green *Reliable* card can sit above an empty Live Map. These are separate facts and the card now says both
-- **24h sparklines** — at-a-glance trend per region, computed by the same rule as the score above it. Hovering a point names the clock time it was measured at and the score then, e.g. `18:20 · score 100`
+- **24h sparklines** — at-a-glance trend per region, computed by the same rule as the score above
+  it. Hovering a point names the clock time it was measured at and the score then, e.g.
+  `18:20 · score 100`
 - **Region drill-down** — reliability score over time, vehicles received vs. rejected per cycle, data lag trend. A region with no scoreable fetch in the window shows a "not scored" note rather than an empty chart
 - **Raw Fetch Log** — every API fetch event with full quality metadata **including its `fetch_status`**, CSV export
 - **Honest scoring** — feeds withdrawn upstream (HTTP 404) and self-inflicted rate limiting (HTTP 429) are excluded from reliability scores rather than blamed on the agency; a healthy feed reporting no vehicles out of service hours is not counted as an outage. Such a region's card says which of the two happened instead of asserting a cause
@@ -100,6 +116,58 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 ### ⚙️ Settings & Controls
 - **Manual or Auto refresh** (20-second interval)
 - **Independent map theme** toggle (separate from the page theme)
+
+---
+
+## 🚶 How to Use This App
+
+This section is for riders, not developers — see [Quick Start](#-quick-start) below to run the
+project itself.
+
+**What each page answers:**
+
+| Page | Question it answers |
+|---|---|
+| 🗺️ Live Map | Where are the buses/trains right now, and how do I get to the nearest stop? |
+| 📊 Data Table | What raw records has the app collected, and can I export them? |
+| 📈 Analytics | What does traffic across the network look like over time? |
+| 📡 Network Health | Is each region's live feed actually answering? |
+
+**Start with Locate Me.** Most of what the Live Map can tell you — nearby stops, walk times,
+arrivals, which region you should even be looking at — starts from knowing where you are. Tap
+**📍 Locate Me** first; everything below assumes it has been done.
+
+**A walk time marked `(estimated)` is a straight line, not a route.** Without an OpenRouteService
+key configured, the app estimates a walk from crow-flight distance and a fixed detour allowance —
+close on a regular street grid, badly wrong across a river, a highway, or a gated compound (one
+measured stop was 60 m away by crow-flight and 634 m, ten minutes, on foot). To get an actual
+routed time and drop the `(estimated)` suffix, set `ORS_API_KEY` (see
+[Configuration](#-configuration)) — it's free to sign up for at OpenRouteService.
+
+**A green "Reliable" score and an empty map are not a contradiction.** The Network Health score
+measures one thing only — is the region's feed answering when asked? A feed that correctly reports
+"no vehicles right now" (buses out of service overnight, for instance) still scores full marks,
+because it did its job: it told the truth. So Rapid Bus KL can show **100 · Reliable** at the same
+moment its Live Map shows no buses moving. If you want to know whether service is actually running,
+look at the "buses last seen" line on the scorecard or the warning banner above the map itself —
+not the score.
+
+**If a region shows no stops near you**, the app now widens its search from 800 m out to 1500 m
+before giving up, and if that still finds nothing it checks the *other* thirteen regions and names
+one that does have stops nearby, with a stop count and distance, so you know where to switch. It
+only does this as a last resort — a normal render never scans every region.
+
+**Journey times in the Live Map come from the published timetable, not from live vehicle
+positions.** "`+6 min`" on a stop sequence means the schedule says the bus is 6 timetabled minutes
+from where you tapped, not that a real bus is currently 6 minutes away — for that, use the arrivals
+list instead, which does read the live feed.
+
+**Route search understands the name painted on the bus, not only the name in the data feed** —
+but only for a small, hand-maintained, and *unofficial* list of aliases. Searching `GOKL14` finds
+the route the feed itself calls `PAVILION BUKIT JALIL (PAVBJ)`, because that's the number riders
+actually see on the livery; the app discloses when a match came from this alias table rather than
+from the feed. If an operator repaints or renumbers a route, this table will not know until someone
+updates it by hand.
 
 ---
 
@@ -285,7 +353,9 @@ Live Map      Data Table        Analytics     Network Health
 | **Nearby stops ranked by usefulness** | Truncating to the closest few stops before computing arrivals hid a stop that had a bus inbound behind five that did not. The nearest 40 stops within the radius are now evaluated (`NEARBY_STOP_SCAN_LIMIT`), then those with a bus coming are shown first, at most five of them (`NEARBY_STOP_DISPLAY`). The 40 is a bound on work, not a claim of completeness: measured against the feed, the largest 800 m neighbourhood in the Rapid KL network is 41 stops and the median is 13, so the cap bites in exactly one place on the network. Any served stops past the five shown are counted in the panel rather than dropped in silence |
 | **ORS Matrix API for walk distance; our own pace for duration** | Straight-line distance is not a walk — circuity measured across 15 stops in one neighbourhood ranges 1.04 to 10.60, too wide a spread for any single correction constant to survive. `utils/walking.py` asks OpenRouteService for the routed distance to every nearby stop in one request, cached per stop on a ~55 m grid for 24h. ORS's own `duration` is not used: it implies 5.2 km/h against Google's ~3.6 km/h for the same route, because it models the path, not the crossings or the waiting. Only the distance is taken from ORS; minutes are computed from it at this app's pace |
 | **Walk time is honest about its source** | A routed figure reads `~9 min walk`; a fallback figure (no key configured, or the request failed) reads `~5 min walk (estimated)`. The label is load-bearing, not decorative — an estimate cannot see that a stop 60 m away in a straight line is 634 m on foot |
-| **Nearby-stop radius stays straight-line even when routing is available** | The 800 m cutoff that decides which stops are "nearby" is computed before any routing request is made, so it is always straight-line. Only the walk time shown for an already-selected stop is routed. Making the radius itself routed would mean a Matrix API call for every stop in range before knowing which are in range — an unbounded cost for a bound that exists to keep the panel small |
+| **Nearby-stop radius stays straight-line even when routing is available** | The 800 m (and, when nothing is found there, 1500 m) cutoff that decides which stops are "nearby" is computed before any routing request is made, so it is always straight-line. Only the walk time shown for an already-selected stop is routed. Making the radius itself routed would mean a Matrix API call for every stop in range before knowing which are in range — an unbounded cost for a bound that exists to keep the panel small. The gap between crow-flight and footpath is larger at 1500 m than at 800 m — one measured stop sits 60 m away by crow and 634 m on foot — so a stop listed at 1400 m may be a much longer walk than the number suggests |
+| **The map renders on an empty vehicle frame instead of returning early** | Three early returns in `live_map.py` used to delete the entire map — including the user's own location marker and the nearby-stop rings, neither of which depends on a vehicle existing — the moment a region reported zero usable vehicles. They are now a single `no_vehicles` flag: the deck, the location marker, the stop rings and the tapped-stop panel all still render; only the vehicle layer, its tooltip column, and the "Showing N active vehicles" caption are skipped, replaced by a warning naming which of three distinct causes applied |
+| **Region scan runs only at the dead end** | When neither the 800 m nor the 1500 m search finds a stop, `gtfs_static.find_regions_with_stops_near` walks every other region's timetable and returns the ones with stops nearby, nearest first — skipping any agency whose GTFS Static feed can't be read so one dead feed doesn't cost the other thirteen answers. It only runs behind a spinner at the dead end, never on a normal render, because a fresh deploy may need to download timetables it has not cached yet |
 | **Stops are tappable, not hoverable** | 2.6.0 shipped nearby-stop markers as visible but unpickable, because hover doesn't exist on the touch devices this app is used on. 2.7.0 makes the layer pickable instead of adding hover: tapping a stop ring opens a panel below the map with its name, distance, walk time, and buses en route, the same interaction the map already used for buses. Last tap wins between a bus panel and a stop panel |
 | **Serves lists the timetable, not the live feed** | The arrival list answers "what bus is coming"; `Serves:` answers "what buses call here at all", built from a `{stop_id: {route_id, ...}}` index constructed in the same pass over `stop_times.txt` that already builds the trip-stops index, so listing every serving route costs no second parse of an 87,935-row file. Measured on Rapid Bus KL, KL2324 LRT AWAN BESAR is served by four routes and KL1743 GREEN AVENUE CONDOMINIUM by exactly one — `T580` — which the arrival list alone could go an entire refresh cycle without ever showing |
 | **One expander per stop pattern, never merged** | A route can run more than one distinct stop sequence — 37 of Rapid KL's 136 timetabled routes run two, one runs three. Merging them into a single sequence would silently pick one and misrepresent the rest, exactly the failure this feature exists to remove. `get_route_patterns` de-duplicates identical sequences and returns each distinct one with a representative trip_id; `pattern_titles` gives each a unique heading (stop count and running time separate most collisions, a numbered suffix settles the rest) |
@@ -454,9 +524,12 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 | Map not loading | Toggle map theme (light↔dark), check browser console |
 | Locate Me does nothing | Allow location permission in browser when prompted |
 | Route Viewer shows "No route data" | That vehicle's region may not have `shapes.txt` in its GTFS Static feed — historical trail is shown as fallback |
-| Tapping a nearby-stop marker does nothing | Stop rings are tappable — a tap opens a panel below the map with that stop's walk time and the buses en route to it. If nothing happens, the stop may have fallen out of the 800 m range since the map was drawn; press **📍 Locate Me** again. On a desktop pointer, hovering a stop also shows its name, but tap is the designed interaction — hover does not exist on the touch devices this app is used on |
-| Walk times are labelled "(estimated)" | No `ORS_API_KEY` is configured (or the request failed), so the figure is a straight-line estimate, not a routed one. A stop across an uncrossable barrier — a highway, a river, a fenced compound — will read as far nearer than it actually is. Set `ORS_API_KEY` (see *Configuration* above) to get a real footpath figure instead. If a key *is* set, a failed lookup also stops further requests for 60 seconds, so walk times can stay estimated for up to a minute after the routing service recovers |
-| A "nearby" stop is further to walk to than it looks, or a closer one is missing | The 800 m radius that decides which stops count as nearby is straight-line even when routing is configured — only the walk time shown for each already-selected stop is routed. This is a known limitation, not a bug |
+| Tapping a nearby-stop marker does nothing | Stop rings are tappable — a tap opens a panel below the map with that stop's walk time and the buses en route to it. If nothing happens, the stop may have fallen out of range (800 m, or 1500 m if that's what was actually searched) since the map was drawn; press **📍 Locate Me** again. On a desktop pointer, hovering a stop also shows its name, but tap is the designed interaction — hover does not exist on the touch devices this app is used on |
+| Walk times are labelled "(estimated)" | No API key is configured (or the request failed), so the figure is a straight-line estimate, not a routed one. A stop across an uncrossable barrier — a highway, a river, a fenced compound — will read as far nearer than it actually is. Set `ORS_API_KEY` — or a `[routing]` / flat `api_key` in Streamlit Secrets, see *Configuration* above — to get a real footpath figure instead. If a key *is* set, a failed lookup also stops further requests for 60 seconds, so walk times can stay estimated for up to a minute after the routing service recovers |
+| A "nearby" stop is further to walk to than it looks, or a closer one is missing | The 800/1500 m radius that decides which stops count as nearby is straight-line even when routing is configured — only the walk time shown for each already-selected stop is routed. The gap between crow-flight and footpath grows at the wider radius: one measured stop sits 60 m away by crow and 634 m on foot, so a stop listed at 1400 m may be a 3 km walk. This is a known limitation, not a bug |
+| "No stops found" for the selected region | The app already tried 800 m and, finding nothing, 1500 m. If it still found nothing it scans every other region's timetable and names the ones that do have stops near you, with a stop count and distance — switch region above to see them. If no region has stops nearby, it says that plainly instead of an empty list |
+| The map is empty but the region's Network Health score is "Reliable" | Different questions: the score means the feed is answering, not that a bus is currently moving. The map still draws your location marker and the nearby stop rings — a warning above it names why no vehicle is shown (nothing reported, unusable coordinates, or everything on hand is too old) |
+| Searching a route number does nothing, or finds the wrong route | Only a small, hand-maintained table of aliases (currently `GOKL14 → PAVILION BUKIT JALIL (PAVBJ)`) maps a livery name to what the feed actually publishes; anything not in that table must match the feed's own name. A match through the table always shows a caption saying so — if you don't see one, the search matched the feed name directly |
 | A route is listed under `Serves:` but I can't find where it goes | Tap it — a route can run more than one distinct stop pattern (37 of Rapid KL's 136 timetabled routes run two, one runs three), so it may appear as more than one expander with different titles. Each opens to the full stop sequence with journey times from the stop you tapped |
 | A route under `Serves:` shows no departure time, only "runs to a headway" | That route publishes no `frequencies.txt` start time to compute a departure from, so the app says it runs to a headway rather than inventing a time. It does not show the headway interval either — that figure is not read from the feed, so consult the operator's published frequency. This is the same headway-honesty rule the arrival list already follows, see *No lateness on a headway service* under Design Decisions |
 | A route's journey times don't match how long the trip takes at rush hour | The stop sequence shows one representative trip's times — patterns are grouped by their stop sequence, and the times come from whichever of that pattern's trips appears first in the feed. Most Rapid KL trips (2,099 of 2,102) are headway services whose stop times are a template rather than a time-of-day schedule, so there is usually only one set of times to show; where a route does publish distinct peak and off-peak timings, only one is displayed |
@@ -487,6 +560,12 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 - [x] Routes at a stop — the tapped-stop panel names every route the timetable says calls there,
       whether or not a bus is currently running, and each opens to its full stop sequence with
       journey times from the tapped stop
+- [x] The map, your location marker, the stop rings and the tapped-stop panel survive a region
+      reporting zero vehicles — none of them need a live vehicle to render
+- [x] Progressive nearby-stop search (800 m, then 1500 m) with a cross-region fallback that names
+      a region that does have stops near you when neither radius finds one
+- [x] Route search by livery name — a small hand-maintained alias table (e.g. `GOKL14`) resolves
+      to the route the feed actually publishes, disclosed whenever it's used
 
 > **Not planned: a full route planner.** Origin→destination journey planning is well served
 > by Google Maps and this app would not improve on it. The gap worth filling is the opposite

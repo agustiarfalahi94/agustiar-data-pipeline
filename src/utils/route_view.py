@@ -97,6 +97,11 @@ def pattern_label(stops, headsign=''):
     if not stops:
         return ''
     first, last = stops[0], stops[-1]
+    if len(stops) == 1:
+        # A single-stop pattern also has first == last, but there is no
+        # circuit to describe -- "loop from X" would claim a return trip
+        # that never happens.
+        return first.get('stop_name', '')
     if first.get('stop_id') == last.get('stop_id'):
         return f"loop from {first.get('stop_name', '')}"
     return f"to {last.get('stop_name', '')}"
@@ -115,7 +120,8 @@ def _running_minutes(stops):
 
 def pattern_titles(patterns, headsigns):
     """
-    One title per pattern, in the same order, guaranteed unique.
+    One title per pattern, in the same order, unique among the patterns
+    passed in this one call.
 
     Two patterns of the same route rendering as two identical headings would
     leave a rider unable to tell which one they had opened. Uniqueness is
