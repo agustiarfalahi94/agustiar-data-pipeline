@@ -734,10 +734,29 @@ def show():
     # would jump the camera to the region mean for what is usually a typo — the
     # opposite of the sticky-viewport intent. Only a search that actually filtered
     # the map is worth moving for.
+    #
+    # Gaining or losing the vehicles themselves is a change of what is being
+    # shown, exactly like a region switch, and it is the third trigger for the
+    # same reason as the other two. During an outage `map_centre` falls back to
+    # the user's location, so this block now runs where the early return used to
+    # stop it — and it writes the bookkeeping below. Without a vehicles term the
+    # render that recovered the feed would see no change at all, leave the camera
+    # parked on the user, and draw the buses off-screen under a "Showing N active
+    # vehicles" caption: the banner-over-an-empty-map failure this paragraph
+    # exists to prevent, arriving by a route it could not anticipate.
+    #
+    # A remembered flag rather than simply not writing the bookkeeping while
+    # quiet: leaving `last_viewed_region` unwritten would keep `region_changed`
+    # true for *every* render of the outage, so each 20-second auto-refresh would
+    # yank the camera back to the user and fight any pan they made. Recording the
+    # state means only the transition moves the view.
     current_query = (route_query or '').strip().lower() if filter_active else ''
     region_changed = st.session_state.selected_region != st.session_state.get('last_viewed_region', None)
     query_changed = current_query != st.session_state.get('last_route_query', '')
-    if map_centre and (region_changed or query_changed):
+    had_vehicles = not no_vehicles
+    vehicles_changed = had_vehicles != st.session_state.get(
+        'last_viewed_had_vehicles', had_vehicles)
+    if map_centre and (region_changed or query_changed or vehicles_changed):
         st.session_state.map_view_state = {
             'latitude': map_centre[0],
             'longitude': map_centre[1],
@@ -746,6 +765,7 @@ def show():
         }
         st.session_state.last_viewed_region = st.session_state.selected_region
         st.session_state.last_route_query = current_query
+        st.session_state.last_viewed_had_vehicles = had_vehicles
 
     # Nearby stops, drawn beneath the vehicles. Resolved once here and reused
     # by the "Arrivals near you" panel below, so the map and the panel can

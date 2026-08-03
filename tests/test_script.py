@@ -3621,3 +3621,68 @@ def test_a_bus_selected_before_the_feed_went_quiet_does_not_break_the_page(monke
     live_map.show()   # must not raise
 
     assert 'has reported in the last' in _texts(st_stub.warning)
+
+
+def test_the_camera_follows_the_buses_when_a_quiet_region_recovers(monkeypatch):
+    # Two renders, because one cannot catch this. The quiet render centres on
+    # the user -- correctly, it is the only anchor there is -- but it also
+    # writes the bookkeeping that decides whether the *next* render re-centres.
+    # With that written and neither the region nor the search changed, the
+    # render where the feed came back left the camera on the user and drew the
+    # buses off-screen, beneath a "Showing N active vehicles" caption: exactly
+    # the banner-over-an-empty-map failure the re-centre rule exists to prevent.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(
+        monkeypatch, empty, df=_quiet_region_frame())
+    # Penang, far outside the selected KL region -- the reported case, "if my
+    # location is not inside the selected region".
+    st_stub.session_state['user_location'] = {'lat': 5.41, 'lon': 100.33, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+
+    live_map.show()
+    assert round(st_stub.session_state['map_view_state']['latitude'], 2) == 5.41, \
+        "the quiet render should anchor on the user; nothing else exists to anchor on"
+
+    # 20 seconds later the feed is back. Same region, same (empty) search --
+    # the user changed nothing, so only the vehicles returning can move the view.
+    recovered = pd.DataFrame({
+        'region': ['Rapid Bus KL', 'Rapid Bus KL'], 'vehicle_id': ['V1', 'V2'],
+        'latitude': [3.05, 3.07], 'longitude': [101.66, 101.68],
+        'bearing': [90.0, 90.0], 'speed': [10.0, 10.0],
+        'timestamp': [now, now], 'trip_id': ['T1', 'T2'],
+        'route_id': ['T5800', 'T5800'],
+        'freshness': ['fresh', 'fresh'], 'age_seconds': [5, 5],
+    })
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (recovered, {'total': 2, 'stale': 0, 'hidden': 0,
+                                     'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'))
+
+    live_map.show()
+
+    view = st_stub.session_state['map_view_state']
+    assert round(view['latitude'], 2) == 3.06, \
+        f"the camera stayed put while the buses were drawn off-screen: {view}"
+    assert round(view['longitude'], 2) == 101.67, view
+
+
+def test_a_quiet_region_does_not_yank_the_camera_back_on_every_refresh(monkeypatch):
+    # The other half of the same rule. Re-arming the trigger by simply never
+    # writing the bookkeeping would leave region_changed true for every render
+    # of the outage, so each 20-second auto-refresh would drag the viewport off
+    # wherever the user had panned to.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(
+        monkeypatch, empty, df=_quiet_region_frame())
+    st_stub.session_state['user_location'] = {'lat': 5.41, 'lon': 100.33, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+
+    live_map.show()
+    # The user pans away while the feed is still quiet.
+    st_stub.session_state['map_view_state']['latitude'] = 5.99
+    live_map.show()
+
+    assert st_stub.session_state['map_view_state']['latitude'] == 5.99, \
+        "an auto-refresh during an outage pulled the viewport back"
