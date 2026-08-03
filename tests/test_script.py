@@ -3797,3 +3797,92 @@ def test_the_region_scan_runs_only_at_the_dead_end(monkeypatch):
 
     monkeypatch.setattr(live_map.gtfs_static, 'find_regions_with_stops_near', explode)
     _render_live_map(monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: accept a flat api_key, and resolve the alias once before it reaches
+# either matcher.
+#
+# Two real failures. The owner's OpenRouteService key was pasted into
+# Streamlit Secrets as a single line, `api_key = 'eyJ...'`, with no section
+# header -- _ors_api_key read st.secrets['routing']['api_key'], and the
+# deliberately broad except swallowed the miss, so walk times stayed
+# "(estimated)" with nothing saying why. And a rider reads "GOKL14" on the
+# front of the bus; the feed publishes that route as PAVILION BUKIT JALIL
+# (PAVBJ) -- no "GOKL" route exists anywhere in the feed.
+# ---------------------------------------------------------------------------
+
+def test_secrets_are_read_from_the_sectioned_form(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setattr(live_map, '_config', None)
+    live_map.st.secrets = {'routing': {'api_key': 'SECTIONED'}}
+    assert live_map._ors_api_key() == 'SECTIONED'
+
+
+def test_secrets_are_also_read_from_a_flat_api_key(monkeypatch):
+    # A single pasted line is what a reader reaches for, and the miss was
+    # silent: walk times stayed "(estimated)" with nothing saying why.
+    from app_pages import live_map
+    monkeypatch.setattr(live_map, '_config', None)
+    live_map.st.secrets = {'api_key': 'FLAT'}
+    assert live_map._ors_api_key() == 'FLAT'
+
+
+def test_the_sectioned_form_wins_when_both_are_present(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setattr(live_map, '_config', None)
+    live_map.st.secrets = {'routing': {'api_key': 'SECTIONED'}, 'api_key': 'FLAT'}
+    assert live_map._ors_api_key() == 'SECTIONED'
+
+
+def test_no_secret_in_either_form_returns_none(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setattr(live_map, '_config', None)
+    live_map.st.secrets = {}
+    assert live_map._ors_api_key() is None
+
+
+def test_searching_the_branding_finds_the_published_route(monkeypatch):
+    # GOKL14 is painted on the bus; the feed calls it PAVILION BUKIT JALIL.
+    #
+    # Note: the brief's `lambda df, q: seen.setdefault('query', q) or df`
+    # cannot pass -- dict.setdefault returns the value it just set (truthy),
+    # so the `or df` never triggers and the stub returns the query string in
+    # place of the dataframe, breaking `df_filtered.empty` regardless of
+    # aliasing. Rewritten below to record the query and return `df`
+    # unchanged, which is the behaviour the brief was reaching for.
+    from app_pages import live_map
+    seen = {}
+
+    def fake_filter(df, q):
+        seen['query'] = q
+        return df
+
+    monkeypatch.setattr(live_map.data_processor, 'filter_by_route', fake_filter)
+    st_stub = _render_live_map(monkeypatch, route_query='GOKL14')
+    assert seen['query'] == 'PAVILION BUKIT JALIL (PAVBJ)'
+
+
+def test_an_alias_match_discloses_itself(monkeypatch):
+    from app_pages import live_map
+    st_stub = _render_live_map(monkeypatch, route_query='GOKL14')
+    said = _texts(st_stub.caption) + _texts(st_stub.info) + _texts(st_stub.markdown)
+    assert 'GOKL14' in said and 'PAVILION BUKIT JALIL' in said, \
+        "a hand-written alias must not pass itself off as feed data"
+
+
+def test_a_real_route_name_is_not_rewritten_or_disclosed(monkeypatch):
+    # T580 is a real short name in the feed -- the alias table must not touch
+    # it, and nothing should claim it came from a hand-written mapping.
+    from app_pages import live_map
+    seen = {}
+
+    def fake_filter(df, q):
+        seen['query'] = q
+        return df
+
+    monkeypatch.setattr(live_map.data_processor, 'filter_by_route', fake_filter)
+    st_stub = _render_live_map(monkeypatch, route_query='T580')
+    assert seen['query'] == 'T580'
+    said = _texts(st_stub.caption) + _texts(st_stub.info) + _texts(st_stub.markdown)
+    assert 'is the name on the bus' not in said

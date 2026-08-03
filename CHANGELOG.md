@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-08-03
+
+### Fixed
+- **A pasted OpenRouteService key with no `[routing]` section header is no longer silently
+  ignored.** `_ors_api_key` now also reads a flat top-level `api_key`, which is what a reader
+  reaches for when pasting a single copied line into Streamlit Secrets. The sectioned `[routing]`
+  form stays canonical and wins when both are present; a missing key in either form still returns
+  `None` with no network call. Previously, a flat key failed indistinguishably from having no key
+  configured at all — every walk time stayed `(estimated)` with nothing saying why
+- **Route search now finds a route by the name painted on the bus, not just the name the feed
+  publishes.** `GOKL14` is Rapid KL's livery for the route the feed calls `PAVILION BUKIT JALIL
+  (PAVBJ)`; no `GOKL` route exists anywhere in the feed. The Live Map now resolves the query once,
+  via `gtfs_static.resolve_route_alias`, before it reaches either the vehicle filter or the
+  region-lookup that decides why a search found nothing — so the two can never disagree about what
+  was actually searched. A match through the hand-maintained alias table always discloses itself
+  with a caption naming both the searched term and the resolved route, so a guess from that table
+  is never presented as feed data. A real feed name (e.g. `T580`) is never rewritten and produces
+  no such caption
+
 ## [2.9.0] - 2026-08-02
 
 ### Added

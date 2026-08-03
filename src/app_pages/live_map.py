@@ -48,10 +48,18 @@ def _ors_api_key():
     key = getattr(_config, 'ORS_API_KEY', None)
     if key:
         return key
-    try:
-        return st.secrets['routing']['api_key'] or None
-    except Exception:
-        return None
+    # Both spellings. The sectioned form is documented and wins; the flat form
+    # is what a reader reaches for when pasting one line, and getting it wrong
+    # failed silently and indistinguishably from having no key at all.
+    for get in (lambda: st.secrets['routing']['api_key'],
+                lambda: st.secrets['api_key']):
+        try:
+            value = get()
+        except Exception:
+            continue
+        if value:
+            return value
+    return None
 
 
 def _walk_label(entry):
@@ -565,7 +573,19 @@ def show():
     # already on screen names the real cause — "T580 is not a route in Rapid Bus
     # KL" on top of it would point the user at the wrong thing entirely.
     if not no_vehicles and route_query and route_query.strip():
-        df_filtered = data_processor.filter_by_route(df_map, route_query)
+        # Resolved once, here, and passed to every consumer below. Resolving
+        # inside data_processor.filter_by_route or gtfs_static.region_has_route
+        # instead would leave the other matcher disagreeing with it — one
+        # searching "GOKL14", the other "PAVILION BUKIT JALIL (PAVBJ)".
+        # data_processor stays unaware of aliases entirely.
+        resolved_query, alias_source = gtfs_static.resolve_route_alias(route_query)
+        if alias_source:
+            # A hand-written guess must never be presented as feed data — say
+            # plainly that this mapping is the app's own, not the operator's.
+            st.caption(
+                f"“{alias_source}” is the name on the bus; the feed publishes "
+                f"this route as **{resolved_query}**.")
+        df_filtered = data_processor.filter_by_route(df_map, resolved_query)
         if df_filtered.empty:
             # Leave the map unfiltered: a blank map cannot be told apart from
             # a bad search term.
@@ -573,7 +593,7 @@ def show():
             # Naming the region matters here. "No live vehicles found on 't580'"
             # is indistinguishable from a broken search when the region silently
             # defaulted to somewhere T580 does not run.
-            q = route_query.strip()
+            q = resolved_query
             if agency_slug and gtfs_static.region_has_route(agency_slug, q):
                 st.warning(
                     f"**{q}** runs in {selected_region}, but no vehicles are "
@@ -600,7 +620,7 @@ def show():
         else:
             df_map = df_filtered
             filter_active = True
-            filter_label = route_query.strip()
+            filter_label = resolved_query
             matched = sorted(df_map['route_display'].unique())
             matched_label = ', '.join(matched[:3]) + ('…' if len(matched) > 3 else '')
             st.success(f"Showing {len(df_map)} vehicle(s) on {matched_label}")

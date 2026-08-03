@@ -23,6 +23,14 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
 - **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
+- **🎨 Search by what's painted on the bus** — a rider reads `GOKL14` on the front of the vehicle,
+  but the feed publishes that route as `PAVILION BUKIT JALIL (PAVBJ)`; no `GOKL` route exists
+  anywhere in the feed, the connection lives only on the livery. Searching `GOKL14` resolves it to
+  the published name via a small hand-maintained table and shows a caption saying so —
+  *"'GOKL14' is the name on the bus; the feed publishes this route as **PAVILION BUKIT JALIL
+  (PAVBJ)**."* — so a guess from this table is never mistaken for feed data. Only names in that
+  table are ever rewritten; searching a real feed name (`T580`) behaves exactly as before with no
+  such caption
 - **📍 Arrivals near you** — with your location set, see nearby stops within 800 m (straight-line)
   and the next buses to each, each with a route-first, labelled line: `Route T580 → Awan Besar ·
   arrives ~6 min · 2 min late · position 3 min old`. Up to five stops are shown, those with a bus
@@ -220,6 +228,12 @@ list = ["Rapid Bus KL", "KTM Berhad"]
 [routing]
 api_key = "your-openrouteservice-key"
 ```
+
+The sectioned `[routing]` form above is canonical — use it. A flat `api_key = "..."` at the top
+level (no `[routing]` header) is also accepted as a fallback, because that is what a reader pasting
+a single copied line tends to produce; if both are present, `[routing]` wins. Getting the section
+header wrong used to fail silently and indistinguishably from having no key configured at all —
+every walk time stayed `(estimated)` with nothing saying why.
 
 ---
 
