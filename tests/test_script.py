@@ -3769,6 +3769,60 @@ def test_the_stop_search_does_not_widen_when_the_first_radius_finds_stops(monkey
         "widening when the near search succeeded costs a second scan for nothing"
 
 
+def test_the_tapped_bus_panel_follows_the_widened_radius(monkeypatch):
+    """
+    The tapped-bus panel used to hard-code NEARBY_STOP_RADIUS_M, so with the
+    widened radius in force it denied a bus the panel directly below it was
+    listing: the map drew rings at 1200 m, "Arrivals near you" showed a bus en
+    route to one of them, and tapping that bus answered "V1 does not come
+    within 800 m of you on its current trip". Two panels, one bus, opposite
+    answers.
+
+    The trip here has no stop inside 800 m and two between 800 m and 1500 m,
+    which is exactly the state that produced the contradiction.
+    """
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+
+    # ~1200 m north of the user: outside the primary radius, inside the wide
+    # one, so the widened search is what puts it on the map at all.
+    far_stop = {'stop_id': 'S1', 'stop_name': 'FAR STOP',
+                'stop_lat': 3.1508, 'stop_lon': 101.68, 'distance_m': 1202.0}
+
+    def stops_near(slug, lat, lon, radius_m=800, limit=5):
+        return [] if radius_m <= live_map.NEARBY_STOP_RADIUS_M else [dict(far_stop)]
+
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', stops_near)
+
+    offset_seconds = int(live_map.UTC_OFFSET_HOURS) * 3600
+    local_seconds_of_day = (now + offset_seconds) % 86400
+    trip_stops = [
+        # ~1000 m north: the stop the bus is at now, also beyond 800 m.
+        {'stop_id': 'S0', 'stop_name': 'FAR ORIGIN', 'stop_lat': 3.1490,
+         'stop_lon': 101.68, 'arrival_seconds': local_seconds_of_day},
+        dict(far_stop, arrival_seconds=local_seconds_of_day + 300),
+    ]
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: trip_stops)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: 'Terminal X')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+
+    live_map.show()
+
+    said = _texts(st_stub.info) + _texts(st_stub.caption) + _texts(st_stub.markdown)
+    # Not a blanket ban on the string "800 m": the Arrivals panel legitimately
+    # says "Nothing within 800 m — showing stops up to 1500 m" here. It is this
+    # panel's own denial that must not quote it.
+    assert f"does not come within {live_map.NEARBY_STOP_RADIUS_M} m" not in said, \
+        f"the tapped-bus panel still quotes the primary radius: {said!r}"
+    assert 'does not come within' not in said, \
+        f"a bus reaching a stop the panel below lists was denied: {said!r}"
+    assert '**Arrives** FAR STOP' in said, \
+        f"the arrival at the widened-radius stop was not rendered: {said!r}"
+
+
 def test_the_dead_end_names_regions_that_do_have_stops_near_you(monkeypatch):
     from app_pages import live_map
     monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',

@@ -1055,21 +1055,29 @@ def show():
                     f"so its arrival cannot be estimated."
                 )
             else:
-                # Bounded by the same radius as the panel below. Unbounded,
-                # "your nearest stop on this trip" could name one 6 km away
-                # and quote a 75-minute walk to it, which is not an answer to
-                # the question being asked.
+                # Bounded by the radius the panel below actually applied, not
+                # by the primary one: when the stop search widened to
+                # NEARBY_STOP_WIDE_RADIUS_M, the map draws rings and the
+                # Arrivals panel lists buses at stops beyond 800 m, and this
+                # panel saying a bus "does not come within 800 m" about one of
+                # those buses is the cross-panel contradiction ARRIVALS_PER_STOP
+                # was made a single constant to prevent. Reading the resolved
+                # radius means the message quotes the bound by construction.
+                #
+                # Bounded at all because unbounded, "your nearest stop on this
+                # trip" could name one 6 km away and quote a 75-minute walk to
+                # it, which is not an answer to the question being asked.
                 nearby = [
                     dict(s, distance_m=d) for s, d in (
                         (s, eta.haversine_m(loc['lat'], loc['lon'],
                                             s['stop_lat'], s['stop_lon']))
                         for s in stops)
-                    if d <= NEARBY_STOP_RADIUS_M
+                    if d <= _nearby_radius_used
                 ]
                 if not nearby:
                     st.info(
                         f"Vehicle {picked} does not come within "
-                        f"{NEARBY_STOP_RADIUS_M} m of you on its current trip."
+                        f"{_nearby_radius_used} m of you on its current trip."
                     )
                 else:
                     arrivals, _ = eta.arrivals_for_stops(

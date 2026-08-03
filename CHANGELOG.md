@@ -58,6 +58,12 @@ did with it was ours.
   Bus KL has 15 stops within that same 800 m and the app already knew it. The panel now lists the
   regions `find_regions_with_stops_near` found, nearest first, e.g. *"Rapid Bus KL — 15 stops,
   nearest ~152 m"*, so there is somewhere to go instead of a dead end
+- **The tapped-bus panel now follows the widened radius too.** The progressive search below widens
+  to 1500 m when 800 m finds nothing, but this panel kept its own hard-coded 800 m — so with stops
+  found at 1200 m, the map drew rings there, *"Arrivals near you"* listed a bus en route to one of
+  them, and tapping that same bus answered *"Vehicle V1 does not come within 800 m of you on its
+  current trip"*. Two panels, one bus, opposite answers. The panel now reads the radius that was
+  actually applied, so the bound it enforces and the number it quotes are the same by construction
 
 ### Added
 - `gtfs_static.find_regions_with_stops_near(lat, lon, radius_m, exclude_slug, limit)` — which other

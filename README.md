@@ -54,7 +54,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   below the map with that stop's name, distance, walk time, and the buses en route to it. Tap a bus
   on the map instead to see when that specific vehicle reaches your nearest stop — the panel states
   the same facts as the stop list for the same bus (destination, arrival, lateness, position age),
-  only as labelled lines. The last tap wins between a stop panel and a bus panel. Lateness is shown
+  only as labelled lines, and is bounded by the same radius the stop list actually searched, so the
+  two panels can never disagree about whether a bus comes near you. The last tap wins between a stop panel and a bus panel. Lateness is shown
   only where the feed actually publishes a timetabled start time — almost
   every Rapid Bus KL trip runs to a headway instead, and for those no lateness is claimed (see *No
   lateness on a headway service* under Design Decisions). While a route search is active the panel
