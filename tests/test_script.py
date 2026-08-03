@@ -3660,6 +3660,39 @@ def test_the_map_still_renders_when_the_region_has_no_vehicles(monkeypatch):
     assert 'has reported in the last' in said, "the cause must still be named"
 
 
+def test_a_cleared_bus_token_expires_even_on_a_render_with_no_vehicles(monkeypatch):
+    """
+    "One render, not forever" — but the pop sat inside the `no_vehicles`
+    guard, so a feed that went quiet on the render right after a clear kept
+    the token alive for the whole outage, and the first re-tap of that bus
+    once it came back was swallowed. The stop-side pop was always outside its
+    guard; these two paths must behave the same way.
+    """
+    from app_pages import live_map
+
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(
+        monkeypatch, empty, df=_quiet_region_frame())
+    st_stub.session_state['user_location'] = {'lat': 3.06, 'lon': 101.67,
+                                              'accuracy': 10}
+    # A stop keeps the render off the dead-end region scan, which is not what
+    # this test is about.
+    monkeypatch.setattr(
+        live_map.gtfs_static, 'get_stops_near',
+        lambda *a, **k: [{'stop_id': 'S3', 'stop_name': 'GREEN AVENUE CONDOMINIUM',
+                          'stop_lat': 3.0621, 'stop_lon': 101.6706,
+                          'distance_m': 220.0}])
+    st_stub.session_state['cleared_vehicle_id'] = 'V1'
+    st_stub.session_state['cleared_stop_id'] = 'S3'
+
+    live_map.show()
+
+    assert 'cleared_vehicle_id' not in st_stub.session_state, \
+        "the dismissal token outlived its one render because the feed was quiet"
+    assert 'cleared_stop_id' not in st_stub.session_state, \
+        "the stop-side token must keep expiring on the same render"
+
+
 def test_nearby_stops_are_still_offered_when_no_vehicle_is_reporting(monkeypatch):
     st_stub = _live_map_no_vehicles(monkeypatch)
     said = _texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
@@ -4034,6 +4067,16 @@ def test_an_alias_match_discloses_itself(monkeypatch):
     said = _texts(st_stub.caption) + _texts(st_stub.info) + _texts(st_stub.markdown)
     assert 'GOKL14' in said and 'PAVILION BUKIT JALIL' in said, \
         "a hand-written alias must not pass itself off as feed data"
+    # Naming both routes is not the disclosure. Two names stated side by side
+    # read as two facts the app looked up, and the part that is actually a
+    # guess -- that these are the same route -- is precisely the part the feed
+    # cannot support. The caption has to attribute that link to this app.
+    assert 'by hand' in said, \
+        f"the caption does not say the mapping is hand-maintained: {said!r}"
+    assert 'not the operator' in said, \
+        f"the caption does not say whose mapping it is: {said!r}"
+    assert 'nothing in the feed confirms it' in said, \
+        f"the caption still implies the feed backs the link: {said!r}"
 
 
 def test_a_real_route_name_is_not_rewritten_or_disclosed(monkeypatch):

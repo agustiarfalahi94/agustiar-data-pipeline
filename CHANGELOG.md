@@ -79,6 +79,17 @@ did with it was ours.
   the process restarts. No separate negative-cache window was added: unlike `walking`, whose
   failure path has no value worth storing, this function's failure path returns a perfectly good
   `[]`, so memoising the result already is the negative cache
+- **The alias caption now says whose mapping it is.** It read *"'GOKL14' is the name on the bus;
+  the feed publishes this route as PAVILION BUKIT JALIL (PAVBJ)"* — two statements of fact, with
+  the one part that is actually a guess, that these are the same route, left unattributed between
+  them, so the sentence read as though the app had looked the link up. Nothing in the feed supports
+  it. The caption now names the link as this app's own hand-maintained one and says plainly that
+  the feed does not confirm it
+- **A dismissed bus is no longer un-tappable for the length of a feed outage.** The one-render
+  token that ignores a just-cleared vehicle was popped *inside* the "are any vehicles reporting"
+  guard, so if the feed went quiet on the render right after a clear, the token survived the whole
+  outage and the first re-tap of that bus after recovery was swallowed. It is now popped outside
+  the guard, matching the stop-side token, which always was
 
 ### Added
 - `gtfs_static.find_regions_with_stops_near(lat, lon, radius_m, exclude_slug, limit)` — which other

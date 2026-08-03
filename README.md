@@ -27,8 +27,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   but the feed publishes that route as `PAVILION BUKIT JALIL (PAVBJ)`; no `GOKL` route exists
   anywhere in the feed, the connection lives only on the livery. Searching `GOKL14` resolves it to
   the published name via a small hand-maintained table and shows a caption saying so —
-  *"'GOKL14' is the name on the bus; the feed publishes this route as **PAVILION BUKIT JALIL
-  (PAVBJ)**."* — so a guess from this table is never mistaken for feed data. Only names in that
+  *"'GOKL14' is the name on the bus. This app links it by hand to **PAVILION BUKIT JALIL
+  (PAVBJ)**, the route the feed publishes — that link is ours, not the operator's, and nothing in
+  the feed confirms it."* — so a guess from this table is never mistaken for feed data. Only names in that
   table are ever rewritten; searching a real feed name (`T580`) behaves exactly as before with no
   such caption
 - **🗺️ The map survives a quiet feed** — a region reporting zero vehicles (an upstream outage, or

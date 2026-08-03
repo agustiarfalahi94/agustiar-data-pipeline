@@ -582,9 +582,16 @@ def show():
         if alias_source:
             # A hand-written guess must never be presented as feed data — say
             # plainly that this mapping is the app's own, not the operator's.
+            #
+            # Stating only the two names left the one *unsourced* claim — that
+            # these are the same route — reading as though the app had looked it
+            # up. Nothing in the feed supports the link (see ROUTE_ALIASES), so
+            # the sentence has to own it.
             st.caption(
-                f"“{alias_source}” is the name on the bus; the feed publishes "
-                f"this route as **{resolved_query}**.")
+                f"“{alias_source}” is the name on the bus. This app links it "
+                f"by hand to **{resolved_query}**, the route the feed "
+                f"publishes — that link is ours, not the operator's, and "
+                f"nothing in the feed confirms it.")
         df_filtered = data_processor.filter_by_route(df_map, resolved_query)
         if df_filtered.empty:
             # Leave the map unfiltered: a blank map cannot be told apart from
@@ -952,6 +959,19 @@ def show():
     # between is untouched: it never needed a bus.
     picked = None
     fresh_vehicle_tap = None
+
+    # Belt and braces on clearing. Bumping the widget key should be enough to
+    # stop a stale payload coming back, but the payload is Streamlit's to
+    # deliver, so the dismissed vehicle is also ignored for exactly one render.
+    #
+    # One render, not forever: a permanent block would mean dismissing a bus
+    # silently cost the user the ability to tap it again. Popped out here rather
+    # than inside the guard below for exactly that reason — a feed that goes
+    # quiet on the render after a clear would otherwise keep the token alive for
+    # the whole outage, and the first re-tap of that bus after recovery would be
+    # swallowed. The stop-side pop below sits outside its guard the same way.
+    cleared = st.session_state.pop('cleared_vehicle_id', None)
+
     if not no_vehicles:
         try:
             objects = selection.selection.objects.get("vehicles", [])
@@ -971,13 +991,6 @@ def show():
         except (AttributeError, KeyError, IndexError, TypeError):
             picked = None
 
-        # Belt and braces on clearing. Bumping the widget key should be enough to
-        # stop a stale payload coming back, but the payload is Streamlit's to
-        # deliver, so the dismissed vehicle is also ignored for exactly one render.
-        #
-        # One render, not forever: a permanent block would mean dismissing a bus
-        # silently cost the user the ability to tap it again.
-        cleared = st.session_state.pop('cleared_vehicle_id', None)
         if cleared is not None and picked == cleared:
             picked = None
 
