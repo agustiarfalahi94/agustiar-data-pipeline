@@ -39,6 +39,18 @@ STATIC_API_SOURCES = {
     'myBAS Kuching':             'mybas-kuching',
 }
 
+# Hand-maintained, and not from any feed. A rider reads "GOKL14" on the front
+# of the bus; Prasarana publishes that route as PAVILION BUKIT JALIL (PAVBJ),
+# route_id S6060. Searched across all 137 Rapid KL routes, no GOKL route
+# exists anywhere in the data — the connection lives only on the vehicle's
+# livery, so nothing in the feed can be derived from it.
+#
+# The standing risk: route branding changes and this table will not notice.
+# Every match made through it is disclosed to the user for that reason.
+ROUTE_ALIASES = {
+    'GOKL14': 'PAVILION BUKIT JALIL (PAVBJ)',
+}
+
 STATIC_API_BASE_URL = 'https://api.data.gov.my/gtfs-static/'
 CACHE_TTL_SECONDS = 86400          # 24 hours
 REQUEST_TIMEOUT = 30
@@ -675,4 +687,59 @@ def get_stops_near(agency_slug: str, lat: float, lon: float,
         return []
 
     found.sort(key=lambda s: s['distance_m'])
+    return found[:limit]
+
+
+def resolve_route_alias(query):
+    """
+    Map a rider's wording onto the name the feed publishes.
+
+    Returns (resolved_query, alias_source). alias_source is the matched alias
+    when the table did the work and None otherwise, so the caller can disclose
+    the substitution — a hand-written guess must never be presented as feed
+    data.
+
+    A query that is not a key passes through untouched: the table is consulted,
+    never imposed, so a real route name can never be rewritten by it.
+    """
+    text = (query or '').strip()
+    if not text:
+        return '', None
+    canonical = ROUTE_ALIASES.get(text.upper())
+    if canonical is None:
+        return text, None
+    return canonical, text.upper()
+
+
+def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
+                                 limit=3):
+    """
+    Regions with stops near (lat, lon), closest stop first.
+
+    Called only when the selected region has no stops near the user — a dead
+    end where the app has already failed to help. Standing in Bukit Jalil with
+    KTM Berhad selected, the panel said only "no stops found", while Rapid Bus
+    KL had 15 within 800 m and the app knew it.
+
+    An agency whose timetable is missing or unreadable is skipped rather than
+    raising: one dead feed must not cost the user the other twelve answers.
+    """
+    found = []
+    for region, slug in STATIC_API_SOURCES.items():
+        if exclude_slug and slug == exclude_slug:
+            continue
+        try:
+            stops = get_stops_near(slug, lat, lon, radius_m=radius_m, limit=50)
+        except Exception:
+            continue
+        if not stops:
+            continue
+        found.append({
+            'region': region,
+            'slug': slug,
+            'count': len(stops),
+            'nearest_m': min(s['distance_m'] for s in stops),
+        })
+
+    found.sort(key=lambda r: r['nearest_m'])
     return found[:limit]

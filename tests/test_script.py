@@ -3360,3 +3360,95 @@ def test_last_vehicles_label_does_not_report_a_negative_age():
     # "buses last seen -2 min ago".
     from app_pages import network_health
     assert network_health._last_vehicles_label(1_000_060, 1_000_000) == 'buses reporting now'
+
+
+# ── Which other region has stops near me? ─────────────────────────────────
+
+def _stub_stops_near(monkeypatch, by_slug):
+    """by_slug: {slug: [(stop_id, distance_m), ...]}."""
+    from utils import gtfs_static
+
+    def fake(slug, lat, lon, radius_m=800, limit=5):
+        rows = by_slug.get(slug)
+        if rows is None:
+            raise OSError('no timetable for ' + slug)
+        return [{'stop_id': sid, 'stop_name': 'S' + sid, 'stop_lat': 3.0,
+                 'stop_lon': 101.0, 'distance_m': float(d)}
+                for sid, d in rows if d <= radius_m][:limit]
+
+    monkeypatch.setattr(gtfs_static, 'get_stops_near', fake)
+    return gtfs_static
+
+
+def test_region_scan_orders_regions_by_their_closest_stop(monkeypatch):
+    g = _stub_stops_near(monkeypatch, {
+        'prasarana?category=rapid-bus-kl': [('a', 152), ('b', 300)],
+        'prasarana?category=rapid-bus-mrtfeeder': [('c', 1200)],
+        'ktmb': [],
+    })
+    out = g.find_regions_with_stops_near(3.0586, 101.6739)
+    assert [r['region'] for r in out] == ['Rapid Bus KL', 'Rapid Bus MRT Feeder']
+    assert out[0]['nearest_m'] == 152
+    assert out[0]['count'] == 2
+
+
+def test_region_scan_excludes_the_region_already_selected(monkeypatch):
+    g = _stub_stops_near(monkeypatch, {
+        'prasarana?category=rapid-bus-kl': [('a', 152)],
+        'ktmb': [('k', 400)],
+    })
+    out = g.find_regions_with_stops_near(
+        3.0586, 101.6739, exclude_slug='prasarana?category=rapid-bus-kl')
+    assert [r['region'] for r in out] == ['KTM Berhad']
+
+
+def test_region_scan_skips_an_agency_whose_timetable_is_unavailable(monkeypatch):
+    # One dead feed must not cost the user the other twelve answers.
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]})   # every other slug raises
+    out = g.find_regions_with_stops_near(3.0586, 101.6739)
+    assert [r['region'] for r in out] == ['KTM Berhad']
+
+
+def test_region_scan_returns_nothing_when_no_region_has_stops(monkeypatch):
+    g = _stub_stops_near(monkeypatch, {'ktmb': [], 'mybas-melaka': []})
+    assert g.find_regions_with_stops_near(3.0586, 101.6739) == []
+
+
+def test_region_scan_caps_the_number_of_suggestions(monkeypatch):
+    g = _stub_stops_near(monkeypatch, {
+        'ktmb': [('a', 100)], 'mybas-melaka': [('b', 200)],
+        'mybas-johor': [('c', 300)], 'mybas-kuching': [('d', 400)],
+    })
+    assert len(g.find_regions_with_stops_near(3.0586, 101.6739, limit=2)) == 2
+
+
+# ── Route aliases ─────────────────────────────────────────────────────────
+
+def test_gokl14_resolves_to_the_route_the_feed_publishes():
+    # The bus is branded GOKL14; no GOKL route exists anywhere in the feed.
+    from utils import gtfs_static
+    resolved, source = gtfs_static.resolve_route_alias('GOKL14')
+    assert resolved == 'PAVILION BUKIT JALIL (PAVBJ)'
+    assert source == 'GOKL14', "the caller needs this to disclose the alias"
+
+
+def test_alias_lookup_is_case_and_space_insensitive():
+    from utils import gtfs_static
+    for q in ('gokl14', '  GoKL14 '):
+        resolved, source = gtfs_static.resolve_route_alias(q)
+        assert resolved == 'PAVILION BUKIT JALIL (PAVBJ)', q
+        assert source is not None
+
+
+def test_a_real_route_name_is_never_rewritten():
+    from utils import gtfs_static
+    resolved, source = gtfs_static.resolve_route_alias('T580')
+    assert resolved == 'T580'
+    assert source is None, "no disclosure when the feed's own name matched"
+
+
+def test_an_unknown_query_passes_through_untouched():
+    from utils import gtfs_static
+    assert gtfs_static.resolve_route_alias('ZZZ9') == ('ZZZ9', None)
+    assert gtfs_static.resolve_route_alias('') == ('', None)
+    assert gtfs_static.resolve_route_alias(None) == ('', None)
