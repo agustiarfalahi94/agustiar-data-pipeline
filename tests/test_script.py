@@ -3476,3 +3476,148 @@ def test_an_unknown_query_passes_through_untouched():
     assert gtfs_static.resolve_route_alias('ZZZ9') == ('ZZZ9', None)
     assert gtfs_static.resolve_route_alias('') == ('', None)
     assert gtfs_static.resolve_route_alias(None) == ('', None)
+
+
+# ── A region whose feed went quiet ────────────────────────────────────────
+#
+# Rapid Bus KL's realtime feed returned HTTP 200 with a 15-byte body and zero
+# entities while the MRT Feeder returned 102 vehicles the same second. The
+# page answered that by returning early, which deleted the map -- and with it
+# the user's own location marker, the nearby stop rings and the whole
+# tapped-stop panel. Stops come from the published timetable and never needed
+# a live vehicle to exist.
+
+def _quiet_region_frame(freshness='fresh'):
+    """
+    A df_live in which the selected region ('Rapid Bus KL') contributes no
+    drawable rows, while another region still reports.
+
+    Non-empty overall, deliberately: an entirely empty frame takes the
+    network-wide branch near the top of show(), which is a different message
+    about a different cause. Only a frame with rows for some other region
+    reaches the regional paths these tests exercise.
+
+    freshness='hidden' additionally puts a Rapid Bus KL row in the frame that
+    the hidden-vehicle filter then removes — the *second* regional emptiness,
+    with its own warning, reached only when the region did report.
+    """
+    rows = [{'region': 'Rapid Bus MRT Feeder', 'vehicle_id': 'M1',
+             'latitude': 3.14, 'longitude': 101.68, 'bearing': 90.0,
+             'speed': 10.0, 'timestamp': int(time.time()),
+             'trip_id': 'T9', 'route_id': 'T9000',
+             'freshness': 'fresh', 'age_seconds': 5}]
+    if freshness == 'hidden':
+        rows.append({'region': 'Rapid Bus KL', 'vehicle_id': 'V1',
+                     'latitude': 3.06, 'longitude': 101.67, 'bearing': 90.0,
+                     'speed': 0.0, 'timestamp': int(time.time()) - 4000,
+                     'trip_id': 'T1', 'route_id': 'T5800',
+                     'freshness': 'hidden', 'age_seconds': 4000})
+    return pd.DataFrame(rows)
+
+
+def _live_map_no_vehicles(monkeypatch, df=None, located=True):
+    """
+    Drive show() with the selected region reporting nothing that can be drawn.
+
+    `located` False drops the user's location, which is the one case where
+    there is genuinely nothing to put on a map at all.
+    """
+    from app_pages import live_map
+
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(
+        monkeypatch, empty, df=_quiet_region_frame() if df is None else df)
+    if located:
+        st_stub.session_state['user_location'] = {'lat': 3.06, 'lon': 101.67,
+                                                  'accuracy': 10}
+    monkeypatch.setattr(
+        live_map.gtfs_static, 'get_stops_near',
+        lambda *a, **k: [{'stop_id': 'S3', 'stop_name': 'GREEN AVENUE CONDOMINIUM',
+                          'stop_lat': 3.0621, 'stop_lon': 101.6706,
+                          'distance_m': 220.0}])
+    live_map.show()
+    return st_stub
+
+
+def test_the_map_still_renders_when_the_region_has_no_vehicles(monkeypatch):
+    # Rapid Bus KL's feed went quiet upstream. The map, the user's marker and
+    # the stop rings all vanished with it -- but stops come from the timetable
+    # and never needed a live vehicle.
+    st_stub = _live_map_no_vehicles(monkeypatch)
+    assert st_stub.pydeck_chart.called, "the deck was not built"
+    said = _texts(st_stub.warning)
+    assert 'has reported in the last' in said, "the cause must still be named"
+
+
+def test_nearby_stops_are_still_offered_when_no_vehicle_is_reporting(monkeypatch):
+    st_stub = _live_map_no_vehicles(monkeypatch)
+    said = _texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+    assert 'GREEN AVENUE' in said, "timetable stops disappeared with the buses"
+
+
+def test_no_vehicle_layer_is_built_when_there_are_no_vehicles(monkeypatch):
+    # Building a vehicles layer from an empty frame would need columns that
+    # were never computed.
+    st_stub = _live_map_no_vehicles(monkeypatch)
+    deck = st_stub.pydeck_chart.call_args[0][0]
+    ids = [l.id for l in deck.layers]
+    assert 'vehicles' not in ids, ids
+    assert 'nearby-stops' in ids, ids
+
+
+def test_the_user_marker_survives_a_region_with_no_vehicles(monkeypatch):
+    # "if my location is not inside the selected region, the bus stop near me
+    # also disappear" -- the marker and its accuracy circle are the user's own
+    # data and owe nothing to the feed.
+    st_stub = _live_map_no_vehicles(monkeypatch)
+    ids = [l.id for l in st_stub.pydeck_chart.call_args[0][0].layers]
+    assert 'user-location' in ids, ids
+    assert 'user-accuracy' in ids, ids
+
+
+def test_arrivals_panel_says_no_bus_is_coming_rather_than_vanishing(monkeypatch):
+    st_stub = _live_map_no_vehicles(monkeypatch)
+    said = _texts(st_stub.caption)
+    assert 'no bus currently en route to this stop' in said, said
+    assert 'Showing 0 active vehicles' not in said, \
+        "a vehicle count is not a claim this frame can support"
+
+
+def test_the_map_survives_a_region_whose_vehicles_are_all_too_old(monkeypatch):
+    # The second regional emptiness: the region *did* report, but every vehicle
+    # is older than the drawn window, so the hidden filter empties the frame.
+    # It returned early too, and cost the same map.
+    st_stub = _live_map_no_vehicles(monkeypatch, df=_quiet_region_frame('hidden'))
+    said = _texts(st_stub.warning)
+    assert 'No recent data for Rapid Bus KL' in said, said
+    assert '1 vehicle(s) last reported over' in said, said
+    ids = [l.id for l in st_stub.pydeck_chart.call_args[0][0].layers]
+    assert 'nearby-stops' in ids, ids
+    assert 'vehicles' not in ids, ids
+
+
+def test_a_quiet_region_with_no_location_renders_without_raising(monkeypatch):
+    # No vehicles and no location leaves nothing to draw and nothing to centre
+    # a camera on, so no deck is built -- and the selection readers below it
+    # must cope with that rather than take the page down.
+    st_stub = _live_map_no_vehicles(monkeypatch, located=False)
+    assert not st_stub.pydeck_chart.called, "there was nothing to put on a map"
+    assert 'has reported in the last' in _texts(st_stub.warning)
+    assert 'Locate Me' in _texts(st_stub.info)
+
+
+def test_a_bus_selected_before_the_feed_went_quiet_does_not_break_the_page(monkeypatch):
+    # The sticky selection is re-resolved against df_map on every render. An
+    # empty region frame carries no vehicle_id column to resolve it against,
+    # so the lookup has to be skipped, not attempted and caught.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(
+        monkeypatch, empty, df=_quiet_region_frame())
+    st_stub.session_state['user_location'] = {'lat': 3.06, 'lon': 101.67, 'accuracy': 10}
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [])
+
+    live_map.show()   # must not raise
+
+    assert 'has reported in the last' in _texts(st_stub.warning)

@@ -432,6 +432,12 @@ def show():
     region_row_count = int((df_live['region'] == selected_region).sum())
     df_map = data_processor.prepare_map_data(df_live, selected_region)
 
+    # A region with nothing to draw is not a dead page. Everything below that
+    # reads a vehicle column is skipped on this flag; everything that does not
+    # — the user's own marker, the nearby stop rings from the published
+    # timetable, the deck itself, the tapped-stop panel — still renders.
+    no_vehicles = False
+
     if df_map.empty:
         # "No valid data" was the original bug report's symptom and explains
         # nothing. Separate "the region reported nothing" from "it reported, but
@@ -445,7 +451,12 @@ def show():
                 f"{region_row_count} vehicle(s) reported for {selected_region}, but none "
                 "carried usable coordinates."
             )
-        return
+        # No return: stops come from the published timetable and do not need a
+        # live vehicle. Returning here deleted the map, the user's own location
+        # marker and the tapped-stop panel along with the buses — reported as
+        # "i cannot test to tap a bus stop in rapid KL area because the map
+        # disappear entirely as the data is empty."
+        no_vehicles = True
 
     # Hidden vehicles are counted but not drawn — a 7-day retention window would
     # otherwise fill the map with buses parked at depots overnight.
@@ -454,66 +465,27 @@ def show():
         hidden_count = int((df_map['freshness'] == 'hidden').sum())
         df_map = df_map[df_map['freshness'] != 'hidden'].copy()
 
-    if df_map.empty:
+    if not no_vehicles and df_map.empty:
         st.warning(
             f"No recent data for {selected_region} — "
             f"{hidden_count} vehicle(s) last reported over {drawn_label} ago."
         )
-        return
+        # Same reasoning as above: the buses are gone, the timetable is not.
+        no_vehicles = True
 
-    # Create formatted columns for tooltip display
-    df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
-    df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
-
-    # One fallback for a frame that never carried the freshness column (an
-    # older cached frame, or a caller that skipped classify_freshness): treat
-    # every row as fresh and full-strength.
-    freshness_col = df_map.get('freshness', pd.Series('fresh', index=df_map.index))
-
-    # Counted here, before any route search narrows df_map, so the caption under
-    # the map describes the region rather than the search result.
-    region_stale_count = int((freshness_col == 'stale').sum())
-
-    # Stale vehicles keep their colour but drop to ~35% alpha, so they read as
-    # present-but-uncertain rather than as a different kind of thing.
-    is_stale = freshness_col == 'stale'
-    df_map['dot_color'] = [
-        [51, 153, 255, 90] if s else [51, 153, 255, 255] for s in is_stale
-    ]
-    df_map['arrow_color'] = [
-        [255, 255, 255, 90] if s else [255, 255, 255, 255] for s in is_stale
-    ]
-
-    # The tooltip states *when* the vehicle last reported, not how long ago.
-    # A relative age ("12s ago") is recomputed on every render, and the deck
-    # spec — data included — is hashed into the chart's widget id, so a
-    # per-second string churns that id and loses any map selection with it.
-    # An absolute local clock time changes only when the bus genuinely reports
-    # again, which is the only time the deck should change identity.
-    df_map['last_report_display'] = [
-        (time.strftime('%H:%M:%S', time.gmtime(int(t) + int(UTC_OFFSET_HOURS) * 3600))
-         if pd.notna(t) else 'unknown')
-        + ('' if f == 'fresh' else ' ⚠️ stale')
-        for t, f in zip(pd.to_numeric(df_map['timestamp'], errors='coerce'), freshness_col)
-    ]
-
-    # Resolve human-readable route names from GTFS Static for all unique route_ids
+    # The region's timetable. Needed by the stop rings, the tapped-stop panel
+    # and "Arrivals near you", none of which involve a live vehicle, so it is
+    # resolved before the vehicle-only work below rather than inside it.
     agency_slug = gtfs_static.STATIC_API_SOURCES.get(selected_region, '')
-    if agency_slug and 'route_id' in df_map.columns:
-        unique_routes = df_map['route_id'].dropna().unique()
-        route_name_cache = {
-            rid: gtfs_static.get_route_name(agency_slug, rid)
-            for rid in unique_routes if rid
-        }
-        df_map['route_display'] = df_map['route_id'].map(
-            lambda rid: route_name_cache.get(rid) or rid or '—'
-        )
-    else:
-        df_map['route_display'] = df_map.get('route_id', '—').fillna('—')
 
-    # Filter to the searched route. Applied after route_display is resolved and
-    # before layers are built, so the layers, the view centring below, the
-    # caption and the Route Viewer all reflect the filtered set.
+    # Counted below, before any route search narrows df_map, so the caption
+    # under the map describes the region rather than the search result. Zero
+    # when nothing is reporting — the caption that reads it is skipped then.
+    region_stale_count = 0
+
+    # Whether a route search is narrowing the frame. Read by both arrival
+    # panels, which must keep their claims as narrow as their evidence, so it
+    # is defined whether or not the search below ever runs.
     filter_active = False
     # What the user typed, in their own case, kept for the copy that has to
     # narrow its claims to the filtered frame. `current_query` below is the
@@ -521,7 +493,68 @@ def show():
     # back at someone who typed "T580" is a small wrongness this copy does not
     # need to make.
     filter_label = ''
-    if route_query and route_query.strip():
+
+    # ── vehicle-derived columns ─────────────────────────────────────────────
+    # Every line in here reads a column that only exists because a vehicle
+    # reported it. With an empty region frame `prepare_map_data` returns a
+    # frame with no columns at all, so this is skipped wholesale rather than
+    # guarded line by line.
+    if not no_vehicles:
+        # Create formatted columns for tooltip display
+        df_map['speed_display'] = df_map['speed'].round(0).astype(int).astype(str)
+        df_map['bearing_display'] = df_map['bearing'].round(0).astype(int).astype(str)
+
+        # One fallback for a frame that never carried the freshness column (an
+        # older cached frame, or a caller that skipped classify_freshness): treat
+        # every row as fresh and full-strength.
+        freshness_col = df_map.get('freshness', pd.Series('fresh', index=df_map.index))
+
+        region_stale_count = int((freshness_col == 'stale').sum())
+
+        # Stale vehicles keep their colour but drop to ~35% alpha, so they read as
+        # present-but-uncertain rather than as a different kind of thing.
+        is_stale = freshness_col == 'stale'
+        df_map['dot_color'] = [
+            [51, 153, 255, 90] if s else [51, 153, 255, 255] for s in is_stale
+        ]
+        df_map['arrow_color'] = [
+            [255, 255, 255, 90] if s else [255, 255, 255, 255] for s in is_stale
+        ]
+
+        # The tooltip states *when* the vehicle last reported, not how long ago.
+        # A relative age ("12s ago") is recomputed on every render, and the deck
+        # spec — data included — is hashed into the chart's widget id, so a
+        # per-second string churns that id and loses any map selection with it.
+        # An absolute local clock time changes only when the bus genuinely reports
+        # again, which is the only time the deck should change identity.
+        df_map['last_report_display'] = [
+            (time.strftime('%H:%M:%S', time.gmtime(int(t) + int(UTC_OFFSET_HOURS) * 3600))
+             if pd.notna(t) else 'unknown')
+            + ('' if f == 'fresh' else ' ⚠️ stale')
+            for t, f in zip(pd.to_numeric(df_map['timestamp'], errors='coerce'), freshness_col)
+        ]
+
+        # Resolve human-readable route names from GTFS Static for all unique route_ids
+        if agency_slug and 'route_id' in df_map.columns:
+            unique_routes = df_map['route_id'].dropna().unique()
+            route_name_cache = {
+                rid: gtfs_static.get_route_name(agency_slug, rid)
+                for rid in unique_routes if rid
+            }
+            df_map['route_display'] = df_map['route_id'].map(
+                lambda rid: route_name_cache.get(rid) or rid or '—'
+            )
+        else:
+            df_map['route_display'] = df_map.get('route_id', '—').fillna('—')
+
+    # Filter to the searched route. Applied after route_display is resolved and
+    # before layers are built, so the layers, the view centring below, the
+    # caption and the Route Viewer all reflect the filtered set.
+    #
+    # There is nothing to narrow when no vehicle is reporting, and the warning
+    # already on screen names the real cause — "T580 is not a route in Rapid Bus
+    # KL" on top of it would point the user at the wrong thing entirely.
+    if not no_vehicles and route_query and route_query.strip():
         df_filtered = data_processor.filter_by_route(df_map, route_query)
         if df_filtered.empty:
             # Leave the map unfiltered: a blank map cannot be told apart from
@@ -625,58 +658,72 @@ def show():
     # deck.gl assigns tooltip.text via innerText, whose setter turns '\n'
     # into line breaks on its own, and the Deck's `white-space: pre-line`
     # style is belt-and-braces in case that ever changes.
-    df_map['tip_text'] = (
-        df_map['vehicle_id'].map(lambda v: _tip_text('Vehicle', v))
-        + '\n' + df_map['route_display'].map(lambda v: _tip_text('Route', v))
-        + '\n' + df_map['speed_display'].map(lambda v: _tip_text('Speed', v + ' km/h'))
-        + '\n' + df_map['bearing_display'].map(lambda v: _tip_text('Bearing', v + '°'))
-        + '\n' + df_map['last_report_display'].map(lambda v: _tip_text('Last reported', v))
-    )
-    vehicle_columns = [
-        'longitude', 'latitude', 'dot_color', 'vehicle_id', 'tip_text',
-    ]
-    vehicle_data = df_map[[c for c in vehicle_columns if c in df_map.columns]].copy()
+    vehicle_layers = []
+    if not no_vehicles:
+        df_map['tip_text'] = (
+            df_map['vehicle_id'].map(lambda v: _tip_text('Vehicle', v))
+            + '\n' + df_map['route_display'].map(lambda v: _tip_text('Route', v))
+            + '\n' + df_map['speed_display'].map(lambda v: _tip_text('Speed', v + ' km/h'))
+            + '\n' + df_map['bearing_display'].map(lambda v: _tip_text('Bearing', v + '°'))
+            + '\n' + df_map['last_report_display'].map(lambda v: _tip_text('Last reported', v))
+        )
+        vehicle_columns = [
+            'longitude', 'latitude', 'dot_color', 'vehicle_id', 'tip_text',
+        ]
+        vehicle_data = df_map[[c for c in vehicle_columns if c in df_map.columns]].copy()
 
-    icon_layer = pdk.Layer(
-        "ScatterplotLayer",
-        id="vehicles",
-        data=vehicle_data,
-        get_position=['longitude', 'latitude'],
-        get_fill_color='dot_color',
-        get_radius=100,
-        radius_min_pixels=8,
-        radius_max_pixels=15,
-        get_line_color=[255, 255, 255, 200],
-        line_width_min_pixels=2,
-        pickable=True,
-    )
+        icon_layer = pdk.Layer(
+            "ScatterplotLayer",
+            id="vehicles",
+            data=vehicle_data,
+            get_position=['longitude', 'latitude'],
+            get_fill_color='dot_color',
+            get_radius=100,
+            radius_min_pixels=8,
+            radius_max_pixels=15,
+            get_line_color=[255, 255, 255, 200],
+            line_width_min_pixels=2,
+            pickable=True,
+        )
 
-    # Create arrow layer
-    df_map['arrow_path'] = df_map.apply(
-        lambda row: create_arrow_paths(row['latitude'], row['longitude'], row['bearing'], size=0.0003),
-        axis=1,
-    )
+        # Create arrow layer
+        df_map['arrow_path'] = df_map.apply(
+            lambda row: create_arrow_paths(row['latitude'], row['longitude'], row['bearing'], size=0.0003),
+            axis=1,
+        )
 
-    arrow_layer = pdk.Layer(
-        "PathLayer",
-        id="vehicle-arrows",
-        data=df_map[['arrow_path', 'arrow_color']].copy(),
-        get_path='arrow_path',
-        get_color='arrow_color',
-        width_min_pixels=3,
-        width_max_pixels=5,
-        pickable=False,
-    )
+        arrow_layer = pdk.Layer(
+            "PathLayer",
+            id="vehicle-arrows",
+            data=df_map[['arrow_path', 'arrow_color']].copy(),
+            get_path='arrow_path',
+            get_color='arrow_color',
+            width_min_pixels=3,
+            width_max_pixels=5,
+            pickable=False,
+        )
+        vehicle_layers = [icon_layer, arrow_layer]
+
+    # Where the camera points when it is (re)centred. Vehicles give a mean
+    # position; with none reporting, the user's own location is the only anchor
+    # left — the region's stops are all around it, which is what the map is now
+    # for. Without either there is nothing to centre on and nothing to draw, so
+    # `map_centre` stays None and the deck below is skipped entirely.
+    if not no_vehicles:
+        map_centre = (df_map['latitude'].mean(), df_map['longitude'].mean())
+    else:
+        _here = st.session_state.get('user_location')
+        map_centre = (_here['lat'], _here['lon']) if _here else None
 
     # Preserve map view state during auto-refresh
-    if 'map_view_state' not in st.session_state:
+    if map_centre and 'map_view_state' not in st.session_state:
         st.session_state.map_view_state = {
-            'latitude': df_map['latitude'].mean(),
-            'longitude': df_map['longitude'].mean(),
+            'latitude': map_centre[0],
+            'longitude': map_centre[1],
             'zoom': DEFAULT_ZOOM,
             'pitch': 0,
         }
-    
+
     # Re-centre on a *change of what is being shown* — a different region, or a
     # different route search — and only then, so auto-refresh never yanks the
     # viewport away from wherever the user panned. Without the search half, a
@@ -690,22 +737,15 @@ def show():
     current_query = (route_query or '').strip().lower() if filter_active else ''
     region_changed = st.session_state.selected_region != st.session_state.get('last_viewed_region', None)
     query_changed = current_query != st.session_state.get('last_route_query', '')
-    if region_changed or query_changed:
+    if map_centre and (region_changed or query_changed):
         st.session_state.map_view_state = {
-            'latitude': df_map['latitude'].mean(),
-            'longitude': df_map['longitude'].mean(),
+            'latitude': map_centre[0],
+            'longitude': map_centre[1],
             'zoom': DEFAULT_ZOOM,
             'pitch': 0,
         }
         st.session_state.last_viewed_region = st.session_state.selected_region
         st.session_state.last_route_query = current_query
-    
-    view_state = pdk.ViewState(
-        latitude=st.session_state.map_view_state['latitude'],
-        longitude=st.session_state.map_view_state['longitude'],
-        zoom=st.session_state.map_view_state['zoom'],
-        pitch=st.session_state.map_view_state['pitch'],
-    )
 
     # Nearby stops, drawn beneath the vehicles. Resolved once here and reused
     # by the "Arrivals near you" panel below, so the map and the panel can
@@ -746,8 +786,8 @@ def show():
             )
 
     # ===== ADD USER LOCATION MARKER TO MAP =====
-    layers = ([stops_layer] if stops_layer else []) + [icon_layer, arrow_layer]
-    
+    layers = ([stops_layer] if stops_layer else []) + vehicle_layers
+
     if 'user_location' in st.session_state and st.session_state.user_location:
         user_loc = st.session_state.user_location
         
@@ -795,31 +835,49 @@ def show():
         else:
             layers.append(user_marker)
 
-    selection = st.pydeck_chart(
-        pdk.Deck(
-            map_style=map_style,
-            initial_view_state=view_state,
-            layers=layers,
-            # "text", not "html": deck.gl assigns tooltip.html via innerHTML
-            # (markup renders) but tooltip.text via innerText (markup would
-            # show as literal characters, which is exactly what plain text
-            # wants). white-space: pre-line is belt-and-braces — innerText's
-            # setter already turns the '\n' in tip_text into line breaks, and
-            # this CSS guarantees it even if that assignment ever changes.
-            tooltip={
-                "text": "{tip_text}",
-                "style": {"backgroundColor": "steelblue", "color": "white",
-                          "white-space": "pre-line"},
-            },
-        ),
-        selection_mode="single-object",
-        on_select="rerun",
-        # The generation counter is bumped when the user clears a selection, so
-        # the chart becomes a *new* widget and Streamlit stops handing back the
-        # stale payload. Without it, clearing appeared to do nothing whenever
-        # the deck spec was unchanged between renders.
-        key=f"live_map_deck_{st.session_state.get('deck_generation', 0)}",
-    )
+    # The deck is drawn whenever there is anything at all to put on it — a bus,
+    # a stop ring, or just the user's own marker. Only the case with none of
+    # those (no vehicles reporting *and* no location to anchor on) skips it, and
+    # then `selection` is None: every reader below already tolerates that, since
+    # both selection parsers treat a payload of the wrong shape as "nothing
+    # tapped".
+    #
+    # `map_centre` is what guarantees `map_view_state` was populated above; it
+    # cannot be None while `layers` is non-empty, and it is named here so that
+    # invariant is enforced rather than assumed.
+    selection = None
+    if layers and map_centre:
+        view_state = pdk.ViewState(
+            latitude=st.session_state.map_view_state['latitude'],
+            longitude=st.session_state.map_view_state['longitude'],
+            zoom=st.session_state.map_view_state['zoom'],
+            pitch=st.session_state.map_view_state['pitch'],
+        )
+        selection = st.pydeck_chart(
+            pdk.Deck(
+                map_style=map_style,
+                initial_view_state=view_state,
+                layers=layers,
+                # "text", not "html": deck.gl assigns tooltip.html via innerHTML
+                # (markup renders) but tooltip.text via innerText (markup would
+                # show as literal characters, which is exactly what plain text
+                # wants). white-space: pre-line is belt-and-braces — innerText's
+                # setter already turns the '\n' in tip_text into line breaks, and
+                # this CSS guarantees it even if that assignment ever changes.
+                tooltip={
+                    "text": "{tip_text}",
+                    "style": {"backgroundColor": "steelblue", "color": "white",
+                              "white-space": "pre-line"},
+                },
+            ),
+            selection_mode="single-object",
+            on_select="rerun",
+            # The generation counter is bumped when the user clears a selection,
+            # so the chart becomes a *new* widget and Streamlit stops handing
+            # back the stale payload. Without it, clearing appeared to do
+            # nothing whenever the deck spec was unchanged between renders.
+            key=f"live_map_deck_{st.session_state.get('deck_generation', 0)}",
+        )
 
     # Secondary view: one tapped vehicle, against the user's nearest stop on
     # its own trip.
@@ -829,34 +887,42 @@ def show():
     # state and the vehicle re-resolved from the current frame each render, so
     # the bus advances without the panel disappearing. The broad except guards
     # against a real selection payload not matching this assumed shape.
-    picked = None
-    try:
-        objects = selection.selection.objects.get("vehicles", [])
-        raw = objects[0].get("vehicle_id") if objects else None
-        # Coerce to str before it ever meets a pandas comparison below. A
-        # non-string id against an Arrow-backed string column raises
-        # NotImplementedError rather than comparing false, so an unexpected
-        # payload type would take the whole page down instead of matching
-        # nothing.
-        #
-        # An empty id is rejected for the same reason as in _picked_stop_id:
-        # `if picked:` below and `is not None` in the stop path must never be
-        # able to disagree about the same value. ingestion.py defaults a
-        # missing vehicle id to 'Unknown', so '' is not reachable here today —
-        # this keeps the two parse sites identical so it cannot become so.
-        picked = str(raw) if isinstance(raw, (str, int)) and str(raw) else None
-    except (AttributeError, KeyError, IndexError, TypeError):
-        picked = None
-
-    # Belt and braces on clearing. Bumping the widget key should be enough to
-    # stop a stale payload coming back, but the payload is Streamlit's to
-    # deliver, so the dismissed vehicle is also ignored for exactly one render.
     #
-    # One render, not forever: a permanent block would mean dismissing a bus
-    # silently cost the user the ability to tap it again.
-    cleared = st.session_state.pop('cleared_vehicle_id', None)
-    if cleared is not None and picked == cleared:
-        picked = None
+    # Resolved only when vehicles are reporting. Without them there is no
+    # `vehicles` layer to tap and no vehicle column to re-resolve a sticky
+    # selection against, so `picked` stays None and the panel below — which
+    # only ever runs `if picked:` — is skipped with it. The stop path in
+    # between is untouched: it never needed a bus.
+    picked = None
+    fresh_vehicle_tap = None
+    if not no_vehicles:
+        try:
+            objects = selection.selection.objects.get("vehicles", [])
+            raw = objects[0].get("vehicle_id") if objects else None
+            # Coerce to str before it ever meets a pandas comparison below. A
+            # non-string id against an Arrow-backed string column raises
+            # NotImplementedError rather than comparing false, so an unexpected
+            # payload type would take the whole page down instead of matching
+            # nothing.
+            #
+            # An empty id is rejected for the same reason as in _picked_stop_id:
+            # `if picked:` below and `is not None` in the stop path must never be
+            # able to disagree about the same value. ingestion.py defaults a
+            # missing vehicle id to 'Unknown', so '' is not reachable here today —
+            # this keeps the two parse sites identical so it cannot become so.
+            picked = str(raw) if isinstance(raw, (str, int)) and str(raw) else None
+        except (AttributeError, KeyError, IndexError, TypeError):
+            picked = None
+
+        # Belt and braces on clearing. Bumping the widget key should be enough to
+        # stop a stale payload coming back, but the payload is Streamlit's to
+        # deliver, so the dismissed vehicle is also ignored for exactly one render.
+        #
+        # One render, not forever: a permanent block would mean dismissing a bus
+        # silently cost the user the ability to tap it again.
+        cleared = st.session_state.pop('cleared_vehicle_id', None)
+        if cleared is not None and picked == cleared:
+            picked = None
 
     # Same belt and braces for the stop path: the widget-key bump on clear is
     # not trusted alone (see above), so the dismissed stop is also ignored for
@@ -864,18 +930,19 @@ def show():
     # repeated payload naming the just-cleared stop cannot be re-adopted.
     cleared_stop = st.session_state.pop('cleared_stop_id', None)
 
-    # Captured before the sticky re-resolution below overwrites `picked` with
-    # whatever vehicle is *currently* selected. Last-tap-wins must compare a
-    # fresh tap against a fresh tap -- comparing it against a sticky selection
-    # meant a bus stayed "picked" on every render after the one it was tapped
-    # on, so a stop tap could never win against it for as long as any bus
-    # remained selected.
-    fresh_vehicle_tap = picked
+    if not no_vehicles:
+        # Captured before the sticky re-resolution below overwrites `picked` with
+        # whatever vehicle is *currently* selected. Last-tap-wins must compare a
+        # fresh tap against a fresh tap -- comparing it against a sticky selection
+        # meant a bus stayed "picked" on every render after the one it was tapped
+        # on, so a stop tap could never win against it for as long as any bus
+        # remained selected.
+        fresh_vehicle_tap = picked
 
-    if picked:
-        st.session_state['selected_vehicle_id'] = picked
-    else:
-        picked = st.session_state.get('selected_vehicle_id')
+        if picked:
+            st.session_state['selected_vehicle_id'] = picked
+        else:
+            picked = st.session_state.get('selected_vehicle_id')
 
     # Last tap wins. Without this the slot below the map could hold a bus panel
     # and a stop panel at once, each answering a question the user did not ask
@@ -1213,17 +1280,25 @@ def show():
     # While a search is filtering the frame, len(df_map) is the match count, not
     # the region total — the success banner above already states it, so don't
     # restate the same number as though it were the whole region.
-    if hidden_count:
+    #
+    # Not when nothing is reporting: the only way there are hidden vehicles and
+    # nothing drawn is the all-hidden warning above, which already states this
+    # exact count and window. Twice is not clearer.
+    if hidden_count and not no_vehicles:
         st.caption(
             f"🚫 {hidden_count} vehicle(s) in {selected_region} hidden — "
             f"no update in over {drawn_label}."
         )
 
-    if not filter_active:
+    if not filter_active and not no_vehicles:
         # "active" here means what it means in the header metric: reported
         # within LIVE_STALE_SECONDS, i.e. drawn. The stale share is counted from
         # this region's frame, not network-wide, so it matches the dimmed dots
         # actually on screen.
+        #
+        # Skipped when nothing is reporting: "Showing 0 active vehicles" beneath
+        # a warning that already says why is a count nobody asked for, and
+        # `len(df_map)` on a frame with no columns is not a vehicle count at all.
         stale_note = (
             f" — {region_stale_count} of them dimmed, last reporting over {fresh_label} ago"
             if region_stale_count else ""
@@ -1339,7 +1414,11 @@ def show():
                         )
 
     with st.expander("🚌 Route Viewer", expanded=False):
-        vehicle_options = sorted(df_map['vehicle_id'].unique().tolist())
+        # An empty region frame carries no columns at all — prepare_map_data
+        # returns a bare DataFrame — so the vehicle_id lookup has to be asked
+        # for only when there is a vehicle to look up.
+        vehicle_options = (
+            [] if no_vehicles else sorted(df_map['vehicle_id'].unique().tolist()))
 
         if not vehicle_options:
             st.info("No vehicles available for the selected region.")
