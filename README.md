@@ -50,9 +50,12 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   each with a route-first, labelled line: `Route T580 → Awan Besar ·
   arrives ~6 min · 2 min late · position 3 min old`. Up to five stops are shown, those with a bus
   inbound first; if more than five have buses coming, the panel says how many were left out rather
-  than dropping them silently. Each nearby stop is also drawn on the map as a hollow gold ring so
-  its position is visible, not just its name, and it is tappable: tapping a stop ring opens a panel
-  below the map with that stop's name, distance, walk time, and the buses en route to it. Tap a bus
+  than dropping them silently. Each nearby stop is also drawn on the map as a gold ring, faintly
+  filled so the whole disc is tappable and not only its outline — deck.gl only picks drawn pixels,
+  so a fully hollow ring used to miss a tap that landed in its centre. Tapping anywhere in a stop
+  ring, or clicking its name in the list below, opens the same panel with that stop's name,
+  distance, walk time, and the buses en route to it; a selected stop's ring is drawn brighter and
+  thicker so it's clear which one is open. Tap a bus
   on the map instead to see when that specific vehicle reaches your nearest stop — the panel states
   the same facts as the stop list for the same bus (destination, arrival, lateness, position age),
   only as labelled lines, and is bounded by the same radius the stop list actually searched, so the
@@ -80,8 +83,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   straight-line estimate (`~5 min walk (estimated)`) otherwise or on any request failure. Straight
   lines can be badly wrong: measured from one KL neighbourhood, a stop 60 m away in a straight line
   was 634 m and about ten minutes on foot because of an uncrossable barrier between it and the
-  user. Every stop name in the panel also links to Google Maps for walking directions, which this
-  app deliberately does not compute itself
+  user. Each stop's name in the panel is a button that selects it (the same selection a ring tap
+  sets); a separate **Google Maps** link beside it opens walking directions, which this app
+  deliberately does not compute itself
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
   nothing disappears without explanation
@@ -359,6 +363,8 @@ Live Map      Data Table        Analytics     Network Health
 | **The map renders on an empty vehicle frame instead of returning early** | Three early returns in `live_map.py` used to delete the entire map — including the user's own location marker and the nearby-stop rings, neither of which depends on a vehicle existing — the moment a region reported zero usable vehicles. They are now a single `no_vehicles` flag: the deck, the location marker, the stop rings and the tapped-stop panel all still render; only the vehicle layer, its tooltip column, and the "Showing N active vehicles" caption are skipped, replaced by a warning naming which of three distinct causes applied |
 | **Region scan runs only at the dead end** | When neither the 800 m nor the 1500 m search finds a stop, `gtfs_static.find_regions_with_stops_near` walks every other region's timetable and returns the ones with stops nearby, nearest first — skipping any agency whose GTFS Static feed can't be read so one dead feed doesn't cost the other twelve answers. It only runs behind a spinner at the dead end, never on a normal render, because a fresh deploy may need to download timetables it has not cached yet. Its result is then memoised for five minutes per ~55 m location cell: the dead end is sticky — your location has not changed, so every 20-second auto-refresh walked straight back into it, and one agency endpoint that hangs costs 30 seconds of blocking I/O per refresh. Five minutes rather than the process lifetime because the cached answer records which agencies replied, and an agency skipped for a momentary read failure must not stay missing from the hint forever |
 | **Stops are tappable, not hoverable** | 2.6.0 shipped nearby-stop markers as visible but unpickable, because hover doesn't exist on the touch devices this app is used on. 2.7.0 makes the layer pickable instead of adding hover: tapping a stop ring opens a panel below the map with its name, distance, walk time, and buses en route, the same interaction the map already used for buses. Last tap wins between a bus panel and a stop panel |
+| **A stop ring is filled, faintly, so its whole face is tappable** | 2.6.0 drew stop rings hollow (`filled=False`) specifically so a stop reads as a different shape than a filled vehicle dot, and that reasoning still holds — the ring stays a ring. What changed: deck.gl only picks pixels an unfilled layer actually draws, so the hollow centre was dead space and a tap landing inside the ring, not on its outline, missed the stop entirely. The fill is a hit target, not a redesign, so its alpha is low (40 of 255) — bright enough that a later reader can't mistake it for doing nothing and delete it, faint enough that the stroke, not the fill, is still what the eye reads |
+| **A stop's name selects it, through the same session key a ring tap sets** | The name in "Arrivals near you" used to be a Google Maps link and nothing else — no way to select a stop without finding its ring on the map first. It is now a button that writes `st.session_state['selected_stop_id']`, the identical key a ring tap writes, so the last-tap-wins rule and the one-shot `cleared_stop_id` suppression both still govern a single selection rather than two. The Google Maps link moves beside the name rather than disappearing |
 | **Serves lists the timetable, not the live feed** | The arrival list answers "what bus is coming"; `Serves:` answers "what buses call here at all", built from a `{stop_id: {route_id, ...}}` index constructed in the same pass over `stop_times.txt` that already builds the trip-stops index, so listing every serving route costs no second parse of an 87,935-row file. Measured on Rapid Bus KL, KL2324 LRT AWAN BESAR is served by four routes and KL1743 GREEN AVENUE CONDOMINIUM by exactly one — `T580` — which the arrival list alone could go an entire refresh cycle without ever showing |
 | **One expander per stop pattern, never merged** | A route can run more than one distinct stop sequence — 37 of Rapid KL's 136 timetabled routes run two, one runs three. Merging them into a single sequence would silently pick one and misrepresent the rest, exactly the failure this feature exists to remove. `get_route_patterns` de-duplicates identical sequences and returns each distinct one with a representative trip_id; `pattern_titles` gives each a unique heading (stop count and running time separate most collisions, a numbered suffix settles the rest) |
 | **Journey times are anchored to the first occurrence of the tapped stop** | On a loop the tapped stop appears at both ends of the sequence. Anchoring to the later occurrence would make every earlier stop read as a negative offset. T580 is the measured case: anchored at LRT Awan Besar, KM1 Bukit Jalil reads `+1 min` and Green Avenue Condominium — 60 m away on the ground — reads `+32 min`, the same 40-minute loop on opposite legs |
@@ -526,7 +532,7 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 | Map not loading | Toggle map theme (light↔dark), check browser console |
 | Locate Me does nothing | Allow location permission in browser when prompted |
 | Route Viewer shows "No route data" | That vehicle's region may not have `shapes.txt` in its GTFS Static feed — historical trail is shown as fallback |
-| Tapping a nearby-stop marker does nothing | Stop rings are tappable — a tap opens a panel below the map with that stop's walk time and the buses en route to it. If nothing happens, the stop may have fallen out of range (800 m, or 1500 m if that's what was actually searched) since the map was drawn; press **📍 Locate Me** again. On a desktop pointer, hovering a stop also shows its name, but tap is the designed interaction — hover does not exist on the touch devices this app is used on |
+| Tapping a nearby-stop marker does nothing | Stop rings are tappable anywhere on their face, not only on the outline — a tap opens a panel below the map with that stop's walk time and the buses en route to it. If nothing happens, the stop may have fallen out of range (800 m, or 1500 m if that's what was actually searched) since the map was drawn; press **📍 Locate Me** again, or click the stop's name in "Arrivals near you" instead, which selects the same stop. On a desktop pointer, hovering a stop also shows its name, but tap is the designed interaction — hover does not exist on the touch devices this app is used on |
 | Walk times are labelled "(estimated)" | No API key is configured (or the request failed), so the figure is a straight-line estimate, not a routed one. A stop across an uncrossable barrier — a highway, a river, a fenced compound — will read as far nearer than it actually is. Set `ORS_API_KEY` — or a `[routing]` / flat `api_key` in Streamlit Secrets, see *Configuration* above — to get a real footpath figure instead. If a key *is* set, a failed lookup also stops further requests for 60 seconds, so walk times can stay estimated for up to a minute after the routing service recovers |
 | A "nearby" stop is further to walk to than it looks, or a closer one is missing | The 800/1500 m radius that decides which stops count as nearby is straight-line even when routing is configured — only the walk time shown for each already-selected stop is routed. The gap between crow-flight and footpath grows at the wider radius: one measured stop sits 60 m away by crow and 634 m on foot — over ten times the straight-line figure — so a stop listed at 1400 m may be a much longer walk than the number suggests. This is a known limitation, not a bug |
 | "No stops found" for the selected region | The app already tried 800 m and, finding nothing, 1500 m. If it still found nothing it scans every other region's timetable and names the ones that do have stops near you, with a stop count and distance — switch region above to see them. If no region has stops nearby, it says that plainly instead of an empty list |
@@ -557,8 +563,11 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 - [x] Arrivals near you — stop-centric ETAs derived from the published timetable
 - [x] Routed walk times to nearby stops (OpenRouteService), labelled `(estimated)` when no key is
       configured or a request fails
-- [x] Tappable nearby stops — tap a stop ring for its own panel below the map, same interaction as
-      tapping a bus
+- [x] Tappable nearby stops — tap anywhere on a stop ring (faintly filled so the whole face is a hit
+      target, not only the outline) for its own panel below the map, same interaction as tapping a
+      bus; clicking the stop's name in "Arrivals near you" selects the same stop
+- [x] Selected stop's ring is drawn brighter and thicker on the map, whether the selection came from
+      a ring tap or a name click
 - [x] Routes at a stop — the tapped-stop panel names every route the timetable says calls there,
       whether or not a bus is currently running, and each opens to its full stop sequence with
       journey times from the tapped stop

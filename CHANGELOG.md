@@ -5,7 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.10.0] - 2026-08-03
+## [2.11.0] - 2026-08-04
+
+Two complaints from testing in a Mac browser: *"sometimes i missed the click because my cursor is
+inside the ring, not in the ring line"*, and a nearby stop's name in "Arrivals near you" was a
+Google Maps link and nothing else — no way to say "this one, show me it" without first finding its
+ring on the map.
+
+### Added
+- **A stop's name in "Arrivals near you" now selects it.** It's a button that writes
+  `st.session_state['selected_stop_id']` — the identical key a ring tap writes — so it is a second
+  route into one selection, not a second selection: the last-tap-wins rule and the one-shot
+  `cleared_stop_id` suppression both still apply unchanged. The Google Maps link moves beside the
+  name rather than disappearing
+- **A selected stop's ring is drawn brighter and thicker** (white, 4px vs. the default gold, 2px),
+  whether the selection came from a ring tap or the new name button, so it's visible which stop is
+  open
+
+### Fixed
+- **A nearby-stop ring is now clickable across its whole face, not only its outline.** deck.gl only
+  picks pixels a layer actually draws; with the ring drawn hollow (`filled=False`), a tap landing in
+  its centre hit nothing. The ring is now filled too, at a low alpha (40 of 255) — visible enough
+  that a later reader can't mistake it for doing nothing and delete it, faint enough that the gold
+  stroke, not the fill, is still what the eye reads. The ring stays a ring: 2.6.0's reasoning for a
+  hollow shape over a filled dot (a stop must not read as a smaller bus) still holds and is
+  unchanged by this fix, only its "unfilled" half is corrected — the comment in `live_map.py` now
+  says both
 
 Rapid Bus KL's realtime feed went quiet upstream — confirmed at 12:49 on a Monday: `rapid-bus-kl`
 returned HTTP 200 with a 15-byte body and zero entities, while `rapid-bus-mrtfeeder` returned 102

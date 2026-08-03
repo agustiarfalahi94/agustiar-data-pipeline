@@ -1903,7 +1903,10 @@ def test_a_served_stop_beyond_the_nearest_few_is_still_shown(monkeypatch):
 
     live_map.show()
 
-    said = _texts(st_stub.markdown) + _texts(st_stub.caption)
+    # The stop name is a button label now, not markdown text (Task 1) --
+    # include it so this still tests "was the stop shown at all", not
+    # incidentally "was it shown as a link".
+    said = _texts(st_stub.markdown) + _texts(st_stub.caption) + _texts(st_stub.button)
     assert 'LRT AWAN BESAR' in said, \
         "the only served stop was dropped for being 8th-nearest"
 
@@ -1987,11 +1990,17 @@ def test_stop_names_link_to_google_maps(monkeypatch):
     assert '3.058659,101.673981' in said
 
 
-def test_nearby_stops_layer_is_a_hollow_ring_not_a_filled_dot(monkeypatch):
+def test_nearby_stops_layer_is_a_stroked_ring_not_a_vehicle_dot(monkeypatch):
     """Buses are filled ScatterplotLayer dots. A stop drawn the same way (just
     a different colour/radius) reads as a smaller bus, not a different kind
-    of thing. The stops layer must be stroked and unfilled so its SHAPE, not
-    only its colour, differs from a vehicle."""
+    of thing. The stops layer must stay stroked so its SHAPE, not only its
+    colour, differs from a vehicle.
+
+    Task 1 gave the ring a faint fill too, so a tap inside it is picked
+    (deck.gl does not pick the dead centre of an unfilled shape) -- that fill
+    is deliberately non-zero-but-faint, covered by
+    test_the_stop_ring_fill_is_faint_but_not_invisible and
+    test_stop_rings_are_clickable_across_their_whole_face, not here."""
     import pydeck as pdk
     from app_pages import live_map
 
@@ -2017,8 +2026,6 @@ def test_nearby_stops_layer_is_a_hollow_ring_not_a_filled_dot(monkeypatch):
     assert made_kwargs, "the nearby-stops layer was never constructed"
     assert made_kwargs.get('stroked') is True, \
         "stop markers must be outlined (stroked=True) to read as rings"
-    assert made_kwargs.get('filled') is False, \
-        "stop markers must not be filled, or they read as small bus dots"
 
 
 def test_the_stops_layer_is_tappable_and_carries_its_own_tooltip(monkeypatch):
@@ -3695,7 +3702,9 @@ def test_a_cleared_bus_token_expires_even_on_a_render_with_no_vehicles(monkeypat
 
 def test_nearby_stops_are_still_offered_when_no_vehicle_is_reporting(monkeypatch):
     st_stub = _live_map_no_vehicles(monkeypatch)
-    said = _texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+    # The stop name is a button label now, not markdown text (Task 1).
+    said = (_texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+            + _texts(st_stub.button))
     assert 'GREEN AVENUE' in said, "timetable stops disappeared with the buses"
 
 
@@ -3842,7 +3851,26 @@ def test_a_quiet_region_does_not_yank_the_camera_back_on_every_refresh(monkeypat
 # the region hint at the true dead end.
 # ---------------------------------------------------------------------------
 
-def _render_live_map(monkeypatch, route_query=''):
+# Captured at import time, before any test has had a chance to monkeypatch
+# it, so `_render_live_map` can tell "a caller already stubbed get_stops_near"
+# apart from "nobody has" -- see the comment inside the fixture.
+from utils import gtfs_static as _gtfs_static_module
+_REAL_GET_STOPS_NEAR = _gtfs_static_module.get_stops_near
+
+# The default nearby-stops fixture Task 1's tests drive when they don't
+# supply their own. 'S1' is the name a real click test names by label, so it
+# must be first (the panel's unserved-fill keeps scan order) and it must be
+# distinguishable from the rest for the highlight tests.
+_DEFAULT_NEARBY_STOPS = [
+    {'stop_id': 'S1', 'stop_name': 'KL1743 GREEN AVENUE CONDOMINIUM',
+     'stop_lat': 3.1405, 'stop_lon': 101.6805, 'distance_m': 120.0},
+    {'stop_id': 'S2', 'stop_name': 'KL1291 KM1 BUKIT JALIL',
+     'stop_lat': 3.1408, 'stop_lon': 101.6809, 'distance_m': 260.0},
+]
+
+
+def _render_live_map(monkeypatch, route_query='', selected_stop_id=None,
+                      pressed_button=None):
     """Drive live_map.show() through the stop-resolution and arrivals code:
     a selected region with vehicles, plus a known user_location, so the page
     reaches the stop-resolution and arrivals branches rather than exiting
@@ -3854,10 +3882,21 @@ def _render_live_map(monkeypatch, route_query=''):
     stub, defaulting to no active search. Task 4 reuses this with
     route_query='GOKL14'.
 
+    `selected_stop_id`, when given, seeds session_state['selected_stop_id']
+    before show() runs, as a ring tap would have left it. `pressed_button`,
+    when given, makes st.button(...) return True only for that label --
+    every other button (refresh, clear selection, the other stops) stays
+    False -- so a test can simulate clicking one particular stop's name.
+
     Callers monkeypatch `live_map.gtfs_static` (get_stops_near, and where
     relevant find_regions_with_stops_near) *before* calling this, since
     show() runs inside it; the stubbed `st` is returned so a test can read
-    the text mocks afterward.
+    the text mocks afterward. A caller that does not supply its own
+    get_stops_near gets _DEFAULT_NEARBY_STOPS instead of the real
+    (network-touching) lookup -- the identity check against
+    _REAL_GET_STOPS_NEAR is what lets a caller's own monkeypatch, applied
+    before this function runs, win over that default rather than being
+    clobbered by it.
     """
     from app_pages import live_map
 
@@ -3865,6 +3904,8 @@ def _render_live_map(monkeypatch, route_query=''):
     live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
     st_stub.text_input.return_value = route_query
     st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    if selected_stop_id is not None:
+        st_stub.session_state['selected_stop_id'] = selected_stop_id
     # A stop is only ever reached via nearby/_arrivals in these tests, never
     # via the tapped-vehicle trip lookup (the selection is always empty) --
     # but arrivals_for_stops still calls these for the one live vehicle, so
@@ -3872,6 +3913,11 @@ def _render_live_map(monkeypatch, route_query=''):
     monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
     monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
     monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: True)
+    if live_map.gtfs_static.get_stops_near is _REAL_GET_STOPS_NEAR:
+        monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                            lambda *a, **k: [dict(s) for s in _DEFAULT_NEARBY_STOPS])
+    if pressed_button is not None:
+        st_stub.button.side_effect = lambda label, *a, **k: label == pressed_button
 
     live_map.show()
     return st_stub
@@ -3892,7 +3938,9 @@ def test_the_stop_search_widens_when_the_first_radius_finds_nothing(monkeypatch)
 
     assert live_map.NEARBY_STOP_RADIUS_M in asked
     assert live_map.NEARBY_STOP_WIDE_RADIUS_M in asked
-    said = _texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+    # The stop name is a button label now, not markdown text (Task 1).
+    said = (_texts(st_stub.markdown) + _texts(st_stub.info) + _texts(st_stub.caption)
+            + _texts(st_stub.button))
     assert 'FAR STOP' in said
     assert str(live_map.NEARBY_STOP_WIDE_RADIUS_M) in said, \
         "the panel must name the radius it actually used"
@@ -4140,3 +4188,68 @@ def test_a_slow_region_scan_is_not_cached_already_expired(monkeypatch):
     assert calls['n'] == after_first, \
         "a slow scan was stored already expired, so the cache served nothing"
     assert [r['region'] for r in second] == ['KTM Berhad']
+
+
+# ---------------------------------------------------------------------------
+# Task 1: a hittable, highlightable ring and a clickable name
+# ---------------------------------------------------------------------------
+
+def test_stop_rings_are_clickable_across_their_whole_face(monkeypatch):
+    # deck.gl only picks drawn pixels. With filled=False the hollow centre was
+    # dead space, so a cursor inside the ring missed the stop entirely.
+    st_stub = _render_live_map(monkeypatch)
+    deck = st_stub.pydeck_chart.call_args_list[0][0][0]
+    stops = next(l for l in deck.layers if l.id == 'nearby-stops')
+    assert stops.filled is True, "the centre of the ring is not pickable"
+    assert stops.stroked is True, "the ring outline must survive the fill"
+
+
+def test_the_stop_ring_fill_is_faint_but_not_invisible(monkeypatch):
+    # A fully transparent fill invites a later reader to delete a fill that
+    # appears to do nothing -- and deleting it silently restores the dead centre.
+    st_stub = _render_live_map(monkeypatch)
+    deck = st_stub.pydeck_chart.call_args_list[0][0][0]
+    stops = next(l for l in deck.layers if l.id == 'nearby-stops')
+    alpha = stops.get_fill_color[3]
+    assert 0 < alpha < 120, alpha
+
+
+def test_the_selected_stop_ring_is_drawn_differently(monkeypatch):
+    st_stub = _render_live_map(monkeypatch, selected_stop_id='S1')
+    deck = st_stub.pydeck_chart.call_args_list[0][0][0]
+    rows = next(l for l in deck.layers if l.id == 'nearby-stops').data
+    picked = [r for r in rows if r['stop_id'] == 'S1']
+    others = [r for r in rows if r['stop_id'] != 'S1']
+    assert picked, "fixture must include the selected stop"
+    assert others, "fixture must include at least one other stop"
+    assert picked[0]['line_color'] != others[0]['line_color'] \
+        or picked[0]['line_width'] != others[0]['line_width']
+
+
+def test_stop_rings_match_when_nothing_is_selected(monkeypatch):
+    st_stub = _render_live_map(monkeypatch)
+    rows = next(l for l in st_stub.pydeck_chart.call_args_list[0][0][0].layers
+                if l.id == 'nearby-stops').data
+    assert len({tuple(r['line_color']) for r in rows}) == 1
+
+
+def test_clicking_a_stop_name_selects_that_stop(monkeypatch):
+    # The name used to be a Google Maps link and nothing else.
+    st_stub = _render_live_map(monkeypatch, pressed_button='KL1743 GREEN AVENUE CONDOMINIUM')
+    assert st_stub.session_state['selected_stop_id'] == 'S1'
+
+
+def test_the_google_maps_link_survives_and_is_no_longer_the_name(monkeypatch):
+    st_stub = _render_live_map(monkeypatch)
+    said = _texts(st_stub.markdown)
+    assert 'google.com/maps' in said
+    assert '[KL1743 GREEN AVENUE CONDOMINIUM](' not in said, \
+        "the name should be a control now, not the link"
+
+
+def test_each_stop_button_has_its_own_key(monkeypatch):
+    # Streamlit collides same-keyed widgets; five stops need five keys.
+    st_stub = _render_live_map(monkeypatch)
+    keys = [c.kwargs.get('key') for c in st_stub.button.call_args_list
+            if c.kwargs.get('key')]
+    assert len(keys) == len(set(keys)), keys

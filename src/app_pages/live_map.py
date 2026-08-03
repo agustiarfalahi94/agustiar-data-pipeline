@@ -815,6 +815,7 @@ def show():
     _loc = st.session_state.get('user_location')
     _nearby_stops = None
     _nearby_radius_used = NEARBY_STOP_RADIUS_M
+    _selected_stop_id = st.session_state.get('selected_stop_id')
     if _loc and agency_slug:
         _nearby_stops = gtfs_static.get_stops_near(
             agency_slug, _loc['lat'], _loc['lon'],
@@ -833,15 +834,30 @@ def show():
                        'stop_name': s['stop_name'],
                        'stop_lat': s['stop_lat'],
                        'stop_lon': s['stop_lon'],
-                       'tip_text': _tip_text('Stop', s['stop_name'])}
+                       'tip_text': _tip_text('Stop', s['stop_name']),
+                       'line_color': ([255, 255, 255, 255]
+                                      if s['stop_id'] == _selected_stop_id
+                                      else [255, 200, 60, 220]),
+                       'line_width': 4 if s['stop_id'] == _selected_stop_id else 2}
                       for s in _nearby_stops],
                 get_position=['stop_lon', 'stop_lat'],
-                # Hollow rings, not dots: buses are filled circles, so a stop
-                # must differ in shape and not only in colour — a smaller
-                # coloured dot reads as a smaller bus.
+                # Rings, not dots: buses are filled circles, so a stop must
+                # differ in shape and not only in colour — a smaller coloured
+                # dot reads as a smaller bus.
+                #
+                # Filled all the same, faintly. deck.gl discards the fragments
+                # inside an unfilled circle and picking follows the same
+                # discard, so a hollow ring is only clickable on its outline —
+                # a cursor resting in the middle of a stop missed it. The fill
+                # is a hit target, not a shape: the bright stroke is still what
+                # the eye reads. The alpha is deliberately non-zero, because a
+                # fully transparent fill looks like it does nothing and invites
+                # a later reader to remove it, restoring the dead centre.
                 stroked=True,
-                filled=False,
-                get_line_color=[255, 200, 60, 220],
+                filled=True,
+                get_fill_color=[255, 200, 60, 40],
+                get_line_color='line_color',
+                get_line_width='line_width',
                 line_width_min_pixels=2,
                 get_radius=40,
                 radius_min_pixels=5,
@@ -1464,8 +1480,17 @@ def show():
                         "https://www.google.com/maps/search/?api=1&query="
                         f"{stop['stop_lat']},{stop['stop_lon']}"
                     )
+                    # The name selects the stop; the Maps link keeps its old
+                    # job beside it. Same session key a ring tap sets, so this
+                    # is a second route into one selection, not a second
+                    # selection — the last-tap-wins rule and the one-shot clear
+                    # suppression both key off that single value.
+                    if st.button(stop['stop_name'], type="tertiary",
+                                 key=f"pick_stop_{stop['stop_id']}"):
+                        st.session_state['selected_stop_id'] = stop['stop_id']
+                        st.rerun()
                     st.markdown(
-                        f"**[{stop['stop_name']}]({maps_url})** "
+                        f"[Google Maps]({maps_url}) "
                         f"· ~{int(walk['distance_m'])} m · {_walk_label(walk)}"
                     )
                     rows = arrivals.get(stop['stop_id'], [])
