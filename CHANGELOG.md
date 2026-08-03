@@ -110,9 +110,9 @@ Deferred across the 2.7–2.10 reviews, swept in one pass:
 ### Known Limitations
 - **The widened 1500 m radius is still straight-line, and more wrong than the 800 m one was.** The
   gap between crow-flight and footpath grows with distance — one measured stop sits 60 m away by
-  crow and 634 m on foot. Routing corrects the walk time *displayed* for a stop once it is selected;
-  it does not correct *which* stops get selected in the first place. A stop listed at 1400 m may be
-  a 3 km walk
+  crow and 634 m on foot, over ten times the straight-line figure. Routing corrects the walk time
+  *displayed* for a stop once it is selected; it does not correct *which* stops get selected in the
+  first place. A stop listed at 1400 m may be a much longer walk than the number suggests
 
 ## [2.9.0] - 2026-08-02
 
