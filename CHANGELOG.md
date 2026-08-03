@@ -64,6 +64,21 @@ did with it was ours.
   them, and tapping that same bus answered *"Vehicle V1 does not come within 800 m of you on its
   current trip"*. Two panels, one bus, opposite answers. The panel now reads the radius that was
   actually applied, so the bound it enforces and the number it quotes are the same by construction
+- **The cross-region scan no longer re-runs every 20 seconds at a sticky dead end.**
+  `find_regions_with_stops_near` was the only all-agency walk in the codebase with no memoisation,
+  and the dead end it runs at does not clear itself — the user's location has not changed, so every
+  auto-refresh walked straight back into it. Warm that re-read fourteen cached ZIPs; cold it goes
+  `_load_zip → is_cache_fresh → download_static_gtfs`, up to thirteen synchronous HTTP fetches
+  inside a page render, and the 24-hour ZIP TTL re-arms that daily. Worse, an agency endpoint that
+  hangs costs `REQUEST_TIMEOUT` (30 s) and was retried on every refresh forever, because the
+  per-agency exception is swallowed and nothing remembered it. The result is now memoised on the
+  same ~55 m location grid `walking` already uses (now a shared `walking.snap_to_grid` rather than a
+  second snapping rule), following `_ROUTE_REGION_INDEX`'s module-dict pattern. It expires after
+  five minutes rather than lasting the process, because the cached answer bakes in *which agencies
+  replied* — one skipped for a momentary unreadable feed must not stay missing from the hint until
+  the process restarts. No separate negative-cache window was added: unlike `walking`, whose
+  failure path has no value worth storing, this function's failure path returns a perfectly good
+  `[]`, so memoising the result already is the negative cache
 
 ### Added
 - `gtfs_static.find_regions_with_stops_near(lat, lon, radius_m, exclude_slug, limit)` — which other

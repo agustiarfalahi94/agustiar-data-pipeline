@@ -110,8 +110,16 @@ def _now():
     return time.time()
 
 
-def _snap(value):
-    """Snap a coordinate to the cache grid."""
+def snap_to_grid(value):
+    """
+    Snap a coordinate to the cache grid.
+
+    Public because it is the app's one coordinate-grid rule, not this module's
+    private detail: gtfs_static's region-scan cache keys on a location too, and
+    two location caches disagreeing about what counts as "the same place" would
+    be a second rule to keep in step with this one for no gain. Anything that
+    caches per location should call this rather than round on its own.
+    """
     return round(round(value / GRID_DEGREES) * GRID_DEGREES, 6)
 
 
@@ -141,7 +149,7 @@ def _routed_distances(user_lat, user_lon, stops, agency_slug, api_key):
     rejected.
     """
     global _FAIL_UNTIL
-    glat, glon = _snap(user_lat), _snap(user_lon)
+    glat, glon = snap_to_grid(user_lat), snap_to_grid(user_lon)
     now = _now()
 
     found = {}

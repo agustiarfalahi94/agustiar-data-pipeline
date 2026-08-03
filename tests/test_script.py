@@ -3364,11 +3364,22 @@ def test_last_vehicles_label_does_not_report_a_negative_age():
 
 # ── Which other region has stops near me? ─────────────────────────────────
 
-def _stub_stops_near(monkeypatch, by_slug):
-    """by_slug: {slug: [(stop_id, distance_m), ...]}."""
+def _stub_stops_near(monkeypatch, by_slug, asked=None):
+    """by_slug: {slug: [(stop_id, distance_m), ...]}.
+
+    Pass `asked` (a list) to record every per-agency lookup the scan makes,
+    which is how the memoisation tests below tell a served-from-cache call
+    from one that walked all fourteen agencies again.
+
+    The region-scan cache is module-level and outlives a test, and every test
+    here scans from the same coordinates — without clearing it, the second
+    test would be answered from the first one's stubs.
+    """
     from utils import gtfs_static
 
     def fake(slug, lat, lon, radius_m=800, limit=5):
+        if asked is not None:
+            asked.append((slug, lat, lon))
         rows = by_slug.get(slug)
         if rows is None:
             raise OSError('no timetable for ' + slug)
@@ -3377,6 +3388,7 @@ def _stub_stops_near(monkeypatch, by_slug):
                 for sid, d in rows if d <= radius_m][:limit]
 
     monkeypatch.setattr(gtfs_static, 'get_stops_near', fake)
+    gtfs_static._REGION_STOPS_INDEX.clear()
     return gtfs_static
 
 
@@ -3444,6 +3456,105 @@ def test_region_scan_count_reflects_every_stop_in_range_not_a_truncated_page(mon
     g = _stub_stops_near(monkeypatch, {'prasarana?category=rapid-bus-kl': many})
     out = g.find_regions_with_stops_near(3.0586, 101.6739)
     assert out[0]['count'] == 80
+
+
+def test_a_second_scan_from_the_same_place_costs_no_agency_lookups(monkeypatch):
+    """
+    The dead end is sticky — the user has not moved, so every 20-second
+    auto-refresh re-entered this scan. Warm that re-read fourteen cached ZIPs;
+    cold it downloads up to thirteen of them inside a page render, and one
+    agency endpoint that hangs cost REQUEST_TIMEOUT on every single refresh
+    because nothing remembered the previous attempt.
+    """
+    asked = []
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]}, asked=asked)
+
+    first = g.find_regions_with_stops_near(3.0586, 101.6739)
+    after_first = len(asked)
+    second = g.find_regions_with_stops_near(3.0586, 101.6739)
+
+    assert after_first > 1, "the first call should have walked every agency"
+    assert len(asked) == after_first, \
+        f"the repeat scan hit the feeds again: {asked[after_first:]!r}"
+    assert second == first, "a cached answer must be the answer, not a stub of one"
+
+
+def test_a_scan_from_a_different_place_is_not_answered_from_the_cache(monkeypatch):
+    """The cache keys on where you are, not on the fact that a scan happened."""
+    asked = []
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]}, asked=asked)
+
+    g.find_regions_with_stops_near(3.0586, 101.6739)
+    after_first = len(asked)
+    # ~1.4 km away: far outside one grid cell.
+    g.find_regions_with_stops_near(3.0716, 101.6739)
+
+    assert len(asked) > after_first, \
+        "moving to a new place returned the previous place's regions"
+
+
+def test_gps_jitter_while_standing_still_does_not_re_run_the_scan(monkeypatch):
+    """
+    A phone reports a slightly different fix every refresh. Keying on raw
+    coordinates would make the cache useless for the one situation it exists
+    for — a stationary user at a dead end — so it keys on the same location
+    grid walking's cache uses.
+    """
+    from utils import walking
+    asked = []
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]}, asked=asked)
+
+    g.find_regions_with_stops_near(3.0586, 101.6739)
+    after_first = len(asked)
+    # A tenth of a grid cell — a few metres, well inside any GPS fix's own error.
+    g.find_regions_with_stops_near(3.0586 + walking.GRID_DEGREES / 10, 101.6739)
+
+    assert len(asked) == after_first, \
+        "a few metres of jitter re-ran the whole fourteen-agency scan"
+
+
+def test_a_stale_scan_is_re_run_rather_than_kept_for_the_life_of_the_process(monkeypatch):
+    """
+    The cached row records which agencies *answered*, so an agency skipped
+    because its feed was briefly unreadable would stay missing from the hint
+    forever if this never expired — the same failure _ROUTE_PARTS_INDEX
+    refuses to cache a failed read to avoid.
+    """
+    asked = []
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]}, asked=asked)
+
+    g.find_regions_with_stops_near(3.0586, 101.6739)
+    after_first = len(asked)
+    # Age every entry past the TTL rather than sleeping through it.
+    for key, (stored_at, rows) in list(g._REGION_STOPS_INDEX.items()):
+        g._REGION_STOPS_INDEX[key] = (
+            stored_at - g.REGION_SCAN_TTL_SECONDS - 1, rows)
+
+    g.find_regions_with_stops_near(3.0586, 101.6739)
+    assert len(asked) > after_first, "an expired scan was served from the cache"
+
+
+def test_an_unusable_coordinate_still_does_not_raise(monkeypatch):
+    """
+    The caller runs this inside a Streamlit render with no guard of its own.
+    Before the cache existed, a NaN latitude was rejected per-agency inside
+    get_stops_near's try; snapping it to a grid key must not turn that into a
+    crash.
+    """
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]})
+    # Both of these raise out of snap_to_grid — ValueError for NaN, TypeError
+    # for None — and must be absorbed into an uncached scan, not re-raised.
+    assert isinstance(g.find_regions_with_stops_near(float('nan'), 101.6739), list)
+    assert isinstance(g.find_regions_with_stops_near(None, 101.6739), list)
+    assert g._REGION_STOPS_INDEX == {}, \
+        "an unusable coordinate must not be written to the cache"
+
+
+def test_a_caller_mutating_the_result_cannot_poison_the_cache(monkeypatch):
+    g = _stub_stops_near(monkeypatch, {'ktmb': [('k', 400)]})
+    out = g.find_regions_with_stops_near(3.0586, 101.6739)
+    out[0]['region'] = 'MUTATED'
+    assert g.find_regions_with_stops_near(3.0586, 101.6739)[0]['region'] == 'KTM Berhad'
 
 
 # ── Route aliases ─────────────────────────────────────────────────────────

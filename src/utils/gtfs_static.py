@@ -17,6 +17,10 @@ import csv
 import requests
 
 from utils.eta import haversine_m
+# The app's one coordinate-grid rule, shared rather than re-derived here — see
+# _REGION_STOPS_INDEX. walking imports nothing from this module (it knows
+# nothing about GTFS by design), so this direction cannot cycle.
+from utils.walking import snap_to_grid
 
 # ---------------------------------------------------------------------------
 # Agency slugs — mirrors API_SOURCES in ingestion.py
@@ -711,6 +715,60 @@ def resolve_route_alias(query):
     return canonical, text.upper()
 
 
+# (snapped_lat, snapped_lon, radius_m, exclude_slug) -> (stored_at, [row, ...])
+#
+# This is the only all-agency walk in the module that was not memoised, and the
+# dead end it runs at is sticky: the user has not moved, so every 20-second
+# auto-refresh re-entered it. Warm that costs a re-read of fourteen cached
+# ZIPs; cold it goes _load_zip -> is_cache_fresh -> download_static_gtfs, up to
+# thirteen synchronous HTTP fetches inside a page render, and the 24-hour TTL
+# re-arms that daily. An agency endpoint that hangs costs REQUEST_TIMEOUT (30s)
+# and was retried on every refresh, indefinitely, because the exception is
+# swallowed per-agency and nothing remembered it.
+#
+# Keyed on the location grid rather than raw coordinates so GPS jitter while
+# standing still resolves to the same entry — the same reasoning, and the same
+# rule, as walking's cache. The scan itself still runs on the true coordinates;
+# only the key is snapped. `limit` is deliberately not part of the key: it only
+# slices an already-sorted result, so two callers asking for different numbers
+# of suggestions share one scan.
+_REGION_STOPS_INDEX = {}
+
+# Unlike _ROUTE_REGION_INDEX, this expires. That index answers "does this
+# agency publish route X", which changes only when a feed is republished; this
+# one bakes in *which agencies answered at all*, and an agency skipped because
+# its feed was briefly unreadable would otherwise stay missing from the hint
+# for the life of the process — the same failure _ROUTE_PARTS_INDEX avoids by
+# refusing to cache a failed read. Five minutes serves fourteen of every
+# fifteen auto-refreshes from memory while keeping recovery inside the span of
+# a wait at a bus stop.
+#
+# No separate negative-cache window (walking._FAIL_UNTIL) is needed here, and
+# adding one would be redundant machinery: walking suppresses *requests* after
+# a failure because its failure path produces no cacheable value — a fallback
+# distance must never be stored. This function's failure path produces a
+# perfectly good value, `[]` or a shorter list, so memoising the result already
+# stops the retry storm at the dead end, which is exactly what a negative cache
+# would have been for.
+REGION_SCAN_TTL_SECONDS = 300
+
+# Checked only past this many keys, so an ordinary lookup never walks the dict.
+# Entries are tiny and only created at a dead end, but this process never
+# restarts between deploys and serves every visitor, so without eviction every
+# grid cell anyone ever hit a dead end in would stay resident forever — the
+# same defect _WALK_CACHE was given eviction for. Generous headroom, not a
+# tuned figure.
+_REGION_STOPS_EVICT_THRESHOLD = 500
+
+
+def _evict_expired_region_scans(now):
+    """Drop region-scan entries past REGION_SCAN_TTL_SECONDS."""
+    expired = [key for key, (stored_at, _rows) in _REGION_STOPS_INDEX.items()
+               if (now - stored_at) >= REGION_SCAN_TTL_SECONDS]
+    for key in expired:
+        del _REGION_STOPS_INDEX[key]
+
+
 def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
                                  limit=3):
     """
@@ -723,7 +781,25 @@ def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
 
     An agency whose timetable is missing or unreadable is skipped rather than
     raising: one dead feed must not cost the user the other twelve answers.
+
+    Memoised per location grid cell for REGION_SCAN_TTL_SECONDS — see
+    _REGION_STOPS_INDEX for why the dead end made that necessary. Rows are
+    copied out, so a caller that mutates the result cannot poison the cache.
     """
+    now = time.time()
+    try:
+        key = (snap_to_grid(lat), snap_to_grid(lon), radius_m, exclude_slug)
+    except (TypeError, ValueError, OverflowError):
+        # An unusable coordinate must not raise into a render. Uncached, this
+        # falls through to the scan below, where get_stops_near rejects it
+        # per-agency exactly as it did before this cache existed.
+        key = None
+
+    if key is not None:
+        cached = _REGION_STOPS_INDEX.get(key)
+        if cached and (now - cached[0]) < REGION_SCAN_TTL_SECONDS:
+            return [dict(row) for row in cached[1][:limit]]
+
     found = []
     for region, slug in STATIC_API_SOURCES.items():
         if exclude_slug and slug == exclude_slug:
@@ -747,4 +823,12 @@ def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
         })
 
     found.sort(key=lambda r: r['nearest_m'])
-    return found[:limit]
+
+    if key is not None:
+        # The whole sorted list is stored, not the slice: `limit` shapes the
+        # answer, not the scan.
+        _REGION_STOPS_INDEX[key] = (now, found)
+        if len(_REGION_STOPS_INDEX) > _REGION_STOPS_EVICT_THRESHOLD:
+            _evict_expired_region_scans(time.time())
+
+    return [dict(row) for row in found[:limit]]
