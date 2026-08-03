@@ -4094,3 +4094,49 @@ def test_a_real_route_name_is_not_rewritten_or_disclosed(monkeypatch):
     assert seen['query'] == 'T580'
     said = _texts(st_stub.caption) + _texts(st_stub.info) + _texts(st_stub.markdown)
     assert 'is the name on the bus' not in said
+
+
+def test_a_slow_region_scan_is_not_cached_already_expired(monkeypatch):
+    """The entry used to be stamped when the scan STARTED.
+
+    A scan slower than the TTL was therefore born expired: the cache could
+    never serve it, and every render re-scanned — the refresh storm the cache
+    exists to prevent, defeated in exactly the case where it matters most
+    (several agency endpoints hanging at once).
+    """
+    from utils import gtfs_static
+
+    class _Clock:
+        def __init__(self, t):
+            self.t = t
+
+        def time(self):
+            return self.t
+
+    clock = _Clock(1_000_000.0)
+    # Replace the module's own reference, not the stdlib clock, so nothing
+    # outside gtfs_static sees a frozen time.
+    monkeypatch.setattr(gtfs_static, 'time', clock)
+
+    calls = {'n': 0}
+
+    def slow(slug, lat, lon, radius_m=800, limit=5):
+        calls['n'] += 1
+        # Each agency hangs long enough that the whole scan outlasts the TTL.
+        clock.t += gtfs_static.REGION_SCAN_TTL_SECONDS
+        return ([{'stop_id': 'a', 'stop_name': 'A', 'stop_lat': 3.0,
+                  'stop_lon': 101.0, 'distance_m': 100.0}]
+                if slug == 'ktmb' else [])
+
+    monkeypatch.setattr(gtfs_static, 'get_stops_near', slow)
+    gtfs_static._REGION_STOPS_INDEX.clear()
+
+    first = gtfs_static.find_regions_with_stops_near(3.0586, 101.6739)
+    after_first = calls['n']
+    assert after_first > 1, "the scan should have walked several agencies"
+    assert [r['region'] for r in first] == ['KTM Berhad']
+
+    second = gtfs_static.find_regions_with_stops_near(3.0586, 101.6739)
+    assert calls['n'] == after_first, \
+        "a slow scan was stored already expired, so the cache served nothing"
+    assert [r['region'] for r in second] == ['KTM Berhad']

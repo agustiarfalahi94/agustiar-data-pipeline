@@ -827,7 +827,14 @@ def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
     if key is not None:
         # The whole sorted list is stored, not the slice: `limit` shapes the
         # answer, not the scan.
-        _REGION_STOPS_INDEX[key] = (now, found)
+        #
+        # Stamped when the scan FINISHES, not when it started. Using the entry
+        # time meant a scan slower than the TTL was stored already expired —
+        # with two agency endpoints hanging, the walk outlasts
+        # REGION_SCAN_TTL_SECONDS, the cache can never serve the entry, and
+        # every render re-scans. That is the refresh storm this cache exists
+        # to prevent, defeated in precisely the case where it matters most.
+        _REGION_STOPS_INDEX[key] = (time.time(), found)
         if len(_REGION_STOPS_INDEX) > _REGION_STOPS_EVICT_THRESHOLD:
             _evict_expired_region_scans(time.time())
 
