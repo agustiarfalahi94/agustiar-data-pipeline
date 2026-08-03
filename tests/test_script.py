@@ -3392,6 +3392,18 @@ def test_region_scan_orders_regions_by_their_closest_stop(monkeypatch):
     assert out[0]['count'] == 2
 
 
+def test_region_scan_orders_by_distance_not_by_dict_declaration_order(monkeypatch):
+    # KTM Berhad is declared 5th in STATIC_API_SOURCES and Rapid Bus KL 1st, so
+    # this only passes if the result is actually sorted by nearest_m — dict
+    # insertion order alone would put Rapid Bus KL first.
+    g = _stub_stops_near(monkeypatch, {
+        'prasarana?category=rapid-bus-kl': [('a', 300)],
+        'ktmb': [('k', 100)],
+    })
+    out = g.find_regions_with_stops_near(3.0586, 101.6739)
+    assert [r['region'] for r in out] == ['KTM Berhad', 'Rapid Bus KL']
+
+
 def test_region_scan_excludes_the_region_already_selected(monkeypatch):
     g = _stub_stops_near(monkeypatch, {
         'prasarana?category=rapid-bus-kl': [('a', 152)],
@@ -3420,6 +3432,18 @@ def test_region_scan_caps_the_number_of_suggestions(monkeypatch):
         'mybas-johor': [('c', 300)], 'mybas-kuching': [('d', 400)],
     })
     assert len(g.find_regions_with_stops_near(3.0586, 101.6739, limit=2)) == 2
+
+
+def test_region_scan_count_reflects_every_stop_in_range_not_a_truncated_page(monkeypatch):
+    # get_stops_near filters by radius and sorts, *then* truncates to its own
+    # limit param. If find_regions_with_stops_near passed a small limit
+    # through, a dense agency with more nearby stops than that limit would
+    # report a count lower than what is actually there — understating exactly
+    # the dense urban case this feature is for.
+    many = [('s' + str(i), 100 + i) for i in range(80)]
+    g = _stub_stops_near(monkeypatch, {'prasarana?category=rapid-bus-kl': many})
+    out = g.find_regions_with_stops_near(3.0586, 101.6739)
+    assert out[0]['count'] == 80
 
 
 # ── Route aliases ─────────────────────────────────────────────────────────

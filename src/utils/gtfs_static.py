@@ -729,7 +729,12 @@ def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
         if exclude_slug and slug == exclude_slug:
             continue
         try:
-            stops = get_stops_near(slug, lat, lon, radius_m=radius_m, limit=50)
+            # get_stops_near already filters to radius_m and sorts before it
+            # truncates to `limit` — a small limit here would silently cap
+            # `count` below, understating exactly the dense-agency case this
+            # function exists for. Ask for effectively "all of them"; the
+            # radius filter already did the real work, so this costs nothing.
+            stops = get_stops_near(slug, lat, lon, radius_m=radius_m, limit=100_000)
         except Exception:
             continue
         if not stops:
