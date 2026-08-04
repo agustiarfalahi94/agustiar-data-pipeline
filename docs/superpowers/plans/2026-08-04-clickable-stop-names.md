@@ -164,7 +164,7 @@ Replace the heading in the arrivals panel:
                         f"{stop['stop_lat']},{stop['stop_lon']}"
                     )
                     # The name selects the stop; the Maps link keeps its old
-                    # job beside it. Same session key a ring tap sets, so this
+                    # job on the line under it. Same session key a ring tap sets, so this
                     # is a second route into one selection, not a second
                     # selection — the last-tap-wins rule and the one-shot clear
                     # suppression both key off that single value.
@@ -212,7 +212,7 @@ git commit -m "feat: hit a stop ring anywhere, and select a stop from its name"
 
 - [ ] **Step 1: Update `README.md`**
 
-In the Live Map feature list, record that a stop's name in *Arrivals near you* selects that stop and highlights its ring, with the Google Maps link now beside the name rather than being it.
+In the Live Map feature list, record that a stop's name in *Arrivals near you* selects that stop and highlights its ring, with the Google Maps link now on the line under the name rather than being it.
 
 **State the trade plainly:** the map sits above the list, so selecting a stop from the list means scrolling up to the panel. The app does not scroll for you — Streamlit cannot do it reliably, and the JavaScript workaround was rejected in 2.7.0 because it fights the auto-refresh rerun.
 
@@ -221,7 +221,7 @@ In the Live Map feature list, record that a stop's name in *Arrivals near you* s
 Open `## [2.11.0] - 2026-08-04`:
 
 - The nearby-stop rings were `stroked` but not `filled`, and deck.gl picks only drawn pixels — so the hollow centre of every ring was dead space and a cursor resting inside a stop missed it. The ring now carries a faint fill, making the whole disc a hit target while the bright stroke keeps the shape that distinguishes a stop from a bus. A filled dot was rejected: 2.6.0 chose the ring precisely so a stop could not read as a smaller bus.
-- A stop's name in *Arrivals near you* now selects that stop and highlights its ring, opening the same panel a ring tap opens. The Google Maps link moves beside the name. The panel appears under the map, above the list, so this means scrolling up — the app does not scroll for you.
+- A stop's name in *Arrivals near you* now selects that stop and highlights its ring, opening the same panel a ring tap opens. The Google Maps link moves to the line under the name. The panel appears under the map, above the list, so this means scrolling up — the app does not scroll for you.
 
 - [ ] **Step 3: Bump `pyproject.toml` to 2.11.0**
 
@@ -248,5 +248,5 @@ Run locally (`streamlit run src/app.py`), click **Refresh Data**, then **Locate 
 
 1. Click the **middle** of a stop ring on the map — it selects. That is the bug this fixes.
 2. Click a stop name in *Arrivals near you* — its ring changes appearance and the panel opens under the map.
-3. The Google Maps link beside the name still opens the right place.
+3. The Google Maps link on the line under the name still opens the right place.
 4. Tapping a bus still replaces the stop panel, and **Clear stop selection** still sticks through an auto-refresh.
