@@ -61,6 +61,12 @@ KL1743 GREEN AVENUE CONDOMINIUM   ·  Google Maps
 └ clicking the name selects the stop      └ the link that used to be the name
 ```
 
+> **Shipped differently.** `st.button` and `st.markdown` are block elements, so the link renders on
+> its own line *under* the name, not beside it. Putting it beside would mean `st.columns([3, 1])`,
+> and a long stop name at 75% phone width with the link, distance and walk time squeezed into the
+> remaining 25% wraps into more lines than the stack it replaced. This diagram is historical; see
+> the README's design table for what renders.
+
 The name renders as `st.button(..., type="tertiary")`, which draws as a text link rather than a filled button — available in the pinned Streamlit and appropriate for a list of five.
 
 Clicking sets `st.session_state['selected_stop_id']` and reruns, taking the **same** path a ring tap takes. It must not open a second panel or a parallel state: the tapped-stop panel, the last-tap-wins rule and the one-shot clear suppression all took two fix rounds in 2.7.0, and this adds a new way to reach that state, not a new state.

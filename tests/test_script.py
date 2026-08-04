@@ -4441,10 +4441,18 @@ def test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render(monk
     spec -- re-tapping the ring of the stop already selected -- where the
     same stale payload could come back and re-enter the same branch. A
     one-line guard (skip the rerun when the adopted stop already matches the
-    current selection) would remove that case with no deck_generation bump
-    and so no pan/zoom risk; it just was not judged worth adding for a
-    highlight that already self-heals within one auto-refresh (<=20s) and
-    never affects which panel opens.
+    current selection) would remove that case, and without adding state --
+    it reads the selection that is already there. It just was not judged
+    worth adding for a highlight that already self-heals within one
+    auto-refresh (<=20s) and never affects which panel opens.
+
+    An earlier version of this docstring said the guard's merit was avoiding
+    a deck_generation bump "and so the pan/zoom risk". That was overstated:
+    in the bundled deck.gl, setProps re-seeds the camera only when
+    initialViewState itself changes, which a key bump does not do -- the
+    element id already changes on every data refresh while the viewport
+    stays put. The conclusion is unchanged; the reason is narrower than it
+    was written.
     """
     stop = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
             'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}

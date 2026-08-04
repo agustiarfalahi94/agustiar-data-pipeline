@@ -20,8 +20,9 @@ ring on the map.
   `selected_vehicle_id`, the same way a ring tap already does (`:1043`) — otherwise clicking a name
   while a bus is selected leaves the sticky vehicle id behind, and the next render (no fresh tap of
   either kind) shows both the bus panel and the stop panel at once, exactly what the last-tap-wins
-  comment at `:1033-1035` exists to forbid. The Google Maps link moves beside the name rather than
-  disappearing. The new panel opens between the map and the "Arrivals near you" list, so clicking a
+  comment at `:1033-1035` exists to forbid. The Google Maps link is kept rather than lost, on its
+  own line directly under the name (`st.button` and `st.markdown` are block elements, so it stacks
+  below rather than sitting alongside — see the note in the design table). The new panel opens between the map and the "Arrivals near you" list, so clicking a
   name from the list means scrolling *up* to see it — this does not auto-scroll (a JS workaround was
   rejected in 2.7.0 for fighting the auto-refresh rerun)
 - **The selected stop's name is drawn as a selected control in the list too.** Until now the only
@@ -41,7 +42,7 @@ ring on the map.
   with a bare `st.rerun()` after adopting the tap, since that would risk replaying a stale selection
   payload in the one case where it can recur (re-tapping the ring already selected, where the deck
   spec — and so Streamlit's element id — does not change); a guarded rerun would close it safely but
-  was not judged worth the extra state for a highlight that already self-heals (see
+  was not judged worth the extra branch for a highlight that already self-heals (see
   `test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render`). The stop *panel* itself
   is never affected by this lag — it opens instantly from either path
 
