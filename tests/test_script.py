@@ -3421,6 +3421,70 @@ def test_last_vehicles_label_does_not_report_a_negative_age():
     assert network_health._last_vehicles_label(1_000_060, 1_000_000) == 'buses reporting now'
 
 
+# ── One stop_id, one stop ─────────────────────────────────────────────────
+
+def _make_stops_zip(tmp_path, name, rows):
+    """Build a GTFS static ZIP containing just stops.txt.
+
+    `rows` is a list of (stop_id, stop_name, lat, lon) — passed through
+    verbatim, duplicates included, because that is the malformed feed under
+    test here.
+    """
+    import zipfile
+    p = tmp_path / f"{name}.zip"
+    header = "stop_id,stop_name,stop_lat,stop_lon\n"
+    body = "".join(f"{r[0]},{r[1]},{r[2]},{r[3]}\n" for r in rows)
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('stops.txt', header + body)
+    return str(p)
+
+
+def test_a_repeated_stop_id_yields_one_stop(tmp_path, monkeypatch):
+    """
+    A feed may list the same stop_id twice. live_map keys one st.button per
+    stop on that id, and Streamlit raises StreamlitDuplicateElementKey on a
+    repeated key — straight into the render, killing the whole Live Map. It
+    would also show the stop twice in the panel, ask the walk-time matrix for
+    it twice, and draw two rings on one spot.
+
+    Tested here rather than through the page, because the MagicMock st stub
+    cannot raise Streamlit's duplicate-key error: a page-level test would pass
+    against the very bug it was written for.
+    """
+    import zipfile
+    from utils import gtfs_static
+    z = _make_stops_zip(tmp_path, 'kl', [
+        ('S1', 'GREEN AVENUE CONDOMINIUM', 3.1401, 101.6801),
+        ('S1', 'GREEN AVENUE CONDOMINIUM (DUPLICATE ROW)', 3.1402, 101.6802),
+        ('S2', 'KM1 BUKIT JALIL', 3.1403, 101.6803),
+    ])
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(z))
+
+    out = gtfs_static.get_stops_near('kl', 3.14, 101.68)
+
+    assert [s['stop_id'] for s in out] == ['S1', 'S2']
+    # The nearest occurrence is the one kept — a duplicate must not move a
+    # stop further away than the feed says it is.
+    assert out[0]['stop_name'] == 'GREEN AVENUE CONDOMINIUM'
+
+
+def test_a_repeated_stop_id_does_not_spend_one_of_the_limit_places(tmp_path, monkeypatch):
+    """De-duplication runs before the limit slice. After it, one duplicated
+    row would push a real stop off the end of a five-stop panel."""
+    import zipfile
+    from utils import gtfs_static
+    z = _make_stops_zip(tmp_path, 'kl', [
+        ('S1', 'A', 3.1401, 101.6801),
+        ('S1', 'A again', 3.14011, 101.6801),
+        ('S2', 'B', 3.1403, 101.6803),
+    ])
+    monkeypatch.setattr(gtfs_static, '_load_zip', lambda slug: zipfile.ZipFile(z))
+
+    out = gtfs_static.get_stops_near('kl', 3.14, 101.68, limit=2)
+
+    assert [s['stop_id'] for s in out] == ['S1', 'S2']
+
+
 # ── Which other region has stops near me? ─────────────────────────────────
 
 def _stub_stops_near(monkeypatch, by_slug, asked=None):

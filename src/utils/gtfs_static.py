@@ -691,7 +691,26 @@ def get_stops_near(agency_slug: str, lat: float, lon: float,
         return []
 
     found.sort(key=lambda s: s['distance_m'])
-    return found[:limit]
+
+    # A feed is free to repeat a stop_id across stops.txt rows, and some do.
+    # Callers treat the id as the identity of a stop: live_map keys one
+    # st.button per stop on it, and Streamlit raises StreamlitDuplicateElementKey
+    # on a repeated widget key -- straight into the render, taking the whole
+    # Live Map down. The panel, the walk-time matrix and the map layer would
+    # each show the same stop twice as well. De-duplicated here rather than at
+    # any one caller so all four are fixed once.
+    #
+    # Before the limit slice, not after, or a duplicated row would spend one of
+    # the `limit` places and silently cost the rider a real stop. The list is
+    # already sorted by distance, so the occurrence kept is the nearest one.
+    seen = set()
+    unique = []
+    for s in found:
+        if s['stop_id'] in seen:
+            continue
+        seen.add(s['stop_id'])
+        unique.append(s)
+    return unique[:limit]
 
 
 def resolve_route_alias(query):

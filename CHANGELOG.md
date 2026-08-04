@@ -54,6 +54,14 @@ ring on the map.
   very next render — the one the click's own `st.rerun()` produces — resolved a fresh tap of
   neither kind, fell back to the sticky bus id, and rendered the bus panel and the just-opened stop
   panel together
+- **A feed that repeats a `stop_id` no longer takes the Live Map down.** `get_stops_near` appended
+  one entry per matching `stops.txt` row, so a repeated id came back twice. Under 2.10.0 that was a
+  duplicated line in "Arrivals near you"; now that each stop's name is a button keyed on its id, it
+  is two widgets with one key and a `StreamlitDuplicateElementKey` raised into the render — the
+  whole page, not one row. `get_stops_near` now de-duplicates by `stop_id`, keeping the nearest
+  occurrence, before it truncates to `limit` (after would let a duplicate row spend one of the five
+  places a real stop needed). That fixes the button, the panel, the walk-time matrix and the map
+  layer in one place
 - **The declared Streamlit floor now matches what the new button actually needs.** The name button
   passes `type="tertiary"`, added in Streamlit 1.41.0; `pyproject.toml` and `requirements.txt` still
   named `>=1.40.0`, so a fresh install resolving to 1.40.x would raise `StreamlitAPIException`
