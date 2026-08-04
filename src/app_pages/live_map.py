@@ -858,6 +858,14 @@ def show():
                 get_fill_color=[255, 200, 60, 40],
                 get_line_color='line_color',
                 get_line_width='line_width',
+                # ScatterplotLayer's line width defaults to the same coordinate
+                # units as get_radius (metres), not pixels. At radius=40m,
+                # clamped to 5-10px on screen, a 2m/4m stroke rounds to well
+                # under a pixel either way and line_width_min_pixels=2 floors
+                # both to the same 2px — so without this, the selected ring
+                # would be brighter but not actually thicker. This makes
+                # get_line_width's 2/4 mean real, distinguishable pixels.
+                line_width_units=pdk.types.String('pixels'),
                 line_width_min_pixels=2,
                 get_radius=40,
                 radius_min_pixels=5,
@@ -1484,10 +1492,18 @@ def show():
                     # job beside it. Same session key a ring tap sets, so this
                     # is a second route into one selection, not a second
                     # selection — the last-tap-wins rule and the one-shot clear
-                    # suppression both key off that single value.
+                    # suppression both key off that single value. A ring tap
+                    # also clears the vehicle selection (:1043) so the bus
+                    # panel cannot render alongside the one just opened; this
+                    # click must do the same, or clicking a name while a bus
+                    # is selected leaves both panels showing (or, when the
+                    # pydeck payload survives the rerun, leaves the sticky
+                    # vehicle selection winning last-tap-wins and the click
+                    # doing nothing at all).
                     if st.button(stop['stop_name'], type="tertiary",
                                  key=f"pick_stop_{stop['stop_id']}"):
                         st.session_state['selected_stop_id'] = stop['stop_id']
+                        st.session_state['selected_vehicle_id'] = None
                         st.rerun()
                     st.markdown(
                         f"[Google Maps]({maps_url}) "

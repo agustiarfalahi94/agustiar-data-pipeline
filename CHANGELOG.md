@@ -16,11 +16,26 @@ ring on the map.
 - **A stop's name in "Arrivals near you" now selects it.** It's a button that writes
   `st.session_state['selected_stop_id']` — the identical key a ring tap writes — so it is a second
   route into one selection, not a second selection: the last-tap-wins rule and the one-shot
-  `cleared_stop_id` suppression both still apply unchanged. The Google Maps link moves beside the
-  name rather than disappearing
-- **A selected stop's ring is drawn brighter and thicker** (white, 4px vs. the default gold, 2px),
-  whether the selection came from a ring tap or the new name button, so it's visible which stop is
-  open
+  `cleared_stop_id` suppression both still apply unchanged. It also clears
+  `selected_vehicle_id`, the same way a ring tap already does (`:1043`) — otherwise clicking a name
+  while a bus is selected leaves the sticky vehicle id behind, and the next render (no fresh tap of
+  either kind) shows both the bus panel and the stop panel at once, exactly what the last-tap-wins
+  comment at `:1033-1035` exists to forbid. The Google Maps link moves beside the name rather than
+  disappearing. The new panel opens between the map and the "Arrivals near you" list, so clicking a
+  name from the list means scrolling *up* to see it — this does not auto-scroll (a JS workaround was
+  rejected in 2.7.0 for fighting the auto-refresh rerun)
+- **A selected stop's ring is drawn brighter and thicker** (white, 4px vs. the default gold, 2px).
+  `get_line_width` on this layer is in the same units as `get_radius` (metres) by default, where a
+  2m/4m stroke on a 40m-radius, 5-10px-on-screen ring both round under `line_width_min_pixels`'s 2px
+  floor — so without also setting `line_width_units='pixels'`, the two widths would have rendered
+  identically and only colour would have actually distinguished them; that unit switch is included
+  here. Selecting by name shows this instantly (the click's own `st.rerun()` rebuilds the layer with
+  the new selection already applied); tapping the ring itself can lag up to one auto-refresh cycle
+  (≤20s) before its own ring updates, because the stops layer is built from session state before
+  that same tap's payload is read back — self-heals on the next render rather than being forced,
+  since forcing it risks replaying a stale selection payload the "Clear" buttons' `deck_generation`
+  bump exists to prevent (see `test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render`).
+  The stop *panel* itself is never affected by this lag — it opens instantly from either path
 
 ### Fixed
 - **A nearby-stop ring is now clickable across its whole face, not only its outline.** deck.gl only
@@ -31,6 +46,17 @@ ring on the map.
   hollow shape over a filled dot (a stop must not read as a smaller bus) still holds and is
   unchanged by this fix, only its "unfilled" half is corrected — the comment in `live_map.py` now
   says both
+- **A stale sticky vehicle selection can no longer sit alongside a newly-selected stop.** Clicking
+  a stop's name while a bus was still selected used to leave `selected_vehicle_id` untouched, so the
+  very next render — the one the click's own `st.rerun()` produces — resolved a fresh tap of
+  neither kind, fell back to the sticky bus id, and rendered the bus panel and the just-opened stop
+  panel together
+- **The declared Streamlit floor now matches what the new button actually needs.** The name button
+  passes `type="tertiary"`, added in Streamlit 1.41.0; `pyproject.toml` and `requirements.txt` still
+  named `>=1.40.0`, so a fresh install resolving to 1.40.x would raise `StreamlitAPIException`
+  straight into the arrivals render. Both files now require `>=1.41.0`
+
+## [2.10.0] - 2026-08-03
 
 Rapid Bus KL's realtime feed went quiet upstream — confirmed at 12:49 on a Monday: `rapid-bus-kl`
 returned HTTP 200 with a 15-byte body and zero entities, while `rapid-bus-mrtfeeder` returned 102

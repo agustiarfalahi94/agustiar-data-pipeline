@@ -2579,6 +2579,58 @@ def test_a_fresh_bus_tap_overrides_a_sticky_stop_selection(monkeypatch):
         "a fresh bus tap must clear the sticky stop selection"
 
 
+def test_clicking_a_stop_name_clears_a_sticky_bus_selection(monkeypatch):
+    """
+    A ring tap clears the sticky vehicle id in the same render (:1043),
+    before the bus panel's `if picked:` check runs, so tapping a stop ring
+    never renders a bus panel beside it. The name button cannot reach that
+    same-render guard -- st.button() is read deep inside the arrivals loop,
+    well after the bus panel has already been emitted for this render -- so
+    it instead has to leave session state clean for the *next* render, the
+    one a real st.rerun() immediately triggers. Reproduce that next render
+    directly: a bus was sticky, the button click (render 1, asserted below)
+    wrote selected_stop_id and must also have cleared selected_vehicle_id --
+    if it had not, render 2 (no fresh tap of either kind, exactly what an
+    auto-refresh after the rerun looks like) would render both panels at
+    once, precisely what the last-tap-wins comment at :1033-1035 forbids.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Tapped By Name',
+            'stop_lat': 3.14, 'stop_lon': 101.68, 'distance_m': 50.0}
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    # Render 1: the click. A bus is still sticky when the name button fires.
+    st_stub.button.side_effect = lambda label, *a, **k: label == 'Tapped By Name'
+    live_map.show()
+    assert st_stub.session_state.get('selected_vehicle_id') is None, \
+        "clicking a stop's name must clear the sticky bus selection, like a ring tap does"
+    assert st_stub.session_state.get('selected_stop_id') == 'S1'
+
+    # Render 2: what st.rerun() triggers in reality. No fresh tap of either
+    # kind -- only the state render 1 left behind. Clear the call logs so
+    # this render's content can be checked on its own.
+    st_stub.info.call_args_list.clear()
+    st_stub.markdown.call_args_list.clear()
+    st_stub.button.call_args_list.clear()
+    st_stub.button.side_effect = None
+    st_stub.button.return_value = False
+
+    live_map.show()
+
+    said = _texts(st_stub.info)
+    assert '📍 **Tapped By Name**' in said, \
+        "the stop panel must render on the render after the click"
+    buttons = _texts(st_stub.button)
+    assert 'Clear bus selection' not in buttons, \
+        "the bus panel must not still be showing once the click's rerun has settled"
+
+
 def test_a_sticky_stop_selection_survives_a_render_that_reports_none(monkeypatch):
     """
     Companion to test_a_selection_survives_a_render_that_reports_none: a stop
@@ -4226,11 +4278,78 @@ def test_the_selected_stop_ring_is_drawn_differently(monkeypatch):
         or picked[0]['line_width'] != others[0]['line_width']
 
 
+def test_the_selected_stop_ring_is_actually_thicker_not_just_brighter(monkeypatch):
+    # ScatterplotLayer's line width defaults to the same coordinate units as
+    # get_radius (metres). At get_radius=40 clamped to 5-10 screen pixels, a
+    # 2 vs. 4 metre stroke rounds to well under a pixel either way, and
+    # line_width_min_pixels=2 floors both to an identical 2px on screen --
+    # so the 2-vs-4 the rows carry would be invisible without this. The
+    # highlight test above can't catch that (it's an `or`, satisfied by
+    # colour alone); this pins the units that make the width term real.
+    st_stub = _render_live_map(monkeypatch, selected_stop_id='S1')
+    deck = st_stub.pydeck_chart.call_args_list[0][0][0]
+    stops = next(l for l in deck.layers if l.id == 'nearby-stops')
+    assert stops.line_width_units == 'pixels', \
+        "get_line_width's 2/4 are metres, not pixels, without this"
+
+
 def test_stop_rings_match_when_nothing_is_selected(monkeypatch):
     st_stub = _render_live_map(monkeypatch)
     rows = next(l for l in st_stub.pydeck_chart.call_args_list[0][0][0].layers
                 if l.id == 'nearby-stops').data
     assert len({tuple(r['line_color']) for r in rows}) == 1
+
+
+def test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render(monkeypatch):
+    """
+    Documents a known, deliberate limitation (fix-round-1 finding 6): unlike
+    the name button, which calls st.rerun() itself and so sees its own
+    highlight on the very next execution, a ring tap's highlight is not force-
+    refreshed the same way. `_selected_stop_id` is read to build the stops
+    layer before st.pydeck_chart() has delivered *this* render's click, so the
+    just-tapped stop is drawn with the previous (unselected) styling for one
+    render. The selection itself and the tapped-stop panel are correct and
+    instant -- only the ring's own colour/width lag.
+
+    Deliberately not fixed with a bare st.rerun() after adopting the tap:
+    on_select="rerun" keeps redelivering an unchanged payload until the
+    widget key (deck_generation) changes -- proven by
+    test_clearing_a_stop_selection_survives_a_repeated_payload above, which
+    depends on exactly that redelivery. An unconditional rerun here would
+    walk straight back into the `elif picked_stop is not None` branch on the
+    very next execution and loop forever. Fixing the lag the way the Clear
+    buttons fix staleness (bump deck_generation) would remount the pydeck
+    widget on every ring tap, which risks resetting the user's in-progress
+    pan/zoom each time -- judged not worth it for a highlight that self-heals
+    within one auto-refresh (<=20s) and never affects which panel opens.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
+            'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}
+    other = {'stop_id': 'S2', 'stop_name': 'Other Stop',
+             'stop_lat': 3.1402, 'stop_lon': 101.6802, 'distance_m': 60.0}
+    selection = SimpleNamespace(
+        selection=SimpleNamespace(objects={"nearby-stops": [{"stop_id": "S1"}]})
+    )
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop, other])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    live_map.show()
+
+    # The selection and the panel it opens are correct and instant.
+    assert st_stub.session_state.get('selected_stop_id') == 'S1'
+    assert 'Tapped Stop' in _texts(st_stub.info)
+
+    # But the ring drawn THIS render shows no highlight yet -- every row is
+    # still the same colour, because the layer was built before this tap was
+    # known. If this assertion starts failing, the lag has been fixed (or the
+    # layer-build order changed) and this test's docstring, the CHANGELOG and
+    # the README all need to say so instead.
+    rows = next(l for l in st_stub.pydeck_chart.call_args_list[0][0][0].layers
+                if l.id == 'nearby-stops').data
+    assert len({tuple(r['line_color']) for r in rows}) == 1, \
+        "the ring highlight now applies on the same render as the tap -- update the docs"
 
 
 def test_clicking_a_stop_name_selects_that_stop(monkeypatch):
