@@ -1489,21 +1489,49 @@ def show():
                         f"{stop['stop_lat']},{stop['stop_lon']}"
                     )
                     # The name selects the stop; the Maps link keeps its old
-                    # job beside it. Same session key a ring tap sets, so this
-                    # is a second route into one selection, not a second
-                    # selection — the last-tap-wins rule and the one-shot clear
-                    # suppression both key off that single value. A ring tap
-                    # also clears the vehicle selection (:1043) so the bus
+                    # job on the line under it. Same session key a ring tap
+                    # sets, so this is a second route into one selection, not a
+                    # second selection — the last-tap-wins rule and the one-shot
+                    # clear suppression both key off that single value. A ring
+                    # tap also clears the vehicle selection (:1043) so the bus
                     # panel cannot render alongside the one just opened; this
                     # click must do the same, or clicking a name while a bus
                     # is selected leaves both panels showing (or, when the
                     # pydeck payload survives the rerun, leaves the sticky
                     # vehicle selection winning last-tap-wins and the click
                     # doing nothing at all).
-                    if st.button(stop['stop_name'], type="tertiary",
+                    #
+                    # `primary` on the selected stop because the only other
+                    # feedback for this click — the ring and the panel — is
+                    # above the list, and on a phone that means above the fold:
+                    # without it, clicking a name and staying put reads as
+                    # nothing having happened. No new state; `selected_stop_id`
+                    # is the same value the ring is styled from.
+                    if st.button(stop['stop_name'],
+                                 type=("primary"
+                                       if stop['stop_id'] == selected_stop_id
+                                       else "tertiary"),
                                  key=f"pick_stop_{stop['stop_id']}"):
                         st.session_state['selected_stop_id'] = stop['stop_id']
                         st.session_state['selected_vehicle_id'] = None
+                        # Suppress a redelivered vehicle payload for exactly
+                        # one render, the same way "Clear bus selection" does
+                        # (:1060). Clearing selected_vehicle_id alone is not
+                        # enough on its own: if the pydeck payload comes back
+                        # across this rerun it reads as a *fresh* vehicle tap
+                        # at :1047, which sets selected_stop_id to None and
+                        # makes the click do nothing at all. That does not
+                        # happen today only because the highlight changes the
+                        # deck spec — and so Streamlit's element id — for the
+                        # newly-selected stop; this makes the guarantee the
+                        # code's own rather than a side effect of how the
+                        # selected ring happens to be drawn. Safe to set
+                        # unconditionally: the pop at :997 is outside every
+                        # guard, so the token is consumed on the very next
+                        # render whether or not a vehicle payload arrives, and
+                        # cannot strand a bus as permanently untappable.
+                        if picked:
+                            st.session_state['cleared_vehicle_id'] = picked
                         st.rerun()
                     st.markdown(
                         f"[Google Maps]({maps_url}) "

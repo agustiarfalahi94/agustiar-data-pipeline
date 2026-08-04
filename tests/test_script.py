@@ -2631,6 +2631,60 @@ def test_clicking_a_stop_name_clears_a_sticky_bus_selection(monkeypatch):
         "the bus panel must not still be showing once the click's rerun has settled"
 
 
+def test_clicking_a_stop_name_suppresses_a_redelivered_vehicle_payload(monkeypatch):
+    """
+    Clearing selected_vehicle_id is not enough on its own. If the pydeck
+    payload naming the still-selected bus survives the click's own st.rerun()
+    -- which is exactly what test_clearing_a_stop_selection_survives_a_repeated
+    _payload proves Streamlit can do -- the next render reads it as a *fresh*
+    vehicle tap, and a fresh vehicle tap sets selected_stop_id to None. The
+    click would then do nothing at all.
+
+    That does not happen today only incidentally: the selected ring's own
+    line_color/line_width change the deck spec, Streamlit hashes the spec into
+    the element id, and a payload stored against the old id is not redelivered
+    against the new one. Style the highlight some other way -- or drop it --
+    and the click silently breaks. So the click also arms the same one-shot
+    'ignore this vehicle for exactly one render' token "Clear bus selection"
+    uses, which makes the guarantee the code's own rather than a side effect
+    of how a ring happens to be drawn.
+    """
+    stop = {'stop_id': 'S1', 'stop_name': 'Tapped By Name',
+            'stop_lat': 3.14, 'stop_lon': 101.68, 'distance_m': 50.0}
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', lambda *a, **k: [stop])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_headsign', lambda *a, **k: '')
+    monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
+
+    # Render 1: the click, with a bus still sticky.
+    st_stub.button.side_effect = lambda label, *a, **k: label == 'Tapped By Name'
+    live_map.show()
+    assert st_stub.session_state.get('cleared_vehicle_id') == 'V1', \
+        "the click must arm the one-shot suppression, not rely on the deck spec changing"
+
+    # Render 2: the rerun, with the vehicle payload redelivered.
+    st_stub.button.side_effect = None
+    st_stub.button.return_value = False
+    st_stub.pydeck_chart.return_value = SimpleNamespace(
+        selection=SimpleNamespace(objects={"vehicles": [{"vehicle_id": "V1"}]}))
+    st_stub.info.call_args_list.clear()
+
+    live_map.show()
+
+    assert st_stub.session_state.get('selected_stop_id') == 'S1', \
+        "a redelivered vehicle payload stole the selection the click had just made"
+    assert '📍 **Tapped By Name**' in _texts(st_stub.info)
+    # One render only. The token is gone, so the same bus is tappable again on
+    # the render after -- dismissing a bus must never cost the ability to
+    # re-select it.
+    assert 'cleared_vehicle_id' not in st_stub.session_state, \
+        "the suppression outlived its one render"
+
+
 def test_a_sticky_stop_selection_survives_a_render_that_reports_none(monkeypatch):
     """
     Companion to test_a_selection_survives_a_render_that_reports_none: a stop
@@ -4425,6 +4479,38 @@ def test_clicking_a_stop_name_selects_that_stop(monkeypatch):
     # The name used to be a Google Maps link and nothing else.
     st_stub = _render_live_map(monkeypatch, pressed_button='KL1743 GREEN AVENUE CONDOMINIUM')
     assert st_stub.session_state['selected_stop_id'] == 'S1'
+    # The rerun is load-bearing, not tidiness: st.button is read deep inside
+    # the arrivals loop, long after the panel slot and the deck have already
+    # been emitted for this render. Without it the click still selects, but
+    # nothing on screen changes until the next auto-refresh -- the feature
+    # degrades from instant to "up to 20s", which is the opposite of what the
+    # README and CHANGELOG both claim for it.
+    assert st_stub.rerun.called, \
+        "the click must rerun; without it the selection is invisible for up to 20s"
+
+
+def test_the_selected_stop_reads_as_selected_in_the_list(monkeypatch):
+    """
+    The only other feedback for a name click is the ring and the panel, both
+    above the list on a phone -- so with every button styled identically,
+    clicking a name and not scrolling up reads as "nothing happened". The
+    selected stop's button is drawn differently from the rest.
+    """
+    st_stub = _render_live_map(monkeypatch, selected_stop_id='S1')
+    types = {c.kwargs['key']: c.kwargs.get('type')
+             for c in st_stub.button.call_args_list
+             if str(c.kwargs.get('key', '')).startswith('pick_stop_')}
+
+    assert types['pick_stop_S1'] != types['pick_stop_S2'], \
+        f"the selected stop looks the same as every other one: {types}"
+
+
+def test_no_stop_reads_as_selected_when_none_is(monkeypatch):
+    # The companion: nothing selected, nothing singled out.
+    st_stub = _render_live_map(monkeypatch)
+    types = {c.kwargs.get('type') for c in st_stub.button.call_args_list
+             if str(c.kwargs.get('key', '')).startswith('pick_stop_')}
+    assert types == {'tertiary'}, types
 
 
 def test_the_google_maps_link_survives_and_is_no_longer_the_name(monkeypatch):

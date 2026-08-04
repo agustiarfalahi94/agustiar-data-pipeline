@@ -24,6 +24,11 @@ ring on the map.
   disappearing. The new panel opens between the map and the "Arrivals near you" list, so clicking a
   name from the list means scrolling *up* to see it — this does not auto-scroll (a JS workaround was
   rejected in 2.7.0 for fighting the auto-refresh rerun)
+- **The selected stop's name is drawn as a selected control in the list too.** Until now the only
+  feedback for clicking a name was the highlighted ring and the panel, both of which sit *above* the
+  list — on a phone, above the fold. Clicking a name and staying where you are read as nothing
+  having happened. The selected stop's button now renders `primary` where the others render
+  `tertiary`; no new state, it is styled from the same `selected_stop_id` the ring is
 - **A selected stop's ring is drawn brighter and thicker** (white, 4px vs. the default gold, 2px).
   `get_line_width` on this layer is in the same units as `get_radius` (metres) by default, where a
   2m/4m stroke on a 40m-radius, 5-10px-on-screen ring both round under `line_width_min_pixels`'s 2px
@@ -53,7 +58,15 @@ ring on the map.
   a stop's name while a bus was still selected used to leave `selected_vehicle_id` untouched, so the
   very next render — the one the click's own `st.rerun()` produces — resolved a fresh tap of
   neither kind, fell back to the sticky bus id, and rendered the bus panel and the just-opened stop
-  panel together
+  panel together. The click now also arms `cleared_vehicle_id`, the same one-shot "ignore this
+  vehicle for exactly one render" token "Clear bus selection" has always set. Clearing the selection
+  alone is not enough: if the pydeck payload naming that bus survives the rerun, the next render
+  reads it as a *fresh* vehicle tap, and a fresh vehicle tap sets `selected_stop_id` to None — the
+  click does nothing at all. It happens not to survive today, but only because the selected ring's
+  own `line_color`/`line_width` change the deck spec and Streamlit hashes the spec into the element
+  id; style the highlight some other way and the click silently breaks. The token makes that a
+  guarantee the code states rather than one it inherits from how a ring is drawn, and it cannot
+  strand a bus as untappable — it is popped unconditionally on the next render, quiet feed or not
 - **A feed that repeats a `stop_id` no longer takes the Live Map down.** `get_stops_near` appended
   one entry per matching `stops.txt` row, so a repeated id came back twice. Under 2.10.0 that was a
   duplicated line in "Arrivals near you"; now that each stop's name is a button keyed on its id, it
