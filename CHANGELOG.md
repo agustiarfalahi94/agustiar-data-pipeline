@@ -32,10 +32,13 @@ ring on the map.
   here. Selecting by name shows this instantly (the click's own `st.rerun()` rebuilds the layer with
   the new selection already applied); tapping the ring itself can lag up to one auto-refresh cycle
   (≤20s) before its own ring updates, because the stops layer is built from session state before
-  that same tap's payload is read back — self-heals on the next render rather than being forced,
-  since forcing it risks replaying a stale selection payload the "Clear" buttons' `deck_generation`
-  bump exists to prevent (see `test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render`).
-  The stop *panel* itself is never affected by this lag — it opens instantly from either path
+  that same tap's payload is read back — left to self-heal on the next render rather than forced
+  with a bare `st.rerun()` after adopting the tap, since that would risk replaying a stale selection
+  payload in the one case where it can recur (re-tapping the ring already selected, where the deck
+  spec — and so Streamlit's element id — does not change); a guarded rerun would close it safely but
+  was not judged worth the extra state for a highlight that already self-heals (see
+  `test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render`). The stop *panel* itself
+  is never affected by this lag — it opens instantly from either path
 
 ### Fixed
 - **A nearby-stop ring is now clickable across its whole face, not only its outline.** deck.gl only

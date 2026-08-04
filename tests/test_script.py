@@ -4311,17 +4311,22 @@ def test_a_ring_tap_selects_instantly_but_its_own_highlight_lags_one_render(monk
     render. The selection itself and the tapped-stop panel are correct and
     instant -- only the ring's own colour/width lag.
 
-    Deliberately not fixed with a bare st.rerun() after adopting the tap:
-    on_select="rerun" keeps redelivering an unchanged payload until the
-    widget key (deck_generation) changes -- proven by
-    test_clearing_a_stop_selection_survives_a_repeated_payload above, which
-    depends on exactly that redelivery. An unconditional rerun here would
-    walk straight back into the `elif picked_stop is not None` branch on the
-    very next execution and loop forever. Fixing the lag the way the Clear
-    buttons fix staleness (bump deck_generation) would remount the pydeck
-    widget on every ring tap, which risks resetting the user's in-progress
-    pan/zoom each time -- judged not worth it for a highlight that self-heals
-    within one auto-refresh (<=20s) and never affects which panel opens.
+    Deliberately not fixed with a bare st.rerun() after adopting the tap.
+    test_clearing_a_stop_selection_survives_a_repeated_payload above proves
+    payload redelivery, but only when the deck spec is unchanged between
+    renders -- Streamlit hashes the spec into the element id even with an
+    explicit key, so adopting a genuinely *new* stop (which changes that
+    stop's line_color/line_width row) lands the rerun on a new element id
+    with no stored payload, and it would simply terminate: no loop in the
+    common case of tapping a different stop than the one already selected.
+    The real risk is the narrower case of a rerun landing on an *unchanged*
+    spec -- re-tapping the ring of the stop already selected -- where the
+    same stale payload could come back and re-enter the same branch. A
+    one-line guard (skip the rerun when the adopted stop already matches the
+    current selection) would remove that case with no deck_generation bump
+    and so no pan/zoom risk; it just was not judged worth adding for a
+    highlight that already self-heals within one auto-refresh (<=20s) and
+    never affects which panel opens.
     """
     stop = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
             'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}
