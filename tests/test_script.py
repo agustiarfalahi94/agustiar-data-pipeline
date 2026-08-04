@@ -2606,7 +2606,10 @@ def test_clicking_a_stop_name_clears_a_sticky_bus_selection(monkeypatch):
     monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
 
     # Render 1: the click. A bus is still sticky when the name button fires.
-    st_stub.button.side_effect = lambda label, *a, **k: label == 'Tapped By Name'
+    # Substring: the label carries Streamlit colour markup (`:blue[NAME]`)
+    # so the name reads as clickable; a test naming the stop should not
+    # have to know that.
+    st_stub.button.side_effect = lambda label, *a, **k: 'Tapped By Name' in str(label)
     live_map.show()
     assert st_stub.session_state.get('selected_vehicle_id') is None, \
         "clicking a stop's name must clear the sticky bus selection, like a ring tap does"
@@ -2661,7 +2664,10 @@ def test_clicking_a_stop_name_suppresses_a_redelivered_vehicle_payload(monkeypat
     monkeypatch.setattr(live_map.gtfs_static, 'is_frequency_based', lambda *a, **k: False)
 
     # Render 1: the click, with a bus still sticky.
-    st_stub.button.side_effect = lambda label, *a, **k: label == 'Tapped By Name'
+    # Substring: the label carries Streamlit colour markup (`:blue[NAME]`)
+    # so the name reads as clickable; a test naming the stop should not
+    # have to know that.
+    st_stub.button.side_effect = lambda label, *a, **k: 'Tapped By Name' in str(label)
     live_map.show()
     assert st_stub.session_state.get('cleared_vehicle_id') == 'V1', \
         "the click must arm the one-shot suppression, not rely on the deck spec changing"
@@ -4087,7 +4093,11 @@ def _render_live_map(monkeypatch, route_query='', selected_stop_id=None,
         monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
                             lambda *a, **k: [dict(s) for s in _DEFAULT_NEARBY_STOPS])
     if pressed_button is not None:
-        st_stub.button.side_effect = lambda label, *a, **k: label == pressed_button
+        # Substring, not equality: a stop's label carries Streamlit colour
+        # markup (`:blue[NAME]`) so the name reads as clickable, and a test
+        # naming the stop should not have to know that.
+        st_stub.button.side_effect = (
+            lambda label, *a, **k: pressed_button in str(label))
 
     live_map.show()
     return st_stub

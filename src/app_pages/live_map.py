@@ -835,7 +835,13 @@ def show():
                        'stop_lat': s['stop_lat'],
                        'stop_lon': s['stop_lon'],
                        'tip_text': _tip_text('Stop', s['stop_name']),
-                       'line_color': ([255, 255, 255, 255]
+                       # Magenta, not white. The map has both a light and a
+                       # dark theme, and white vanishes into the light one —
+                       # the highlight has to read against a pale background
+                       # and a near-black one at the same time. Magenta is
+                       # also distinct from every other mark already on the
+                       # map: gold stop rings, blue buses, a red location dot.
+                       'line_color': ([255, 0, 170, 255]
                                       if s['stop_id'] == _selected_stop_id
                                       else [255, 200, 60, 220]),
                        'line_width': 4 if s['stop_id'] == _selected_stop_id else 2}
@@ -1507,7 +1513,12 @@ def show():
                     # without it, clicking a name and staying put reads as
                     # nothing having happened. No new state; `selected_stop_id`
                     # is the same value the ring is styled from.
-                    if st.button(stop['stop_name'],
+                    # Blue, because a tertiary button renders in the ordinary
+                    # body colour and nothing then says the name can be
+                    # clicked. Blue is what a reader already reads as "this
+                    # does something", which is why the Google Maps link
+                    # under it is blue too.
+                    if st.button(f":blue[{stop['stop_name']}]",
                                  type=("primary"
                                        if stop['stop_id'] == selected_stop_id
                                        else "tertiary"),
