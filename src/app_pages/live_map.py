@@ -1104,6 +1104,30 @@ def show():
         picked = None
     selected_stop_id = st.session_state.get('selected_stop_id')
 
+    # Redraw before the user can tap again, whenever this tap moved the
+    # selection.
+    #
+    # The stops layer was built from `_selected_stop_id` -- the selection as it
+    # stood *before* `st.pydeck_chart` handed back this render's tap -- so the
+    # map on screen is drawn one selection behind. On its own that would be a
+    # cosmetic lag on the magenta ring. It is not, because the highlight is
+    # part of the deck spec and Streamlit folds the deck spec into the chart's
+    # identity: the next tap is made against a chart whose id the next render
+    # will not rebuild, so Streamlit finds no widget state under the id that
+    # render asks for and reports "nothing tapped". That is why every *second*
+    # tap on the map did nothing while the odd-numbered ones worked -- the
+    # alternating pattern is the tell.
+    #
+    # Rerunning here rebuilds the layer with the selection already applied, so
+    # what the user sees is always what the next render will build. Guarded on
+    # an actual change, because re-tapping the stop already selected leaves the
+    # spec, and so the id, untouched: Streamlit may then redeliver the same
+    # payload, and an unguarded rerun would spin on it forever. After the
+    # rerun the guard is self-quieting -- `_selected_stop_id` now matches, so a
+    # redelivered payload changes nothing and reruns nothing.
+    if selected_stop_id != _selected_stop_id:
+        st.rerun()
+
     if picked:
         if st.button("✕ Clear bus selection", key="clear_vehicle_selection"):
             st.session_state['cleared_vehicle_id'] = picked

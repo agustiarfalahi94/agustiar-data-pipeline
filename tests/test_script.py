@@ -4144,6 +4144,97 @@ def test_auto_refresh_fetches_on_a_tick_and_not_on_every_rerun(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Every second tap on the map did nothing
+#
+# Reported from five screenshots: tap a stop, the panel is right; tap the next
+# stop, the panel still names the previous one; tap a third, it catches up.
+# Odd taps worked, even taps were swallowed.
+#
+# The stops layer is built from `selected_stop_id` *before* `st.pydeck_chart`
+# hands back this render's tap, so the drawn map is always one selection
+# behind. That would be a cosmetic lag on the magenta ring if the highlight
+# were not part of the deck spec -- but it is, and Streamlit folds the deck
+# spec into the chart's identity. So a tap that moved the selection left the
+# chart on screen with an id the *next* render would not rebuild, and the next
+# tap was looked up under an id with no widget state behind it.
+#
+# Rerunning as soon as the selection moves keeps the drawn chart and the next
+# render's chart the same chart.
+# ---------------------------------------------------------------------------
+
+
+_STOP_S1 = {'stop_id': 'S1', 'stop_name': 'Tapped Stop',
+            'stop_lat': 3.1401, 'stop_lon': 101.6801, 'distance_m': 50.0}
+_STOP_S2 = {'stop_id': 'S2', 'stop_name': 'Second Stop',
+            'stop_lat': 3.1402, 'stop_lon': 101.6802, 'distance_m': 70.0}
+
+
+def _live_map_for_tap(monkeypatch, payload_objects):
+    from app_pages import live_map as _lm            # noqa: F401  (import shape)
+    selection = SimpleNamespace(selection=SimpleNamespace(objects=payload_objects))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, selection)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: [_STOP_S1, _STOP_S2])
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    return live_map, st_stub
+
+
+def test_a_tap_that_moves_the_stop_selection_redraws_the_map(monkeypatch):
+    live_map, st_stub = _live_map_for_tap(
+        monkeypatch, {"nearby-stops": [{"stop_id": "S2"}]})
+    st_stub.session_state['selected_stop_id'] = 'S1'   # S1 is what is drawn
+
+    st_stub.rerun.reset_mock()
+    live_map.show()
+
+    assert st_stub.session_state['selected_stop_id'] == 'S2'
+    assert st_stub.rerun.called, \
+        "the map was left drawn with the old highlight, so the next tap is lost"
+
+
+def test_re_tapping_the_selected_stop_does_not_redraw(monkeypatch):
+    # The guard. Re-tapping the stop already selected leaves the deck spec --
+    # and so the chart's id -- untouched, so Streamlit can hand the same
+    # payload back on the next render. An unguarded rerun would spin on it.
+    live_map, st_stub = _live_map_for_tap(
+        monkeypatch, {"nearby-stops": [{"stop_id": "S1"}]})
+    st_stub.session_state['selected_stop_id'] = 'S1'
+
+    st_stub.rerun.reset_mock()
+    live_map.show()
+
+    assert st_stub.session_state['selected_stop_id'] == 'S1'
+    assert not st_stub.rerun.called, "a repeated payload would rerun forever"
+
+
+def test_a_bus_tap_that_drops_a_stop_selection_redraws_the_map(monkeypatch):
+    # Same cause from the other direction: tapping a bus clears the stop
+    # selection, which un-highlights a ring, which changes the deck spec.
+    live_map, st_stub = _live_map_for_tap(
+        monkeypatch, {"vehicles": [{"vehicle_id": "V1"}]})
+    st_stub.session_state['selected_stop_id'] = 'S1'
+
+    st_stub.rerun.reset_mock()
+    live_map.show()
+
+    assert st_stub.session_state['selected_stop_id'] is None
+    assert st_stub.rerun.called, \
+        "the ring stayed highlighted after a bus tap, so the next tap is lost"
+
+
+def test_a_render_with_no_tap_does_not_redraw(monkeypatch):
+    # An auto-refresh must not turn into a rerun loop.
+    live_map, st_stub = _live_map_for_tap(monkeypatch, {})
+    st_stub.session_state['selected_stop_id'] = 'S1'
+
+    st_stub.rerun.reset_mock()
+    live_map.show()
+
+    assert not st_stub.rerun.called
+
+
+# ---------------------------------------------------------------------------
 # Task 3: progressive radius and the region hint
 #
 # Standing in Bukit Jalil with KTM Berhad selected, the arrivals panel said

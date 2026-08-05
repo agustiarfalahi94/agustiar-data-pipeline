@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.2] - 2026-08-06
+
+Found by testing 2.11.1: with taps on the map working again, a second fault underneath became
+visible — the panel named the stop tapped *before*, then caught up, then fell behind again.
+
+### Fixed
+- **Every second tap on the map is no longer thrown away.** The stops layer is built from
+  `selected_stop_id` *before* `st.pydeck_chart` hands back this render's tap, so the drawn map is
+  always one selection behind. That was recorded in the README as a harmless cosmetic lag on the
+  ring. It was not harmless: the highlight is part of the deck spec, and Streamlit folds the deck
+  spec into the chart's identity — so a tap that moved the selection left the chart on screen
+  carrying an id the *next* render would not rebuild, and the next tap was looked up under an id
+  with no widget state behind it and read as "nothing tapped". Odd-numbered taps worked,
+  even-numbered ones vanished, which is exactly how it was reported: tap a stop and the panel is
+  right, tap the next and the panel still names the previous one, tap a third and it catches up.
+  `show()` now reruns as soon as the adopted selection differs from the one the layer was drawn
+  with, so the chart the user taps is always the chart the next render builds. The rerun is guarded
+  on an actual change — re-tapping the stop already selected leaves the spec, and so the id,
+  untouched, and Streamlit may hand the same payload back, which an unguarded rerun would spin on
+  forever. The guard is self-quieting: after the rerun the drawn selection matches, so a redelivered
+  payload changes nothing and reruns nothing. This is the one-line guard the README had already
+  described as sufficient but left unbuilt, on the mistaken view that the lag cost only appearance
+- **The selected ring's highlight is now immediate from a ring tap, not only from a name click** —
+  the same rerun that saves the tap also redraws the ring, so the magenta ring and the panel below
+  the map always describe the same stop
+
 ## [2.11.1] - 2026-08-05
 
 Four things reported from local testing, all of them about the map: taps on a stop ring did
