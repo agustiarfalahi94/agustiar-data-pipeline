@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.1] - 2026-08-05
+
+Four things reported from local testing, all of them about the map: taps on a stop ring did
+nothing, taps on a bus did nothing, the selected ring's highlight was invisible on the light map,
+and changing the map theme froze the page for about five seconds.
+
+### Fixed
+- **Tapping a stop ring or a bus on the map now works.** It never did, except by accident. The
+  cause: `get_live_data_optimized` measures its window from wall-clock now, so two calls a second
+  apart disagree even when no new data has arrived — the cutoff has moved, so a bus can fall out of
+  the window, and every remaining bus is a second older, so one can cross from fresh to stale. All
+  of that is drawn: a stale bus is dimmed and its tooltip gains a "stale" line. So the deck spec on
+  the rerun a tap triggers was not the spec the tap was made against, and Streamlit folds the deck
+  spec into the chart's identity — a changed spec is a *new* chart, and a new chart has no tap
+  recorded against it. Every tap was discarded before any code could read it. The live frame is now
+  read once per data refresh instead of once per rerun, so the spec is byte-identical across the
+  rerun a tap causes. This also explains the one case that did work, reported as *"if i apply a
+  route name filter, then clicked the available bus, it works"* — a filter leaves too few buses for
+  any of them to change state in that instant, so the spec happened to stay put
+- **Changing the map theme no longer pauses the page for several seconds.** With *Auto (20s)*
+  selected, the page refetched every agency feed on *every* rerun, not just on the timer — so
+  toggling the theme, or touching any other control, triggered a full network fetch and the page sat
+  waiting for it. Reported as *"if i change the map appearance, my location got reset but would
+  restored after waiting for like 5 seconds"*. Auto-refresh now fetches only when its own 20-second
+  counter advances. The stored location was never actually lost; the wait was the refetch
+- **The selected stop's ring is magenta, not white.** The map has a light theme as well as a dark
+  one, and white disappears into the light one — the highlight added in 2.11.0 was invisible exactly
+  half the time. Magenta reads against both a pale background and a near-black one, and is not
+  already in use: stop rings are gold, buses are blue, the location dot is red
+
+### Changed
+- **A stop's name in "Arrivals near you" is drawn in blue.** It is a tertiary button, which renders
+  in the ordinary body colour, so nothing told the reader it could be tapped. Blue is the same
+  signal the Google Maps link under it already gives
+
 ## [2.11.0] - 2026-08-04
 
 Two complaints from testing in a Mac browser: *"sometimes i missed the click because my cursor is

@@ -55,8 +55,11 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   so a fully hollow ring used to miss a tap that landed in its centre. Tapping anywhere in a stop
   ring, or clicking its name in the list below, opens the same panel with that stop's name,
   distance, walk time, and the buses en route to it — the selection and the panel are instant
-  either way. The selected stop's own ring is then drawn brighter and thicker so it's clear which
-  one is open; clicking the name shows this immediately, but tapping the ring itself can lag by up
+  either way. The selected stop's own ring is then drawn in magenta, thicker than the rest, so it's
+  clear which one is open — magenta rather than white because the map has a light theme as well as
+  a dark one and white vanishes into the light one, and because nothing else on the map uses it
+  (stop rings are gold, buses blue, your own position red); clicking the name shows this
+  immediately, but tapping the ring itself can lag by up
   to one auto-refresh (≤20s) before its own highlight catches up, because the map is drawn before
   that tap's payload is read — forcing it sooner risks the same stale-selection replay the "Clear"
   buttons guard against, so this is left to self-heal rather than risk that. The panel opens between
@@ -91,7 +94,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   lines can be badly wrong: measured from one KL neighbourhood, a stop 60 m away in a straight line
   was 634 m and about ten minutes on foot because of an uncrossable barrier between it and the
   user. Each stop's name in the panel is a button that selects it (the same selection a ring tap
-  sets), highlighted in the list while it is the selected one; a separate **Google Maps** link on
+  sets), drawn in blue so it reads as something you can tap — the same signal the Google Maps link
+  under it gives — and highlighted in the list while it is the selected one; a separate **Google Maps** link on
   the line under it opens walking directions, which this app deliberately does not compute itself
 - **⏳ Freshness tiers** — vehicles reporting within 60s are drawn solid; those up to 5 minutes old
   are dimmed and their tooltip shows when they last reported; older ones are hidden but counted, so
@@ -354,6 +358,8 @@ Live Map      Data Table        Analytics     Network Health
 | **Append-only inserts** | Transit positions are facts — never updated, only added |
 | **`created_at` audit timestamp** | Tracks when each record entered the system |
 | **Hardcoded region dropdown** | Prevents dropdown re-ordering during auto-refresh |
+| **The map is read once per data refresh, not once per rerun** | This is what makes a tap on the map work at all. `get_live_data_optimized` measures its window from wall-clock now, so two calls a second apart disagree even with no new data: the cutoff has moved, so a bus can drop out of the window, and every bus left is a second older, so one can cross from fresh to stale. Both are drawn — a dimmed dot, a "stale" line in a tooltip — so the deck spec differs, and Streamlit folds the deck spec into the chart's identity. The rerun a tap triggers therefore built a *different* chart, which has no tap recorded against it, and the tap was discarded before any code could read it: the page flashed and nothing opened. Holding the frame in session state and replacing it only on a fetch keeps the spec byte-identical across that rerun. The trade is that what the map shows is a snapshot of one fetch rather than a picture that re-colours itself between fetches — which is also more honest, since "Data updated:" above it names the moment that snapshot was taken. A tap that lands in the same instant as a refresh can still be lost; that window is one rerun wide and there is no way to close it while the drawn data is allowed to change |
+| **Auto-refresh fetches on its own timer, not on every rerun** | `st_autorefresh` counts its ticks into session state, so comparing that count against the last one fetched separates "20 seconds passed" from "the user tapped something". Fetching on every rerun refetched every agency feed whenever any control was touched — several seconds of network per tap, reported as the page freezing when the map theme was changed — and it moved the map out from under the tap being handled, per the row above |
 | **GTFS Static 24h cache** | Static schedules change daily at most — avoids hammering the API |
 | **`streamlit-js-eval` for geolocation** | `components.html()` is one-way only; `streamlit-js-eval` provides the two-way JS bridge needed to return browser GPS coordinates to Python |
 | **`fetch_quality_log` table** | Records per-region API quality stats at every fetch — received, rejected, inserted, lag, dropout, and the fetch's `fetch_status` (`OK` / `EMPTY` / `NO_FEED` / `THROTTLED` / `ERROR`), which is what lets the score distinguish an agency outage from a withdrawn feed or our own rate limiting. Powers the Network Health page without touching `live_buses` |

@@ -3988,6 +3988,14 @@ def test_the_camera_follows_the_buses_when_a_quiet_region_recovers(monkeypatch):
         lambda *a, **k: (recovered, {'total': 2, 'stale': 0, 'hidden': 0,
                                      'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'))
 
+    # The 20 seconds, spelled out. A fetch is the only thing that replaces the
+    # held frame, and auto-refresh fetches once per tick -- so a tick is how
+    # new vehicles reach the page at all. Without it the second render redraws
+    # the frame the first one held, which is the whole point of holding it:
+    # see `live_map._live_frame`.
+    st_stub.session_state['auto_refresh'] = True
+    st_stub.session_state['auto_refresh_counter'] = 1
+
     live_map.show()
 
     view = st_stub.session_state['map_view_state']
@@ -4015,6 +4023,124 @@ def test_a_quiet_region_does_not_yank_the_camera_back_on_every_refresh(monkeypat
 
     assert st_stub.session_state['map_view_state']['latitude'] == 5.99, \
         "an auto-refresh during an outage pulled the viewport back"
+
+
+# ---------------------------------------------------------------------------
+# The map has to stay still between renders, or a tap on it is lost
+#
+# Reported as "when i click the bus stop ring the page flashing but do
+# nothing", and separately "the bus also cannot be clicked ... but if i apply
+# a route name filter, then clicked the available bus, it works" -- the filter
+# left too few buses for any of them to change state in that instant, which is
+# the clue that named the cause.
+#
+# `get_live_data_optimized` anchors its window on wall-clock now, so two calls
+# a second apart disagree with no new data at all: the cutoff moved, and a bus
+# crossed from fresh to stale. Both are drawn -- a dimmer dot, a "stale" line
+# in a tooltip -- so the deck spec differs. Streamlit folds the deck spec into
+# the chart's identity, so the rerun a tap triggers built a *different* chart,
+# and a different chart has no tap recorded against it. Every tap was
+# discarded before any code could read it.
+# ---------------------------------------------------------------------------
+
+
+def _moving_window_frames(now):
+    """Two frames one tick apart: same bus, one second older and now stale."""
+    def frame(freshness, age):
+        return pd.DataFrame({
+            'region': ['Rapid Bus KL'], 'vehicle_id': ['V1'],
+            'latitude': [3.14], 'longitude': [101.68], 'bearing': [90.0],
+            'speed': [10.0], 'timestamp': [now], 'trip_id': ['T1'],
+            'route_id': ['T5800'], 'freshness': [freshness],
+            'age_seconds': [age],
+        })
+    return [frame('fresh', 5), frame('stale', 400)]
+
+
+def test_the_map_is_unchanged_across_a_rerun_so_a_tap_on_it_survives(monkeypatch):
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+
+    frames = iter(_moving_window_frames(now))
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (next(frames), {'total': 1, 'stale': 0, 'hidden': 0,
+                                        'regions': 1, 'busiest': 'Rapid Bus KL'},
+                         'now'))
+
+    live_map.show()
+    live_map.show()
+
+    first, second = (c[0][0] for c in st_stub.pydeck_chart.call_args_list[:2])
+    assert first.to_json() == second.to_json(), \
+        "the map changed under a rerun, so Streamlit would drop the tap"
+
+
+def test_the_database_is_read_once_per_refresh_not_once_per_rerun(monkeypatch):
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+
+    reads = []
+    frames = iter(_moving_window_frames(now))
+    def counted(*a, **k):
+        reads.append(1)
+        return (next(frames), {'total': 1, 'stale': 0, 'hidden': 0,
+                               'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now')
+    monkeypatch.setattr(live_map.db, 'get_live_data_optimized', counted)
+
+    live_map.show()
+    live_map.show()
+
+    assert len(reads) == 1, f"the frame was re-read on a plain rerun: {len(reads)} reads"
+
+
+def test_refreshing_replaces_the_held_frame(monkeypatch):
+    # Holding the frame must not mean holding it forever -- pressing Refresh
+    # Data has to show the data that press just fetched.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+
+    reads = []
+    frames = iter(_moving_window_frames(now))
+    def counted(*a, **k):
+        reads.append(1)
+        return (next(frames), {'total': 1, 'stale': 0, 'hidden': 0,
+                               'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now')
+    monkeypatch.setattr(live_map.db, 'get_live_data_optimized', counted)
+
+    live_map.show()
+    st_stub.button.return_value = True         # the user presses Refresh Data
+    live_map.show()
+
+    assert len(reads) == 2, "Refresh Data redrew the frame it was meant to replace"
+
+
+def test_auto_refresh_fetches_on_a_tick_and_not_on_every_rerun(monkeypatch):
+    # Fetching on every rerun refetched every agency feed whenever the user
+    # touched anything -- the several-second pause reported as "if i change the
+    # map appearance, my location got reset but would restored after waiting
+    # for like 5 seconds". It also moved the map out from under the tap being
+    # handled, which is the bug above.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['auto_refresh'] = True
+
+    fetches = []
+    monkeypatch.setattr(live_map, 'fetch_and_store_transit_data',
+                        lambda *a, **k: fetches.append(1))
+
+    st_stub.session_state['auto_refresh_counter'] = 1
+    live_map.show()
+    live_map.show()                            # same tick: a tap, not a timer
+    assert len(fetches) == 1, f"a rerun refetched the network: {len(fetches)} fetches"
+
+    st_stub.session_state['auto_refresh_counter'] = 2
+    live_map.show()
+    assert len(fetches) == 2, "the 20-second timer stopped fetching"
 
 
 # ---------------------------------------------------------------------------

@@ -257,24 +257,67 @@ def create_arrow_paths(lat, lon, bearing, size=ARROW_SIZE):
     ]
 
 
+def _drop_live_frame():
+    """Force the next render to re-read the database. See `_live_frame`."""
+    st.session_state.pop('live_frame', None)
+
+
+def _live_frame():
+    """Read the live vehicles once per data refresh, not once per rerun.
+
+    `get_live_data_optimized` anchors its window on wall-clock now, so two
+    calls a second apart disagree even when not a single row has changed: the
+    cutoff has moved, so a bus can drop out of the window, and every remaining
+    bus is a second older, so one of them can cross from fresh to stale.
+
+    Every one of those differences is drawn. A stale bus is dimmed, its
+    tooltip gains a "stale" line, a dropped bus loses its dot — so the deck
+    spec differs. Streamlit folds the deck spec into the chart's identity, and
+    a chart with a new identity is a new widget with no selection recorded
+    against it. The tap that caused the rerun is therefore read back as
+    "nothing was tapped", which is exactly what taps on the map did: the page
+    flashed and nothing opened.
+
+    Holding the frame keeps the spec byte-identical across the rerun a tap
+    triggers, which is what lets the tap be read at all. The frame is dropped
+    when new data is fetched and at no other time, so what the map shows is a
+    snapshot of one fetch rather than a picture that re-colours itself under
+    the user's finger.
+    """
+    frame = st.session_state.get('live_frame')
+    if frame is None:
+        frame = db.get_live_data_optimized()
+        st.session_state['live_frame'] = frame
+    return frame
+
 
 def show():
     # Refresh behaviour
     if st.session_state.auto_refresh:
-        # When auto-refresh is enabled, fetch data on every rerun
-        with st.spinner('🛰️ Auto-refreshing...'):
-            fetch_and_store_transit_data()
-            st.session_state.last_refresh = True
+        # Only on a timer tick, not on every rerun. `st_autorefresh` counts its
+        # own ticks into session state under this key, so comparing it against
+        # the last one fetched separates "20 seconds passed" from "the user
+        # tapped something". Fetching on every rerun refetched the whole
+        # network on every tap — and, worse, moved the map out from under the
+        # tap being handled (see `_live_frame`).
+        tick = st.session_state.get('auto_refresh_counter')
+        if tick != st.session_state.get('auto_refresh_fetched_tick'):
+            st.session_state['auto_refresh_fetched_tick'] = tick
+            with st.spinner('🛰️ Auto-refreshing...'):
+                fetch_and_store_transit_data()
+                st.session_state.last_refresh = True
+                _drop_live_frame()
     else:
         # Manual refresh button (only show if not auto-refresh)
         if st.button("🔄 Refresh Data", type="primary", use_container_width=False):
             with st.spinner('🛰️ Fetching...'):
                 fetch_and_store_transit_data()
                 st.session_state.last_refresh = True
+                _drop_live_frame()
             st.rerun()
 
     # Get data - single optimized query for current state
-    df_live, metrics, actual_sync_time = db.get_live_data_optimized()
+    df_live, metrics, actual_sync_time = _live_frame()
 
     window_label = data_processor.format_duration(LIVE_HIDDEN_SECONDS)
     drawn_label = data_processor.format_duration(LIVE_STALE_SECONDS)
