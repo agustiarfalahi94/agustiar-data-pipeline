@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.1] - 2026-08-06
+
+Asked for directly: *"i want the map and the arrivals near you list to be sync. when i click on the
+map, the list also highlighted, and the other way around."*
+
+### Fixed
+- **The stop selected on the map is now always in "Arrivals near you", and first.** The map draws a
+  ring for every stop the scan found — 13 in a typical 800 m neighbourhood here — while the list is
+  a ranked top five. So tapping a ring usually selected a stop the list did not contain, and the
+  list's only feedback, the highlighted name, was missing from the one place the user was looking.
+  The panel above the list did update, but on a phone it sits above the fold, so the tap read as
+  having done nothing at all. Reported as *"when i tap bus stop in map, and then i choose the other
+  bus stop in arrivals near you, it do nothing"*. The pin is styled from the same
+  `selected_stop_id` the ring is styled from, so there is no second selection and the two views
+  cannot disagree. The reverse direction — clicking a name highlighting the ring — already worked
+  and is unchanged
+- **Pinning does not lengthen the list.** The pinned stop replaces the last ranked entry rather than
+  adding a sixth row under the reader
+- **"More stops have buses coming" now counts what was actually listed**, rather than subtracting
+  the display cap. With a stop pinned from the map, the old arithmetic understated the number left
+  out by exactly one. The wording also now says those stops are still drawn as rings, and that
+  tapping one lists it — which is only true because of the pin above
+
 ## [2.12.0] - 2026-08-06
 
 Reported from production: *"when i choose PAVBJ VGJ8310 bus in route viewer, it persist to

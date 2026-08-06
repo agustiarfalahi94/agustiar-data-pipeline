@@ -4235,6 +4235,92 @@ def test_a_render_with_no_tap_does_not_redraw(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# The map and "Arrivals near you" describe the same stop
+#
+# The map draws a ring for every stop the scan found; the list is a ranked top
+# few. So tapping a ring usually selected a stop the list did not contain, and
+# the list's only feedback -- the highlighted name -- was missing from the one
+# place the user was looking. Asked for directly: "i want the map and the
+# arrivals near you list to be sync."
+# ---------------------------------------------------------------------------
+
+
+def _many_stops(n=9):
+    return [{'stop_id': f'S{i}', 'stop_name': f'STOP {i}',
+             'stop_lat': 3.14 + i / 1000, 'stop_lon': 101.68,
+             'distance_m': 50.0 + i * 10}
+            for i in range(n)]
+
+
+def _stop_buttons(st_stub):
+    """(name, is_selected) for each stop button drawn in the list."""
+    out = []
+    for c in st_stub.button.call_args_list:
+        key = c.kwargs.get('key') or ''
+        if str(key).startswith('pick_stop_'):
+            out.append((str(c.args[0]), c.kwargs.get('type') == 'primary'))
+    return out
+
+
+def _live_map_for_list(monkeypatch, selected=None):
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.14, 'lon': 101.68, 'accuracy': 10}
+    if selected:
+        st_stub.session_state['selected_stop_id'] = selected
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: _many_stops())
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    return live_map, st_stub
+
+
+def test_a_stop_tapped_on_the_map_is_listed_even_when_it_did_not_rank(monkeypatch):
+    # S8 is the furthest of nine and would never make the ranked list.
+    live_map, st_stub = _live_map_for_list(monkeypatch, selected='S8')
+
+    live_map.show()
+
+    listed = _stop_buttons(st_stub)
+    assert any('STOP 8' in name for name, _ in listed), \
+        f"the tapped stop was left out of the list: {[n for n, _ in listed]}"
+
+
+def test_the_tapped_stop_is_listed_first_and_highlighted(monkeypatch):
+    live_map, st_stub = _live_map_for_list(monkeypatch, selected='S8')
+
+    live_map.show()
+
+    listed = _stop_buttons(st_stub)
+    assert listed, "no stop buttons were drawn"
+    name, is_selected = listed[0]
+    assert 'STOP 8' in name, f"the tapped stop was not first: {listed[0]}"
+    assert is_selected, "the tapped stop was listed but not highlighted"
+    assert sum(1 for _, sel in listed if sel) == 1, \
+        f"more than one stop was highlighted: {listed}"
+
+
+def test_pinning_the_tapped_stop_does_not_lengthen_the_list(monkeypatch):
+    live_map, st_stub_plain = _live_map_for_list(monkeypatch)
+    live_map.show()
+    without = len(_stop_buttons(st_stub_plain))
+
+    live_map, st_stub_picked = _live_map_for_list(monkeypatch, selected='S8')
+    live_map.show()
+    with_pin = len(_stop_buttons(st_stub_picked))
+
+    assert with_pin == without, \
+        f"the list grew under the user: {without} -> {with_pin}"
+
+
+def test_nothing_is_highlighted_when_no_stop_is_selected(monkeypatch):
+    live_map, st_stub = _live_map_for_list(monkeypatch)
+
+    live_map.show()
+
+    assert not any(sel for _, sel in _stop_buttons(st_stub))
+
+
+# ---------------------------------------------------------------------------
 # The Route Viewer follows the tapped bus, and never swaps it for another
 #
 # Reported as "when i choose PAVBJ VGJ8310 bus in route viewer, it persist to

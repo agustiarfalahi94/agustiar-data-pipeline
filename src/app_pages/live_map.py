@@ -1550,6 +1550,31 @@ def show():
                 if len(shown) < NEARBY_STOP_MIN_SHOWN:
                     shown += unserved[:NEARBY_STOP_MIN_SHOWN - len(shown)]
 
+                # The selected stop is always in this list, and first.
+                #
+                # The map draws a ring for every stop the scan found — the
+                # median 800 m neighbourhood here holds 13 — while this list is
+                # a ranked top few. So tapping a ring usually selected a stop
+                # the list did not contain, and the list's only feedback, the
+                # highlighted name, was missing from the very place the user
+                # was looking. The panel above did change, but on a phone it is
+                # above the fold. Reported as the map and the list not being in
+                # sync: "when i tap bus stop in map ... it do nothing".
+                #
+                # First rather than merely present, so the highlight can be
+                # seen without hunting for it, and the length is held to what
+                # the ranking already chose — pinning a stop drops the last
+                # ranked one rather than growing the list under the user.
+                if selected_stop_id:
+                    _picked_row = next(
+                        (s for s in nearby
+                         if s['stop_id'] == selected_stop_id), None)
+                    if _picked_row is not None:
+                        _cap = len(shown) or 1
+                        shown = ([_picked_row]
+                                 + [s for s in shown
+                                    if s['stop_id'] != selected_stop_id])[:_cap]
+
                 walks = walking.walk_times(
                     loc['lat'], loc['lon'], shown, agency_slug,
                     api_key=ors_key)
@@ -1638,11 +1663,19 @@ def show():
                 # 800 m neighbourhood here holds 13 stops, so overflowing the
                 # display cap is ordinary rather than exceptional. Say how many
                 # were left out; silence is what made the original bug invisible.
-                if len(served) > NEARBY_STOP_DISPLAY:
+                # Counted against what was actually listed, not against the
+                # display cap: pinning the selected stop to the top drops one
+                # ranked stop, so subtracting the cap would have understated
+                # the number left out by exactly one whenever a stop was
+                # selected from the map.
+                _listed_ids = {s['stop_id'] for s in shown}
+                _served_unlisted = [s for s in served
+                                    if s['stop_id'] not in _listed_ids]
+                if _served_unlisted:
                     st.caption(
-                        f"{len(served) - NEARBY_STOP_DISPLAY} more nearby stop(s) "
-                        f"also have buses coming — only the {NEARBY_STOP_DISPLAY} "
-                        f"nearest of them are listed."
+                        f"{len(_served_unlisted)} more nearby stop(s) also have "
+                        f"buses coming and are not listed here — they are still "
+                        f"drawn as rings on the map, and tapping one lists it."
                     )
                 # skipped has three keys — no_trip_id, trip_not_in_schedule and
                 # bad_position. Report every non-zero one; a vehicle omitted
