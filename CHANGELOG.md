@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.1] - 2026-08-07
+
+### Fixed
+- **README documents the Data Table's "Rows to load" control.** 2.15.0 added it and described it in
+  the design-decisions table but never in the feature list, so a reader looking for what the page
+  does would not have found it
+
 ## [2.15.0] - 2026-08-06
 
 Asked for after 2.14.0: page switches still took seconds. They were not caused by the refresh — I

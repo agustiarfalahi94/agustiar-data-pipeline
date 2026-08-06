@@ -115,7 +115,12 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 
 ### 📊 Data Table
 - **Multi-region filtering** with sortable, filterable table
-- **CSV export** for offline analysis
+- **Rows to load** — newest 1,000 by default, or 10,000, or all rows. The default keeps the page at
+  about 140 ms; loading the whole retention window is offered rather than removed, because a
+  silently shrunken export would be worse than a slow one. A caption says how many of the total are
+  on screen
+- **CSV export** for offline analysis — contains exactly the rows shown, so what you download and
+  what you read are never different sets
 - **Audit timestamp** — `created_at` column showing when each record was first ingested
 - Auto-refresh compatible
 
