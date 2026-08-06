@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-08-06
+
+Two pieces of tidying asked for after testing 2.12.1.
+
+### Removed
+- **The raw position table at the bottom of the Live Map.** The Route Viewer printed the selected
+  vehicle's positions as a table under its map — the same columns 📊 Data Table already shows, for
+  one vehicle, with no filtering, sorting or download. *"we already have data table dedicated
+  page."* The trail itself is not lost: it is still drawn as the orange line whenever the region
+  publishes no planned route for that trip
+
+### Changed
+- **The map theme toggle appears only on the Live Map.** `map_theme` is read by that page and
+  nothing else, so on 📊 Data Table, 📈 Analytics, 📡 Network Health and ⚙️ Settings it was a button
+  the user could press and watch do nothing — *"it's unusable anyway in other page"*. The chosen
+  theme still persists in session state while the user is on another page, so returning to the Live
+  Map finds the map as they left it. **🔄 Refresh Mode** is unchanged and still offered everywhere,
+  because it applies everywhere
+
 ## [2.12.1] - 2026-08-06
 
 Asked for directly: *"i want the map and the arrivals near you list to be sync. when i click on the

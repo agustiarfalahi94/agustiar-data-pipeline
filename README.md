@@ -109,7 +109,9 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Header metrics** — **Active Buses** (everything drawn: fresh + stale), **Stale** (the dimmed
   share of it), **Regions Monitored** and **Busiest Region**. All four are network-wide; the caption
   under the map reports the same counts for the selected region
-- **Dark/Light map themes**
+- **Dark/Light map themes** — the toggle lives in the sidebar under **🎨 Appearance** and is
+  offered only on this page, because it is the only page with a map to theme. The choice is
+  remembered while you are on other pages
 
 ### 📊 Data Table
 - **Multi-region filtering** with sortable, filterable table
@@ -138,7 +140,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 
 ### ⚙️ Settings & Controls
 - **Manual or Auto refresh** (20-second interval)
-- **Independent map theme** toggle (separate from the page theme)
+- **Independent map theme** toggle (separate from the page theme), shown only on the Live Map —
+  the page whose map it themes. Elsewhere it was a button that visibly did nothing
 
 ---
 
@@ -401,6 +404,8 @@ Live Map      Data Table        Analytics     Network Health
 3. `trips.txt` → resolves `shape_id` → `shapes.txt` → ordered `[lon, lat]` path
 4. Drawn as a green `PathLayer` on the map
 5. If no shape is available (optional field in GTFS), falls back to the vehicle's historical breadcrumb trail from DuckDB
+6. The trail is drawn as a line only. Its raw rows are not printed here — **📊 Data Table** is the
+   page for reading rows, and offers every region, sorting, filtering and CSV download
 
 ### Database Schema (`live_buses`)
 

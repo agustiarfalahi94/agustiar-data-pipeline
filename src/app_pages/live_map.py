@@ -1855,16 +1855,9 @@ def show():
             else:
                 st.info("No route data available.")
 
-            # ---- Always show historical position table if trail exists ----
-            if trail_df is not None and not trail_df.empty:
-                display_trail = trail_df[['timestamp', 'latitude', 'longitude', 'speed', 'bearing']].copy()
-                display_trail['speed'] = (display_trail['speed'] * 3.6).round(1)  # m/s → km/h
-                display_trail['bearing'] = display_trail['bearing'].round(1)
-                display_trail = display_trail.rename(columns={
-                    'timestamp': 'Timestamp',
-                    'latitude': 'Latitude',
-                    'longitude': 'Longitude',
-                    'speed': 'Speed (km/h)',
-                    'bearing': 'Bearing (°)',
-                })
-                st.dataframe(display_trail, use_container_width=True)
+            # The vehicle's raw positions used to be printed as a table here.
+            # Removed: 📊 Data Table is the page for reading rows, and it does
+            # the job better — every region, sortable, filterable, downloadable
+            # as CSV — while this copy showed one vehicle's columns with no way
+            # to do anything with them. The trail itself is not lost; it is the
+            # orange line drawn above whenever no planned route is published.

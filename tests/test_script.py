@@ -4401,6 +4401,27 @@ def test_a_quiet_bus_keeps_its_own_route_instead_of_borrowing_another(monkeypatc
     assert 'has not reported' not in _texts(st_stub.warning)
 
 
+def test_the_live_map_prints_no_raw_position_table(monkeypatch):
+    # 📊 Data Table is the page for reading rows. The Route Viewer used to
+    # print one vehicle's raw positions underneath its map -- the same columns,
+    # for one vehicle, with no filter, sort or download. The trail itself is
+    # still drawn as a line; only the table is gone.
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+    trail = pd.DataFrame({
+        'vehicle_id': ['V1', 'V1'], 'latitude': [3.14, 3.15],
+        'longitude': [101.68, 101.69], 'bearing': [90.0, 91.0],
+        'speed': [10.0, 11.0], 'timestamp': [now - 60, now],
+    })
+    monkeypatch.setattr(live_map.db, 'get_vehicle_trail', lambda *a, **k: trail)
+
+    live_map.show()
+
+    assert not st_stub.dataframe.called, \
+        "the Live Map printed a raw position table again"
+
+
 def test_a_bus_gone_from_the_window_is_named_not_replaced(monkeypatch):
     empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
     live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)

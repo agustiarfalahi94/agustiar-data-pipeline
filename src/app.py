@@ -94,20 +94,27 @@ with st.sidebar:
 
     st.title("⚙️ Settings")
 
-    # Theme controls
-    st.subheader("🎨 Appearance")
-    
-    # Only map theme button (page theme uses Streamlit's built-in settings)
-    map_theme_btn = st.button(
-        "🗺️ Map: Dark" if st.session_state.map_theme == 'light' else "🗺️ Map: Light",
-        use_container_width=True,
-        key="map_theme_btn"
-    )
-    if map_theme_btn:
-        st.session_state.map_theme = 'dark' if st.session_state.map_theme == 'light' else 'light'
-        st.rerun()
+    # Theme controls, on the one page that has a map to theme.
+    #
+    # `map_theme` is read only by live_map.py, so on every other page this
+    # button was a control the user could press and watch do nothing. It is
+    # offered where it applies and hidden where it does not; the chosen theme
+    # still persists in session state while the user is away, so returning to
+    # the Live Map finds it as they left it.
+    if st.session_state.current_page == "🗺️ Live Map":
+        st.subheader("🎨 Appearance")
 
-    st.divider()
+        # Only map theme button (page theme uses Streamlit's built-in settings)
+        map_theme_btn = st.button(
+            "🗺️ Map: Dark" if st.session_state.map_theme == 'light' else "🗺️ Map: Light",
+            use_container_width=True,
+            key="map_theme_btn"
+        )
+        if map_theme_btn:
+            st.session_state.map_theme = 'dark' if st.session_state.map_theme == 'light' else 'light'
+            st.rerun()
+
+        st.divider()
 
     # Refresh controls
     st.subheader("🔄 Refresh Mode")
