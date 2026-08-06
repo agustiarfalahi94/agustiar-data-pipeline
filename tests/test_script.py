@@ -13,6 +13,7 @@ from utils.data_processor import convert_speed_to_kmh, prepare_map_data, get_sor
 from unittest.mock import patch, MagicMock
 from utils.ingestion import _fetch_endpoint
 from utils import walking
+from utils import background_fetch
 
 
 # ── convert_speed_to_kmh ──────────────────────────────────────────────────────
@@ -1024,6 +1025,12 @@ def _stub_streamlit(monkeypatch, module):
     )
     monkeypatch.setattr(module, 'st', st_stub)
     monkeypatch.setattr(module, 'fetch_and_store_transit_data', lambda *a, **k: None)
+    # No test may start the real fetch thread. It would reach
+    # api.data.gov.my and write to the developer's database, and it would
+    # outlive the test that spawned it. Tests that care about the tick rule
+    # patch `start` again with a counter of their own.
+    monkeypatch.setattr(background_fetch, 'start', lambda: False)
+    monkeypatch.setattr(background_fetch, 'is_running', lambda: False)
 
     # ── the page must never reach OpenRouteService from a test ──────────────
     #
@@ -3988,13 +3995,14 @@ def test_the_camera_follows_the_buses_when_a_quiet_region_recovers(monkeypatch):
         lambda *a, **k: (recovered, {'total': 2, 'stale': 0, 'hidden': 0,
                                      'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now'))
 
-    # The 20 seconds, spelled out. A fetch is the only thing that replaces the
-    # held frame, and auto-refresh fetches once per tick -- so a tick is how
-    # new vehicles reach the page at all. Without it the second render redraws
-    # the frame the first one held, which is the whole point of holding it:
-    # see `live_map._live_frame`.
-    st_stub.session_state['auto_refresh'] = True
-    st_stub.session_state['auto_refresh_counter'] = 1
+    # The 20 seconds, spelled out. A finished fetch is the only thing that
+    # replaces the held frame, so that is how new vehicles reach the page at
+    # all. Driven through the same seam the page uses -- a fetch was in flight
+    # and is no longer -- rather than by reaching for the private helper.
+    # Without it the second render redraws the frame the first one held, which
+    # is the whole point of holding it: see `live_map._live_frame`.
+    st_stub.session_state['fetch_in_flight'] = True
+    monkeypatch.setattr(live_map.background_fetch, 'is_running', lambda: False)
 
     live_map.show()
 
@@ -4123,24 +4131,88 @@ def test_auto_refresh_fetches_on_a_tick_and_not_on_every_rerun(monkeypatch):
     # touched anything -- the several-second pause reported as "if i change the
     # map appearance, my location got reset but would restored after waiting
     # for like 5 seconds". It also moved the map out from under the tap being
-    # handled, which is the bug above.
+    # handled, which is the bug above. The fetch runs on a thread now, so the
+    # rule is asserted where the page and the thread meet.
     from app_pages import live_map
     empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
     live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
     st_stub.session_state['auto_refresh'] = True
 
-    fetches = []
-    monkeypatch.setattr(live_map, 'fetch_and_store_transit_data',
-                        lambda *a, **k: fetches.append(1))
+    started = []
+    monkeypatch.setattr(live_map.background_fetch, 'start',
+                        lambda: started.append(1) or True)
 
     st_stub.session_state['auto_refresh_counter'] = 1
     live_map.show()
     live_map.show()                            # same tick: a tap, not a timer
-    assert len(fetches) == 1, f"a rerun refetched the network: {len(fetches)} fetches"
+    assert len(started) == 1, f"a rerun refetched the network: {len(started)} fetches"
 
     st_stub.session_state['auto_refresh_counter'] = 2
     live_map.show()
-    assert len(fetches) == 2, "the 20-second timer stopped fetching"
+    assert len(started) == 2, "the 20-second timer stopped fetching"
+
+
+def test_the_auto_refresh_never_blocks_the_render(monkeypatch):
+    # The whole point: 3-10 seconds of waiting on api.data.gov.my used to sit
+    # in front of the page on every tick, for data already 26-124 seconds old.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['auto_refresh'] = True
+    st_stub.session_state['auto_refresh_counter'] = 1
+
+    blocking = []
+    monkeypatch.setattr(live_map, 'fetch_and_store_transit_data',
+                        lambda *a, **k: blocking.append(1))
+
+    live_map.show()
+
+    assert not blocking, "the render waited on the network again"
+
+
+def test_a_running_fetch_is_visible_to_the_user(monkeypatch):
+    # A refresh the user cannot see is a page they cannot tell from a stuck
+    # one. This note is what buys the right to fetch out of sight.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    monkeypatch.setattr(live_map.background_fetch, 'is_running', lambda: True)
+
+    live_map.show()
+
+    assert 'updating' in _texts(st_stub.success), _texts(st_stub.success)
+
+
+def test_nothing_says_updating_when_no_fetch_is_running(monkeypatch):
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+
+    live_map.show()
+
+    assert 'updating' not in _texts(st_stub.success)
+
+
+def test_a_finished_fetch_replaces_the_held_frame(monkeypatch):
+    # The thread owns no session state and must not reach into any, so the
+    # page notices the fetch has ended and drops the frame itself.
+    from app_pages import live_map
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(monkeypatch, empty)
+
+    reads = []
+    frames = iter(_moving_window_frames(now))
+    def counted(*a, **k):
+        reads.append(1)
+        return (next(frames), {'total': 1, 'stale': 0, 'hidden': 0,
+                               'regions': 1, 'busiest': 'Rapid Bus KL'}, 'now')
+    monkeypatch.setattr(live_map.db, 'get_live_data_optimized', counted)
+
+    live_map.show()
+    st_stub.session_state['fetch_in_flight'] = True    # one ran while away
+    live_map.show()
+
+    assert len(reads) == 2, "the page kept the frame a finished fetch replaced"
 
 
 # ---------------------------------------------------------------------------

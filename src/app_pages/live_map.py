@@ -9,6 +9,7 @@ from utils.ingestion import fetch_and_store_transit_data
 from utils import gtfs_static
 from utils import route_view
 from utils import walking
+from utils import background_fetch
 
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE
@@ -294,27 +295,33 @@ def _live_frame():
 def show():
     # Refresh behaviour
     if st.session_state.auto_refresh:
-        # Only on a timer tick, not on every rerun. `st_autorefresh` counts its
-        # own ticks into session state under this key, so comparing it against
-        # the last one fetched separates "20 seconds passed" from "the user
-        # tapped something". Fetching on every rerun refetched the whole
-        # network on every tap — and, worse, moved the map out from under the
-        # tap being handled (see `_live_frame`).
-        tick = st.session_state.get('auto_refresh_counter')
-        if tick != st.session_state.get('auto_refresh_fetched_tick'):
-            st.session_state['auto_refresh_fetched_tick'] = tick
-            with st.spinner('🛰️ Auto-refreshing...'):
-                fetch_and_store_transit_data()
-                st.session_state.last_refresh = True
-                _drop_live_frame()
+        # Started on the timer's tick and left to run behind the page. The
+        # fetch is 3-10 seconds of waiting on the agency's server; reading the
+        # result back out of DuckDB is about 30 milliseconds. Blocking here
+        # froze the page for the slower of those two on every tick, for data
+        # that is already 26-124 seconds old when it lands. See
+        # `utils/background_fetch.py`.
+        background_fetch.maybe_start_tick_fetch(st.session_state)
     else:
-        # Manual refresh button (only show if not auto-refresh)
+        # The manual button still waits, deliberately. The user pressed it and
+        # is watching for an answer, so finishing before the page redraws is
+        # the behaviour they asked for — the complaint was about waiting on a
+        # refresh nobody asked for, not this one.
         if st.button("🔄 Refresh Data", type="primary", use_container_width=False):
             with st.spinner('🛰️ Fetching...'):
                 fetch_and_store_transit_data()
                 st.session_state.last_refresh = True
                 _drop_live_frame()
             st.rerun()
+
+    # A background fetch that has just finished has written rows the held frame
+    # predates, so the frame is dropped here rather than by the thread — which
+    # owns no session state and must not reach into any.
+    _fetching = background_fetch.is_running()
+    if st.session_state.get('fetch_in_flight') and not _fetching:
+        _drop_live_frame()
+        st.session_state.last_refresh = True
+    st.session_state['fetch_in_flight'] = _fetching
 
     # Get data - single optimized query for current state
     df_live, metrics, actual_sync_time = _live_frame()
@@ -338,7 +345,13 @@ def show():
 
     # Show sync time
     if actual_sync_time:
-        st.success(f"Data updated: {actual_sync_time}")
+        # The note is the whole reason the fetch may run out of sight: without
+        # it a background refresh is invisible and the user cannot tell a live
+        # page from a stuck one. It says work is happening without holding the
+        # page still while it happens.
+        st.success(
+            f"Data updated: {actual_sync_time}"
+            + (" · 🛰️ updating…" if _fetching else ""))
 
     # Metrics. All four are network-wide, across every region — the map below
     # shows one region. "Active" means the same here as in the caption under the

@@ -1,14 +1,17 @@
 import streamlit as st
 from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
+from utils import background_fetch
 
 
 def show():
     # Refresh behaviour
     if st.session_state.auto_refresh:
-        with st.spinner('🛰️ Auto-refreshing...'):
-            fetch_and_store_transit_data()
-            st.session_state.last_refresh = True
+        # Behind the page, and once per timer tick rather than once per rerun.
+        # Blocking here froze this page for the 3-10 seconds the agency's
+        # server takes to answer, and it ran again on every interaction, not
+        # only when the 20 seconds were up. See `utils/background_fetch.py`.
+        background_fetch.maybe_start_tick_fetch(st.session_state)
     else:
         # Manual refresh button
         if st.button("🔄 Refresh Data", type="primary"):

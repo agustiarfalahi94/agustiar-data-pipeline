@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-08-06
+
+Asked for: make the refresh wait shorter — *"keep it at 20s, but make the fetch loading time from
+3-10s to miliseconds"*.
+
+Measured first, because the honest answer shaped the fix. `api.data.gov.my` takes **3-6 seconds** to
+answer one endpoint, even one whose whole reply is 143 bytes; a full refresh was timed at **21-29
+seconds** while the API was struggling. No code of ours makes a remote server reply in
+milliseconds. But reading the result back out of DuckDB takes about **30 ms** — so the page was
+never slow, it was standing still in front of a network call.
+
+### Changed
+- **The auto-refresh fetch no longer blocks the page.** It runs on a daemon thread
+  (`utils/background_fetch.py`) and the page renders from whatever the database already holds.
+  Measured at **~147 ms per interaction with a fetch in flight**, against a page that used to freeze
+  for the length of the slowest agency's reply on every 20-second tick. New rows appear on the
+  following tick — a small cost against data that is already 26-124 seconds old when it arrives.
+  The thread touches no Streamlit state: it has no ScriptRunContext, and session state belongs to
+  one session while the thread is shared by all of them, so the page notices the fetch has ended and
+  replaces its own held frame. Only one fetch runs at a time, or a feed having a bad minute would
+  stack a thread per tick, all writing to the same database
+- **A background refresh still says it is happening.** While a fetch runs the sync line reads
+  `Data updated: … · 🛰️ updating…`. A refresh nobody can see is a page you cannot tell from a stuck
+  one; this keeps the signal the blocking spinner gave without holding the page still to give it
+- **The manual Refresh Data button still blocks, deliberately.** The user pressed it and is watching
+  for an answer. Measured at 3.1 s
+- **All fifteen endpoints now go in one wave.** The thread pool was fixed at ten for fifteen
+  endpoints, so the last five waited for the first ten to finish. It is sized to the endpoint list,
+  so adding an agency cannot silently reintroduce a second wave
+- **Every request shares one pooled HTTPS connection.** All fifteen endpoints are on the same host,
+  and a bare `requests.get` repeated the TLS handshake for each of them. Fifteen handshakes per
+  refresh became one pool
+- **📊 Data Table, 📈 Analytics and 📡 Network Health fetch on the timer's tick too.** All three
+  refetched the entire network on *every* rerun, not only when the 20 seconds were up — the same
+  fault fixed for the Live Map in 2.11.1, still present on the other three pages
+
 ## [2.13.0] - 2026-08-06
 
 Two pieces of tidying asked for after testing 2.12.1.

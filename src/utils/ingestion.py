@@ -1,4 +1,5 @@
 import requests
+import requests.adapters
 import pandas as pd
 from google.transit import gtfs_realtime_pb2
 from google.protobuf.json_format import MessageToDict
@@ -65,6 +66,26 @@ def _merge_status(a, b):
                if s in _STATUS_PRECEDENCE else len(_STATUS_PRECEDENCE))
 
 
+# One wave, not two. With ten workers and fifteen endpoints the last five
+# waited for the first ten to finish, doubling the wall clock of every refresh
+# for no reason. Sized to the endpoint list so adding an agency cannot silently
+# reintroduce a second wave.
+_MAX_FETCH_WORKERS = max(1, sum(len(v) for v in API_SOURCES.values()))
+
+# One HTTPS connection pool, reused across every endpoint.
+#
+# All fifteen endpoints live on the same host, and a bare `requests.get` opens
+# a fresh TCP connection and repeats the TLS handshake for each of them —
+# fifteen handshakes per refresh against a server that already takes 3-6
+# seconds to answer. `pool_maxsize` matches the worker count so threads never
+# queue for a free connection. `max_retries=0` keeps the existing behaviour:
+# a failed endpoint is recorded as ERROR and the refresh moves on rather than
+# holding the other fourteen up.
+_SESSION = requests.Session()
+_SESSION.mount('https://', requests.adapters.HTTPAdapter(
+    pool_connections=4, pool_maxsize=_MAX_FETCH_WORKERS, max_retries=0))
+
+
 def _fetch_endpoint(name, endpoint):
     """
     Fetch vehicle data from a single API endpoint.
@@ -74,7 +95,7 @@ def _fetch_endpoint(name, endpoint):
     url = f'{API_BASE_URL}{endpoint}'
     t0 = time.time()
     try:
-        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response = _SESSION.get(url, timeout=REQUEST_TIMEOUT)
         duration_ms = int((time.time() - t0) * 1000)
         if response.status_code == 200:
             feed = gtfs_realtime_pb2.FeedMessage()
@@ -238,7 +259,7 @@ def fetch_and_store_transit_data():
         for endpoint in endpoints
     ]
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=_MAX_FETCH_WORKERS) as executor:
         future_to_task = {
             executor.submit(_fetch_endpoint, name, endpoint): (name, endpoint)
             for name, endpoint in tasks
