@@ -21,7 +21,11 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Hover tooltips** — vehicle ID, route, speed (km/h), bearing, and the local clock time the
   vehicle last reported (marked ⚠️ stale when it is over a minute old)
 - **📍 Locate Me** — centres the map on your current GPS location with a red marker
-- **🚌 Route Viewer** — select any vehicle to see its planned route (from GTFS Static) or historical breadcrumb trail as a fallback
+- **🚌 Route Viewer** — tap a bus on the map and this opens on that bus, showing its planned route
+  (from GTFS Static) or its historical breadcrumb trail as a fallback. It holds exactly the bus you
+  tapped and offers no others, so it cannot end up naming one bus above another bus's route. If
+  that bus goes quiet it stays put and says when it last reported, rather than switching to
+  whichever bus happens to be first in the list
 - **🔎 Route search** — type a route number or name (e.g. `T580`, or `awan besar`) to show only the vehicles running it; the map recentres on the matches. If nothing matches, it says why — whether the route runs in this region but is quiet, or belongs to a different region (and which). Not available for KTM Berhad, whose realtime feed carries no route ID
 - **🎨 Search by what's painted on the bus** — a rider reads `GOKL14` on the front of the vehicle,
   but the feed publishes that route as `PAVILION BUKIT JALIL (PAVBJ)`; no `GOKL` route exists
@@ -382,11 +386,13 @@ Live Map      Data Table        Analytics     Network Health
 | **Serves lists the timetable, not the live feed** | The arrival list answers "what bus is coming"; `Serves:` answers "what buses call here at all", built from a `{stop_id: {route_id, ...}}` index constructed in the same pass over `stop_times.txt` that already builds the trip-stops index, so listing every serving route costs no second parse of an 87,935-row file. Measured on Rapid Bus KL, KL2324 LRT AWAN BESAR is served by four routes and KL1743 GREEN AVENUE CONDOMINIUM by exactly one — `T580` — which the arrival list alone could go an entire refresh cycle without ever showing |
 | **One expander per stop pattern, never merged** | A route can run more than one distinct stop sequence — 37 of Rapid KL's 136 timetabled routes run two, one runs three. Merging them into a single sequence would silently pick one and misrepresent the rest, exactly the failure this feature exists to remove. `get_route_patterns` de-duplicates identical sequences and returns each distinct one with a representative trip_id; `pattern_titles` gives each a unique heading (stop count and running time separate most collisions, a numbered suffix settles the rest) |
 | **Journey times are anchored to the first occurrence of the tapped stop** | On a loop the tapped stop appears at both ends of the sequence. Anchoring to the later occurrence would make every earlier stop read as a negative offset. T580 is the measured case: anchored at LRT Awan Besar, KM1 Bukit Jalil reads `+1 min` and Green Avenue Condominium — 60 m away on the ground — reads `+32 min`, the same 40-minute loop on opposite legs |
+| **The Route Viewer holds one bus, and it is the tapped one** | Its options were every drawn vehicle, rebuilt from `df_map` on every render. `df_map` drops a bus five minutes after it stops reporting and narrows again under a route search, so a chosen bus could leave the options while its route was being read — and Streamlit resolves a stored selection that is no longer among the options by falling back to the first option, silently. The viewer then showed the old vehicle id above an unrelated bus's route. Reported as *"when i choose PAVBJ VGJ8310 bus in route viewer, it persist to CDH2336"*. The picker now offers exactly the bus tapped on the map and carries no widget key, so there is neither a list to fall through nor a stored value to go stale. The bus is resolved against the region's whole live frame rather than the drawn, searched `df_map`: a bus that has gone quiet, or one a route search hides, is still the bus the user asked about. Past the 15-minute window the feed has nothing left to say, and the viewer names the bus and says so instead of quietly showing a different one |
 | **Expanders collapsed on arrival** | A stop pattern is a full stop list — up to 35 rows for T580 — repeated once per route serving the stop. Rendered open by default it would push the map off a phone screen before the rider asked for it; `st.expander(...)` defaults to collapsed and only the heading (route, pattern title, stop count, running time) is visible until tapped |
 
 ### Route Viewer — How It Works
 
-1. User selects a vehicle in the Route Viewer expander
+1. The user taps a bus on the map; the Route Viewer opens on that bus (`selected_vehicle_id`) —
+   the same session key the bus panel reads, so the two can never describe different buses
 2. The vehicle's `trip_id` (captured from the realtime feed) is looked up against the **GTFS Static** ZIP for that region (`https://api.data.gov.my/gtfs-static/<agency>`)
 3. `trips.txt` → resolves `shape_id` → `shapes.txt` → ordered `[lon, lat]` path
 4. Drawn as a green `PathLayer` on the map

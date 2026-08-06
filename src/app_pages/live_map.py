@@ -1676,134 +1676,162 @@ def show():
                             f"{_nearby_radius_used} m of you."
                         )
 
-    with st.expander("🚌 Route Viewer", expanded=False):
-        # An empty region frame carries no columns at all — prepare_map_data
-        # returns a bare DataFrame — so the vehicle_id lookup has to be asked
-        # for only when there is a vehicle to look up.
-        vehicle_options = (
-            [] if no_vehicles else sorted(df_map['vehicle_id'].unique().tolist()))
+    with st.expander("🚌 Route Viewer",
+                     expanded=bool(st.session_state.get('selected_vehicle_id'))):
+        # The bus here is whichever one was last tapped on the map. It is not a
+        # second place to choose one.
+        #
+        # The options used to be every drawn vehicle, rebuilt from `df_map` on
+        # every render. `df_map` drops a bus five minutes after it stops
+        # reporting, and narrows again whenever a route search is active — so a
+        # chosen bus could leave the options while its route was being read.
+        # Streamlit answers a stored selection that is no longer among the
+        # options by falling back to the first option, and says nothing: the
+        # viewer swapped in an unrelated bus and drew that bus's route under the
+        # old id. Reported as "when i choose PAVBJ VGJ8310 bus in route viewer,
+        # it persist to CDH2336". A one-item list cannot be swapped for
+        # something else, and with no widget key there is no stored value left
+        # to go stale.
+        selected_vehicle = st.session_state.get('selected_vehicle_id')
 
-        if not vehicle_options:
-            st.info("No vehicles available for the selected region.")
+        if not selected_vehicle:
+            st.info("Tap a bus on the map above to see its planned route here.")
         else:
-            selected_vehicle = st.selectbox(
-                "Select Vehicle",
-                options=vehicle_options,
-                key="route_viewer_vehicle_select",
-            )
+            st.selectbox("Select Vehicle", options=[selected_vehicle])
 
-            if selected_vehicle:
-                # ---- Resolve trip_id / route_id from live snapshot ----
-                vehicle_row = df_map[df_map['vehicle_id'] == selected_vehicle]
-                trip_id = ''
-                route_id = ''
-                if not vehicle_row.empty:
-                    trip_id = str(vehicle_row.iloc[0].get('trip_id', '') or '')
-                    route_id = str(vehicle_row.iloc[0].get('route_id', '') or '')
+            # Resolved against the region's whole live frame, not the drawn and
+            # searched `df_map`. The bus the user asked about is still that bus
+            # after it goes quiet, and still that bus while a route search hides
+            # it — so neither may quietly become a different bus.
+            _region_live = df_live[df_live['region'] == selected_region]
+            _vehicle_row = _region_live[
+                _region_live['vehicle_id'] == selected_vehicle]
 
-                # agency_slug was already resolved from selected_region above.
+            if _vehicle_row.empty:
+                st.warning(
+                    f"{selected_vehicle} has not reported in the last "
+                    f"{window_label}. Its last known trail is below.")
+            else:
+                _age = _vehicle_row.iloc[0].get('age_seconds')
+                if _age is not None and int(_age) > LIVE_STALE_SECONDS:
+                    st.caption(
+                        f"{selected_vehicle} last reported "
+                        f"{data_processor.format_duration(int(_age))} ago, so it "
+                        f"is no longer drawn on the map above.")
 
-                # ---- Try to fetch planned route shapes from GTFS Static ----
-                planned_shapes = []
-                if agency_slug and trip_id:
-                    with st.spinner('Fetching planned route from GTFS Static...'):
-                        planned_shapes = gtfs_static.get_shapes_for_trip(agency_slug, trip_id)
+            # ---- Resolve trip_id / route_id from the same row ----
+            # `_vehicle_row`, not a second lookup in `df_map`: the two frames
+            # disagree about a quiet or search-hidden bus, and a viewer that
+            # names one bus while drawing another's route is the bug above.
+            trip_id = ''
+            route_id = ''
+            if not _vehicle_row.empty:
+                trip_id = str(_vehicle_row.iloc[0].get('trip_id', '') or '')
+                route_id = str(_vehicle_row.iloc[0].get('route_id', '') or '')
 
-                # ---- Show route name caption ----
-                if agency_slug and route_id:
-                    route_name = gtfs_static.get_route_name(agency_slug, route_id)
-                    if route_name:
-                        st.caption(f"Route: {route_name}")
+            # agency_slug was already resolved from selected_region above.
 
-                # ---- Fetch historical trail for fallback / table ----
-                trail_df = db.get_vehicle_trail(selected_vehicle, selected_region)
+            # ---- Try to fetch planned route shapes from GTFS Static ----
+            planned_shapes = []
+            if agency_slug and trip_id:
+                with st.spinner('Fetching planned route from GTFS Static...'):
+                    planned_shapes = gtfs_static.get_shapes_for_trip(agency_slug, trip_id)
 
-                if len(planned_shapes) >= 2:
-                    # --- PRIMARY: draw planned route from GTFS Static shapes ---
-                    planned_data = pd.DataFrame([{
-                        'path': planned_shapes,
-                        'color': [0, 200, 100, 200],
-                    }])
+            # ---- Show route name caption ----
+            if agency_slug and route_id:
+                route_name = gtfs_static.get_route_name(agency_slug, route_id)
+                if route_name:
+                    st.caption(f"Route: {route_name}")
 
-                    planned_layer = pdk.Layer(
-                        "PathLayer",
-                        data=planned_data,
-                        get_path='path',
-                        get_color='color',
-                        width_min_pixels=3,
-                        width_max_pixels=6,
-                        pickable=False,
+            # ---- Fetch historical trail for fallback / table ----
+            trail_df = db.get_vehicle_trail(selected_vehicle, selected_region)
+
+            if len(planned_shapes) >= 2:
+                # --- PRIMARY: draw planned route from GTFS Static shapes ---
+                planned_data = pd.DataFrame([{
+                    'path': planned_shapes,
+                    'color': [0, 200, 100, 200],
+                }])
+
+                planned_layer = pdk.Layer(
+                    "PathLayer",
+                    data=planned_data,
+                    get_path='path',
+                    get_color='color',
+                    width_min_pixels=3,
+                    width_max_pixels=6,
+                    pickable=False,
+                )
+
+                # Centre view on midpoint of planned shape
+                mid_idx = len(planned_shapes) // 2
+                centre_lon, centre_lat = planned_shapes[mid_idx]
+
+                planned_view = pdk.ViewState(
+                    latitude=centre_lat,
+                    longitude=centre_lon,
+                    zoom=DEFAULT_ZOOM,
+                    pitch=0,
+                )
+
+                st.markdown("**Planned Route**")
+                st.pydeck_chart(
+                    pdk.Deck(
+                        map_style=map_style,
+                        initial_view_state=planned_view,
+                        layers=[planned_layer],
                     )
+                )
 
-                    # Centre view on midpoint of planned shape
-                    mid_idx = len(planned_shapes) // 2
-                    centre_lon, centre_lat = planned_shapes[mid_idx]
+            elif trail_df is not None and len(trail_df) >= 2:
+                # --- FALLBACK: historical breadcrumb trail ---
+                st.info("No planned route available — showing historical trail.")
 
-                    planned_view = pdk.ViewState(
-                        latitude=centre_lat,
-                        longitude=centre_lon,
-                        zoom=DEFAULT_ZOOM,
-                        pitch=0,
+                path_coords = trail_df[['longitude', 'latitude']].values.tolist()
+
+                trail_data = pd.DataFrame([{
+                    'path': path_coords,
+                    'color': [255, 165, 0, 200],
+                }])
+
+                trail_layer = pdk.Layer(
+                    "PathLayer",
+                    data=trail_data,
+                    get_path='path',
+                    get_color='color',
+                    width_min_pixels=3,
+                    width_max_pixels=6,
+                    pickable=False,
+                )
+
+                trail_view = pdk.ViewState(
+                    latitude=trail_df['latitude'].mean(),
+                    longitude=trail_df['longitude'].mean(),
+                    zoom=DEFAULT_ZOOM,
+                    pitch=0,
+                )
+
+                st.pydeck_chart(
+                    pdk.Deck(
+                        map_style=map_style,
+                        initial_view_state=trail_view,
+                        layers=[trail_layer],
                     )
+                )
 
-                    st.markdown("**Planned Route**")
-                    st.pydeck_chart(
-                        pdk.Deck(
-                            map_style=map_style,
-                            initial_view_state=planned_view,
-                            layers=[planned_layer],
-                        )
-                    )
+            else:
+                st.info("No route data available.")
 
-                elif trail_df is not None and len(trail_df) >= 2:
-                    # --- FALLBACK: historical breadcrumb trail ---
-                    st.info("No planned route available — showing historical trail.")
-
-                    path_coords = trail_df[['longitude', 'latitude']].values.tolist()
-
-                    trail_data = pd.DataFrame([{
-                        'path': path_coords,
-                        'color': [255, 165, 0, 200],
-                    }])
-
-                    trail_layer = pdk.Layer(
-                        "PathLayer",
-                        data=trail_data,
-                        get_path='path',
-                        get_color='color',
-                        width_min_pixels=3,
-                        width_max_pixels=6,
-                        pickable=False,
-                    )
-
-                    trail_view = pdk.ViewState(
-                        latitude=trail_df['latitude'].mean(),
-                        longitude=trail_df['longitude'].mean(),
-                        zoom=DEFAULT_ZOOM,
-                        pitch=0,
-                    )
-
-                    st.pydeck_chart(
-                        pdk.Deck(
-                            map_style=map_style,
-                            initial_view_state=trail_view,
-                            layers=[trail_layer],
-                        )
-                    )
-
-                else:
-                    st.info("No route data available.")
-
-                # ---- Always show historical position table if trail exists ----
-                if trail_df is not None and not trail_df.empty:
-                    display_trail = trail_df[['timestamp', 'latitude', 'longitude', 'speed', 'bearing']].copy()
-                    display_trail['speed'] = (display_trail['speed'] * 3.6).round(1)  # m/s → km/h
-                    display_trail['bearing'] = display_trail['bearing'].round(1)
-                    display_trail = display_trail.rename(columns={
-                        'timestamp': 'Timestamp',
-                        'latitude': 'Latitude',
-                        'longitude': 'Longitude',
-                        'speed': 'Speed (km/h)',
-                        'bearing': 'Bearing (°)',
-                    })
-                    st.dataframe(display_trail, use_container_width=True)
+            # ---- Always show historical position table if trail exists ----
+            if trail_df is not None and not trail_df.empty:
+                display_trail = trail_df[['timestamp', 'latitude', 'longitude', 'speed', 'bearing']].copy()
+                display_trail['speed'] = (display_trail['speed'] * 3.6).round(1)  # m/s → km/h
+                display_trail['bearing'] = display_trail['bearing'].round(1)
+                display_trail = display_trail.rename(columns={
+                    'timestamp': 'Timestamp',
+                    'latitude': 'Latitude',
+                    'longitude': 'Longitude',
+                    'speed': 'Speed (km/h)',
+                    'bearing': 'Bearing (°)',
+                })
+                st.dataframe(display_trail, use_container_width=True)

@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-08-06
+
+Reported from production: *"when i choose PAVBJ VGJ8310 bus in route viewer, it persist to
+CDH2336"* — the viewer showed one bus's id above a different bus's route, with the picker outlined
+in red.
+
+### Changed
+- **The Route Viewer now follows the bus tapped on the map.** Tap a bus and the viewer opens on it;
+  there is no second place to choose a bus. With nothing tapped it says so rather than offering a
+  list. This is what the user asked for — *"if i select a bus in the map, please make the route
+  viewer read it automatically"* — and it is also what closes the bug below, because a list of one
+  cannot be swapped for something else
+
+### Fixed
+- **The Route Viewer no longer swaps in a different bus behind the user's back.** Its options were
+  every drawn vehicle, rebuilt from `df_map` on every render. `df_map` drops a bus five minutes
+  after it stops reporting, and narrows again whenever a route search is active — so the chosen bus
+  could leave the options while its route was being read. Streamlit resolves a stored selection
+  that is no longer among the options by falling back to the first option, and says nothing about
+  it, so the viewer drew an unrelated bus's route under the old vehicle id. With a 20-second
+  auto-refresh in production this happened on its own, without the user touching anything. The
+  picker now carries exactly one option and no widget key, so there is neither a list to fall
+  through nor a stored value left to go stale
+- **A bus that goes quiet keeps its own route.** The vehicle is resolved against the region's whole
+  live frame instead of the drawn, route-searched `df_map`, so a bus dimmed out of the map or
+  hidden by a search is still the bus the viewer describes, with a note saying when it last
+  reported. Past the 15-minute window the feed has nothing left to say about it, and the viewer
+  names the bus and says so rather than quietly showing a different one
+
 ## [2.11.2] - 2026-08-06
 
 Found by testing 2.11.1: with taps on the map working again, a second fault underneath became

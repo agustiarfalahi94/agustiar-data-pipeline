@@ -4235,6 +4235,100 @@ def test_a_render_with_no_tap_does_not_redraw(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# The Route Viewer follows the tapped bus, and never swaps it for another
+#
+# Reported as "when i choose PAVBJ VGJ8310 bus in route viewer, it persist to
+# CDH2336". The options were every drawn vehicle, rebuilt from `df_map` every
+# render -- and `df_map` drops a bus five minutes after it stops reporting and
+# narrows again under a route search. Streamlit answers a stored selection
+# that has left the options by falling back to the first option and saying
+# nothing, so the viewer showed one bus's id above another bus's route.
+# ---------------------------------------------------------------------------
+
+
+def _vehicle_picker_calls(st_stub):
+    return [c for c in st_stub.selectbox.call_args_list
+            if c.args and c.args[0] == "Select Vehicle"]
+
+
+def _route_viewer_frame(now):
+    """One drawn bus and one that has gone quiet -- quiet is dropped by df_map."""
+    return pd.DataFrame({
+        'region': ['Rapid Bus KL', 'Rapid Bus KL'],
+        'vehicle_id': ['V1', 'VQUIET'],
+        'latitude': [3.14, 3.15], 'longitude': [101.68, 101.69],
+        'bearing': [90.0, 90.0], 'speed': [10.0, 0.0],
+        'timestamp': [now, now], 'trip_id': ['T1', 'TQUIET'],
+        'route_id': ['R1', 'RQUIET'],
+        'freshness': ['fresh', 'hidden'], 'age_seconds': [5, 900],
+    })
+
+
+def test_the_route_viewer_asks_for_a_tap_when_no_bus_is_selected(monkeypatch):
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+
+    live_map.show()
+
+    assert not _vehicle_picker_calls(st_stub), \
+        "a vehicle picker was drawn with no bus selected"
+    assert 'Tap a bus on the map' in _texts(st_stub.info)
+
+
+def test_the_route_viewer_offers_only_the_tapped_bus(monkeypatch):
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['selected_vehicle_id'] = 'V1'
+
+    live_map.show()
+
+    calls = _vehicle_picker_calls(st_stub)
+    assert calls, "the vehicle picker was not drawn for the selected bus"
+    assert calls[0].kwargs.get('options') == ['V1'], calls[0].kwargs
+    # No widget key: a stored value is the only thing that can go stale, and
+    # with one option there is nothing worth storing.
+    assert 'key' not in calls[0].kwargs, calls[0].kwargs
+
+
+def test_a_quiet_bus_keeps_its_own_route_instead_of_borrowing_another(monkeypatch):
+    # VQUIET is in the live frame but not in df_map, because df_map drops
+    # anything older than the draw cutoff. Resolving against df_map returned an
+    # empty row, and the picker had already fallen back to a different bus.
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, now = _live_map_with_selection(
+        monkeypatch, empty, df=None)
+    monkeypatch.setattr(
+        live_map.db, 'get_live_data_optimized',
+        lambda *a, **k: (_route_viewer_frame(now),
+                         {'total': 1, 'stale': 0, 'hidden': 1, 'regions': 1,
+                          'busiest': 'Rapid Bus KL'}, 'now'))
+    st_stub.session_state['selected_vehicle_id'] = 'VQUIET'
+
+    asked = []
+    monkeypatch.setattr(live_map.gtfs_static, 'get_shapes_for_trip',
+                        lambda slug, trip: asked.append(trip) or [])
+
+    live_map.show()
+
+    assert 'TQUIET' in asked, \
+        f"the viewer resolved a different bus's trip: {asked}"
+    assert 'has not reported' not in _texts(st_stub.warning)
+
+
+def test_a_bus_gone_from_the_window_is_named_not_replaced(monkeypatch):
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['selected_vehicle_id'] = 'GHOST'
+
+    live_map.show()
+
+    said = _texts(st_stub.warning)
+    assert 'GHOST' in said and 'has not reported' in said, said
+    assert _vehicle_picker_calls(st_stub)[0].kwargs.get('options') == ['GHOST'], \
+        "the viewer switched to a bus the user did not choose"
+
+
+# ---------------------------------------------------------------------------
 # Task 3: progressive radius and the region hint
 #
 # Standing in Bukit Jalil with KTM Berhad selected, the arrivals panel said
