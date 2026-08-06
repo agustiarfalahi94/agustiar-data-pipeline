@@ -399,3 +399,156 @@ def get_region_vehicle_counts():
     finally:
         con.close()
     return df
+
+
+# ── Summaries computed in the database, not in pandas ────────────────────────
+#
+# `get_historical_data` pulls the whole retention window into a DataFrame:
+# 602,950 rows and 6.5 seconds, measured. The Data Table showed one screen of
+# it and Analytics only ever wanted counts and averages, so both pages paid for
+# every row on every visit — and the cost grew with the table, because it is
+# append-only. The same answers computed in SQL take 15-142 ms.
+#
+# Speed is stored in m/s. `data_processor.convert_speed_to_kmh` converts, rounds
+# to whole km/h and caps at 120, and the pages group and filter on that
+# *converted* value — a bus at 0.1 m/s rounds to 0 km/h and is counted as
+# stopped. These queries therefore convert first and aggregate second, or they
+# would answer a subtly different question. `round_even` is used rather than
+# `round` because pandas rounds halves to even and DuckDB's `round` does not;
+# with plain `round` an average could differ in the last digit from what the
+# old code showed.
+_SPEED_KMH = "LEAST(round_even(COALESCE(speed, 0) * 3.6, 0), 120)"
+
+
+def get_vehicle_speed_summary():
+    """One row per (vehicle, region) — enough to rebuild every speed chart.
+
+    Returns a DataFrame with vehicle_id, region, speed_sum and n_rows, where
+    speed_sum is the total converted km/h over that pair's rows. Sums and
+    counts rather than averages so a caller can regroup — Analytics needs the
+    average per vehicle *and* per vehicle-and-region — without averaging
+    averages, which would silently weight a vehicle's quiet region equally with
+    its busy one.
+    """
+    if not table_exists():
+        return pd.DataFrame(columns=['vehicle_id', 'region', 'speed_sum', 'n_rows'])
+
+    con = get_connection()
+    try:
+        return con.execute(f"""
+            SELECT vehicle_id,
+                   region,
+                   sum({_SPEED_KMH}) AS speed_sum,
+                   count(*)          AS n_rows
+            FROM {DATABASE_TABLE}
+            GROUP BY vehicle_id, region
+        """).df()
+    finally:
+        con.close()
+
+
+def get_moving_speed_stats():
+    """max / min / avg / median km/h over rows that were actually moving.
+
+    "Moving" is speed > 0 *after* conversion and rounding, matching what the
+    page used to compute in pandas.
+    """
+    if not table_exists():
+        return {'rows': 0, 'max': 0.0, 'min': 0.0, 'avg': 0.0, 'median': 0.0}
+
+    con = get_connection()
+    try:
+        row = con.execute(f"""
+            SELECT count(*), max(kmh), min(kmh), avg(kmh), median(kmh)
+            FROM (SELECT {_SPEED_KMH} AS kmh FROM {DATABASE_TABLE})
+            WHERE kmh > 0
+        """).fetchone()
+    finally:
+        con.close()
+
+    if not row or not row[0]:
+        return {'rows': 0, 'max': 0.0, 'min': 0.0, 'avg': 0.0, 'median': 0.0}
+    return {'rows': int(row[0]), 'max': float(row[1]), 'min': float(row[2]),
+            'avg': float(row[3]), 'median': float(row[4])}
+
+
+def get_table_regions():
+    """Regions that actually have rows, and when data was last seen.
+
+    A DISTINCT over one column instead of pulling every row into pandas just to
+    call `.unique()` on it — which is what the Data Table used to do to fill a
+    dropdown.
+    """
+    if not table_exists():
+        return [], None
+
+    con = get_connection()
+    try:
+        regions = [r[0] for r in con.execute(
+            f"SELECT DISTINCT region FROM {DATABASE_TABLE} ORDER BY region"
+        ).fetchall()]
+        max_ts = con.execute(
+            f"SELECT MAX(CAST(timestamp AS BIGINT)) FROM {DATABASE_TABLE}"
+        ).fetchone()[0]
+    finally:
+        con.close()
+
+    sync = _format_sync_time(min(int(max_ts), int(time.time()))) if max_ts else None
+    return regions, sync
+
+
+def get_table_page(regions, limit=1000):
+    """The newest `limit` rows for `regions`, plus how many there are in total.
+
+    `limit=None` returns every matching row — the reader asked for all of them,
+    and pays for them knowingly.
+
+    Returns (dataframe, total_rows). The frame carries the display columns and
+    an `avg_speed` measured over each vehicle's *whole* history in the selected
+    regions, not merely over the rows on this page — that is what the column
+    has always meant, and limiting the page must not quietly redefine it.
+    """
+    empty = pd.DataFrame(columns=[
+        'region', 'vehicle_id', 'latitude', 'longitude', 'bearing', 'speed',
+        'avg_speed', 'timestamp'])
+    if not table_exists() or not regions:
+        return empty, 0
+
+    placeholders = ', '.join('?' for _ in regions)
+    con = get_connection()
+    try:
+        total = con.execute(
+            f"SELECT count(*) FROM {DATABASE_TABLE} WHERE region IN ({placeholders})",
+            list(regions)).fetchone()[0]
+        df = con.execute(f"""
+            WITH picked AS (
+                SELECT *, {_SPEED_KMH} AS speed_kmh
+                FROM {DATABASE_TABLE}
+                WHERE region IN ({placeholders})
+            ),
+            per_vehicle AS (
+                SELECT vehicle_id, round(avg(speed_kmh), 0) AS avg_speed
+                FROM picked GROUP BY vehicle_id
+            )
+            SELECT p.region, p.vehicle_id, p.latitude, p.longitude, p.bearing,
+                   p.speed_kmh AS speed, v.avg_speed, p.timestamp, p.created_at
+            FROM picked p
+            JOIN per_vehicle v USING (vehicle_id)
+            ORDER BY CAST(p.timestamp AS BIGINT) DESC
+            {'' if limit is None else f'LIMIT {int(limit)}'}
+        """, list(regions) ).df()
+    finally:
+        con.close()
+
+    # Formatted on the page's own rows, which is a thousand of them rather than
+    # six hundred thousand. Same wording as `get_historical_data` produces, so
+    # the column reads identically to before.
+    if not df.empty:
+        df['timestamp'] = pd.to_numeric(df['timestamp'], errors='coerce')
+        df['timestamp_formatted'] = pd.to_datetime(
+            df['timestamp'], unit='s', utc=True
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%Y-%m-%d %H:%M:%S')
+        df['created_at_formatted'] = pd.to_datetime(
+            df['created_at'], utc=True, errors='coerce'
+        ).dt.tz_convert(TIMEZONE).dt.strftime('%-d %b %Y, %H:%M')
+    return df, int(total)

@@ -3,6 +3,15 @@ from utils import db, data_processor
 from utils.ingestion import fetch_and_store_transit_data
 from utils import background_fetch
 
+# A screenful by default. Loading every row is offered, not forced: the whole
+# retention window is 600k rows and 6.5 seconds, and nobody reading a table
+# needs all of it to answer a question.
+TABLE_PAGE_CHOICES = {
+    "Newest 1,000": 1000,
+    "Newest 10,000": 10000,
+    "All rows": None,
+}
+
 
 def show():
     # Refresh behaviour
@@ -20,10 +29,17 @@ def show():
                 st.session_state.last_refresh = True
             st.rerun()
 
-    # Get historical data (all data, not just latest)
-    df_historical, metrics, actual_sync_time = db.get_historical_data()
+    # Only what this page shows, and only what it needs to decide what to show.
+    #
+    # This used to be `get_historical_data()` — `SELECT *` over the retention
+    # window, measured at 602,950 rows and 6.5 seconds, on every visit, to
+    # display one screenful. The cost grew with the table, because it is
+    # append-only. The page of rows is fetched from the database already
+    # filtered, sorted and limited (~50 ms), and the region list comes from a
+    # cheap DISTINCT rather than from scanning every row in pandas.
+    available_regions, actual_sync_time = db.get_table_regions()
 
-    if df_historical is None or df_historical.empty:
+    if not available_regions:
         st.info("🛰️ No data. Click 'Refresh Data' to fetch.")
         return
 
@@ -41,14 +57,7 @@ def show():
         hardcoded_regions = ['Rapid Bus KL'] + sorted([r for r in all_regions if r != 'Rapid Bus KL'])
     except ImportError:
         # Fallback to dynamic list if import fails
-        hardcoded_regions = data_processor.get_sorted_regions(df_historical)
-    
-    # Get available regions from current data
-    available_regions = data_processor.get_sorted_regions(df_historical)
-
-    if not available_regions:
-        st.info("No active buses.")
-        return
+        hardcoded_regions = available_regions
 
     # Preserve selected regions during auto-refresh
     if not st.session_state.selected_regions_table or not all(
@@ -73,11 +82,18 @@ def show():
         st.warning("Please select at least one region")
         return
 
-    # Filter data
-    df_filtered = df_historical[df_historical['region'].isin(selected_regions)]
-
-    # Format and display
-    display_df = data_processor.format_display_dataframe(df_filtered)
+    # How many rows to pull is the reader's call. The default is a screenful
+    # and costs about 50 ms; "All rows" is offered rather than removed, because
+    # the CSV below exports exactly what was asked for and a silently shrunken
+    # export would be worse than a slow one.
+    choice = st.selectbox(
+        "Rows to load", options=list(TABLE_PAGE_CHOICES), index=0,
+        key='table_page_rows',
+        help="The newest rows first. The CSV download contains exactly these rows.",
+    )
+    page_df, total_rows = db.get_table_page(
+        selected_regions, limit=TABLE_PAGE_CHOICES[choice])
+    display_df = data_processor.format_table_page(page_df)
 
     st.dataframe(
         display_df,
@@ -85,6 +101,17 @@ def show():
         hide_index=True,
         height=600
     )
+
+    # Said plainly rather than left for the reader to notice. The table is the
+    # newest rows, not all of them; the CSV below is the whole selection.
+    if total_rows > len(display_df):
+        st.caption(
+            f"Showing the newest {len(display_df):,} of {total_rows:,} rows for "
+            f"the selected region(s) — choose **All rows** above to load every one. "
+            f"The CSV below contains exactly the rows shown."
+        )
+    else:
+        st.caption(f"Showing all {total_rows:,} rows for the selected region(s).")
 
     # Download button
     csv = display_df.to_csv(index=False).encode('utf-8')

@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] - 2026-08-06
+
+Asked for after 2.14.0: page switches still took seconds. They were not caused by the refresh — I
+proved that by timing them with **zero fetches running** and getting the same numbers. The cost was
+each page's own work.
+
+### Changed
+- **📊 Data Table and 📈 Analytics no longer load the whole history to draw one screen.** Both
+  called `get_historical_data()` — `SELECT *` over the retention window — on every visit: **602,950
+  rows and 6.5 seconds**, measured, and growing with the table because it is append-only. Data Table
+  showed one screenful of it; Analytics only ever wanted counts and averages. Both now ask the
+  database for what they actually show.
+
+  | page | before | after | |
+  |---|---|---|---|
+  | 📊 Data Table | 6577 ms | **141 ms** | 47× |
+  | 📈 Analytics | 7034 ms | **314 ms** | 22× |
+
+  Measured in a real browser, Manual mode, no fetch running, second pass.
+- **The numbers are unchanged, and that was checked rather than assumed.** Every new query was
+  compared against the old pandas result on the real 602,950-row database: per-vehicle averages,
+  per-vehicle-and-region averages, unique vehicle count, and max/min/avg/median moving speed all
+  matched to **zero difference**. Two details make that true: the queries convert speed to km/h,
+  round and cap it *before* aggregating, because the pages grouped and filtered on the converted
+  value (a bus at 0.1 m/s rounds to 0 km/h and counted as stopped); and they use `round_even`,
+  because pandas rounds halves to even and DuckDB's `round` does not
+- **The speed summary returns sums and counts, not averages.** Analytics regroups it two ways — per
+  vehicle, and per vehicle-and-region — and averaging averages would weight a vehicle's quiet region
+  the same as its busy one
+- **Data Table lets you choose how much to load**: newest 1,000 (default), newest 10,000, or all
+  rows. The CSV exports exactly the rows shown, and a caption says how many of the total are on
+  screen. "All rows" is offered rather than removed — a silently shrunken export would be worse than
+  a slow one
+- **`avg_speed` still means what it always meant** — a vehicle's average across the whole selection,
+  not across the rows that happened to fit on screen. It is computed in SQL over the full filtered
+  history and joined onto the page
+
+### Removed
+- `data_processor.format_display_dataframe`, replaced by `format_table_page`. The old one converted
+  speed and computed each vehicle's average from whatever frame it was handed, which is exactly the
+  behaviour that would have redefined the column once the page was limited
+
 ## [2.14.0] - 2026-08-06
 
 Asked for: make the refresh wait shorter — *"keep it at 20s, but make the fetch loading time from

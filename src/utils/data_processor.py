@@ -63,27 +63,28 @@ def prepare_map_data(df, region):
     
     return df_filtered
 
-def format_display_dataframe(df):
-    """Format dataframe for display in data table"""
-    display_df = df.sort_values('timestamp', ascending=False).copy()
-    
-    # Convert speed using helper function
-    display_df = convert_speed_to_kmh(display_df)
-    
-    # Calculate average speed per vehicle
-    avg_speed = display_df.groupby('vehicle_id')['speed'].mean().round(0)
-    display_df['avg_speed'] = display_df['vehicle_id'].map(avg_speed)
-    
-    # Select and rename columns (include created_at_formatted if present)
+def format_table_page(df):
+    """Name and round the Data Table's columns for display.
+
+    Replaces `format_display_dataframe`, which also converted speed and
+    computed each vehicle's average across the frame it was handed. Both now
+    happen in SQL: the average is measured over the vehicle's whole history in
+    the selected regions, so limiting the page to a screenful cannot quietly
+    redefine what the column means.
+    """
+    if df.empty:
+        return df
+
+    display_df = df.copy()
     base_cols = [
         'region', 'vehicle_id', 'latitude', 'longitude',
-        'bearing', 'speed', 'avg_speed', 'timestamp_formatted'
+        'bearing', 'speed', 'avg_speed', 'timestamp_formatted',
     ]
     if 'created_at_formatted' in display_df.columns:
         base_cols.append('created_at_formatted')
     display_df = display_df[base_cols]
 
-    rename_map = {
+    display_df = display_df.rename(columns={
         'region': 'Region',
         'vehicle_id': 'Vehicle ID',
         'latitude': 'Latitude',
@@ -93,10 +94,8 @@ def format_display_dataframe(df):
         'avg_speed': 'Avg Speed (km/h)',
         'timestamp_formatted': 'Timestamp',
         'created_at_formatted': 'Created At',
-    }
-    display_df = display_df.rename(columns=rename_map)
-    
-    # Round numeric columns
+    })
+
     display_df['Latitude'] = display_df['Latitude'].round(6)
     display_df['Longitude'] = display_df['Longitude'].round(6)
     display_df['Heading (°)'] = display_df['Heading (°)'].round(1)

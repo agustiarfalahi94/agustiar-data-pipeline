@@ -219,6 +219,7 @@ def test_build_quality_stats_rejected_never_negative():
 # ── fetch guard ───────────────────────────────────────────────────────────────
 
 import tempfile
+import contextlib
 import duckdb as _duckdb
 
 
@@ -5035,3 +5036,139 @@ def test_each_stop_button_has_its_own_key(monkeypatch):
     keys = [c.kwargs.get('key') for c in st_stub.button.call_args_list
             if c.kwargs.get('key')]
     assert len(keys) == len(set(keys)), keys
+
+
+# ---------------------------------------------------------------------------
+# Summaries belong in the database, not in pandas
+#
+# 📊 Data Table and 📈 Analytics each called `get_historical_data()` — SELECT *
+# over the retention window — on every visit: 602,950 rows and 6.5 seconds
+# measured, growing with the table, to show one screenful and a few averages.
+# These tests pin the answers to what the pandas code produced, because a
+# speed-up that changes the numbers is not a speed-up.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _temp_live_buses(rows):
+    """A throwaway database holding `rows`, wired into utils.db."""
+    from utils import db as _db
+    path = os.path.join(tempfile.mkdtemp(), 'summaries.duckdb')
+    con = _duckdb.connect(path)
+    con.execute("""
+        CREATE TABLE live_buses (
+            region VARCHAR, latitude DOUBLE, longitude DOUBLE, bearing DOUBLE,
+            speed DOUBLE, vehicle_id VARCHAR, timestamp VARCHAR,
+            trip_id VARCHAR, route_id VARCHAR, insert_timestamp BIGINT,
+            created_at TIMESTAMP WITH TIME ZONE
+        )
+    """)
+    for r in rows:
+        con.execute(
+            "INSERT INTO live_buses VALUES (?,?,?,?,?,?,?,?,?,?,now())",
+            [r['region'], 3.1, 101.6, 0.0, r['speed'], r['vehicle_id'],
+             str(r['timestamp']), '', '', int(r['timestamp'])])
+    con.close()
+    with patch.object(_db, 'DATABASE_NAME', path):
+        yield _db
+    os.unlink(path)
+
+
+_SUMMARY_ROWS = [
+    {'region': 'A', 'vehicle_id': 'V1', 'speed': 10.0, 'timestamp': 100},
+    {'region': 'A', 'vehicle_id': 'V1', 'speed': 20.0, 'timestamp': 200},
+    {'region': 'B', 'vehicle_id': 'V1', 'speed': 30.0, 'timestamp': 300},
+    {'region': 'A', 'vehicle_id': 'V2', 'speed': 0.0,  'timestamp': 400},
+    {'region': 'A', 'vehicle_id': 'V2', 'speed': 0.05, 'timestamp': 500},
+]
+
+
+def _pandas_reference():
+    """What the old code produced, computed the old way."""
+    df = pd.DataFrame(_SUMMARY_ROWS)
+    return data_processor.convert_speed_to_kmh(df.copy())
+
+
+def test_the_speed_summary_matches_what_pandas_produced(monkeypatch):
+    ref = _pandas_reference()
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        summary = db_mod.get_vehicle_speed_summary()
+
+    got = (summary.set_index(['vehicle_id', 'region'])
+           .eval('speed_sum / n_rows').sort_index())
+    want = ref.groupby(['vehicle_id', 'region'])['speed'].mean().sort_index()
+    assert list(got.index) == list(want.index)
+    assert got.round(9).tolist() == want.round(9).tolist(), f"{got}\n{want}"
+
+
+def test_regrouping_the_summary_by_vehicle_stays_exact(monkeypatch):
+    # V1 has two rows in region A and one in B. Averaging the two regional
+    # averages would weight B three times too heavily; summing and dividing
+    # does not. This is why the query returns sums and counts.
+    ref = _pandas_reference()
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        summary = db_mod.get_vehicle_speed_summary()
+
+    per = summary.groupby('vehicle_id')[['speed_sum', 'n_rows']].sum()
+    got = (per['speed_sum'] / per['n_rows']).sort_index()
+    want = ref.groupby('vehicle_id')['speed'].mean().sort_index()
+    assert got.round(9).tolist() == want.round(9).tolist(), f"{got}\n{want}"
+
+
+def test_moving_speed_stats_match_and_treat_a_crawl_as_stopped(monkeypatch):
+    # 0.05 m/s is 0.18 km/h, which rounds to 0 and is not "moving" — the same
+    # judgement the pandas filter made, because it filtered after converting.
+    ref = _pandas_reference()
+    moving = ref[ref['speed'] > 0]['speed']
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        stats = db_mod.get_moving_speed_stats()
+
+    assert stats['rows'] == len(moving)
+    assert stats['max'] == moving.max()
+    assert stats['min'] == moving.min()
+    assert round(stats['avg'], 9) == round(moving.mean(), 9)
+    assert round(stats['median'], 9) == round(moving.median(), 9)
+
+
+def test_the_table_page_returns_the_newest_rows_and_the_true_total(monkeypatch):
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        page, total = db_mod.get_table_page(['A'], limit=2)
+
+    assert total == 4, "the total must count every matching row, not the page"
+    assert len(page) == 2
+    assert list(page['timestamp']) == [500, 400], "newest first"
+
+
+def test_the_page_limit_does_not_redefine_the_average(monkeypatch):
+    # avg_speed has always meant "this vehicle's average across the selection".
+    # Computing it from the page would quietly turn it into "across the rows
+    # that happened to fit on screen".
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        one_row, _ = db_mod.get_table_page(['A'], limit=1)
+        everything, _ = db_mod.get_table_page(['A'], limit=None)
+
+    v2_full = everything[everything['vehicle_id'] == 'V2']['avg_speed'].iloc[0]
+    assert one_row['avg_speed'].iloc[0] == v2_full, \
+        "the average changed when the page shrank"
+
+
+def test_all_rows_means_all_rows(monkeypatch):
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        page, total = db_mod.get_table_page(['A', 'B'], limit=None)
+    assert len(page) == total == len(_SUMMARY_ROWS)
+
+
+def test_the_region_list_does_not_read_every_row(monkeypatch):
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        regions, sync = db_mod.get_table_regions()
+    assert regions == ['A', 'B']
+    assert sync, "the sync time must survive the switch away from get_historical_data"
+
+
+def test_format_table_page_names_the_columns_it_always_did(monkeypatch):
+    with _temp_live_buses(_SUMMARY_ROWS) as db_mod:
+        page, _ = db_mod.get_table_page(['A'], limit=None)
+    out = data_processor.format_table_page(page)
+    for col in ('Region', 'Vehicle ID', 'Latitude', 'Longitude', 'Heading (°)',
+                'Speed (km/h)', 'Avg Speed (km/h)', 'Timestamp'):
+        assert col in out.columns, f"{col} missing from {list(out.columns)}"

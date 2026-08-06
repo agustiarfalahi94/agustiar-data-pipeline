@@ -35,11 +35,20 @@ def show():
     # Get LATEST live data for current vehicle counts
     df_live, _, actual_sync_time = db.get_live_data_optimized()
     
-    # Get ALL historical data for charts and speed statistics
-    df_historical, _, _ = db.get_historical_data()
+    # Summaries, not rows. This page draws counts, averages and a box plot; it
+    # never shows an individual reading. It used to load the whole retention
+    # window to get them — 602,950 rows and 6.5 seconds, measured, growing with
+    # the table — where the database answers the same questions in about 30 ms.
+    #
+    # The summary is one row per (vehicle, region) carrying a *sum* and a
+    # *count* rather than an average, so regrouping it by vehicle alone stays
+    # exact. Averaging averages would weight a vehicle's quiet region the same
+    # as its busy one.
+    speed_summary = db.get_vehicle_speed_summary()
+    moving = db.get_moving_speed_stats()
 
     live_empty = df_live is None or df_live.empty
-    historical_empty = df_historical is None or df_historical.empty
+    historical_empty = speed_summary.empty
 
     if live_empty or historical_empty:
         # An outage and an empty database both produce an empty live frame. The
@@ -60,9 +69,11 @@ def show():
             )
         return
 
-    # Convert speed using helper function
+    # Convert speed using helper function. Only the live frame needs it now —
+    # the historical summary is already in km/h, converted inside the query so
+    # that the rounding and the 120 cap are applied before anything is
+    # averaged, exactly as this page did in pandas.
     df_live = data_processor.convert_speed_to_kmh(df_live.copy())
-    df_historical = data_processor.convert_speed_to_kmh(df_historical.copy())
 
     # Show sync time
     if actual_sync_time:
@@ -103,8 +114,9 @@ def show():
     with col_chart2:
         st.subheader("🏃 Speed Distribution")
         # Calculate average speed per vehicle (not raw data points)
-        avg_speed_per_vehicle = df_historical.groupby('vehicle_id')['speed'].mean().reset_index()
-        avg_speed_per_vehicle.columns = ['vehicle_id', 'avg_speed']
+        _per_vehicle = speed_summary.groupby('vehicle_id')[['speed_sum', 'n_rows']].sum()
+        avg_speed_per_vehicle = (_per_vehicle['speed_sum'] / _per_vehicle['n_rows']
+                                 ).reset_index(name='avg_speed')
         # Filter out zero speeds
         speed_data = avg_speed_per_vehicle[avg_speed_per_vehicle['avg_speed'] > 0]
 
@@ -142,8 +154,9 @@ def show():
     st.subheader("📈 Speed Analysis by Region")
     
     # Calculate avg speed per vehicle with region info - INCLUDE ALL VEHICLES (even speed=0)
-    vehicle_avg_speeds = df_historical.groupby(['vehicle_id', 'region'])['speed'].mean().reset_index()
-    vehicle_avg_speeds.columns = ['vehicle_id', 'region', 'avg_speed']
+    vehicle_avg_speeds = speed_summary.assign(
+        avg_speed=speed_summary['speed_sum'] / speed_summary['n_rows']
+    )[['vehicle_id', 'region', 'avg_speed']]
     # DON'T filter out zero speeds - show all regions with data
 
     fig4 = px.box(
@@ -163,12 +176,13 @@ def show():
 
     stats_col1, stats_col2, stats_col3 = st.columns(3)
     
-    # Filter to moving vehicles only (speed > 0) for consistent speed metrics
-    moving_vehicles_historical = df_historical[df_historical['speed'] > 0]
+    # Moving-vehicle speed stats come from the database (`moving`), measured
+    # over rows whose *converted* speed exceeds zero — a bus at 0.1 m/s rounds
+    # to 0 km/h and counts as stopped, which is what the pandas filter did.
 
     with stats_col1:
         # Total unique vehicles from HISTORICAL data (distinct vehicle_id)
-        total_unique_vehicles = df_historical['vehicle_id'].nunique()
+        total_unique_vehicles = speed_summary['vehicle_id'].nunique()
         st.metric("Total Vehicles", total_unique_vehicles)
         
         # Moving vehicles from LIVE data (speed > 0), fresh rows only. The live
@@ -190,18 +204,18 @@ def show():
 
     with stats_col2:
         # All speed stats from HISTORICAL moving vehicles (excludes stopped buses)
-        if len(moving_vehicles_historical) > 0:
-            st.metric("Max Speed", f"{moving_vehicles_historical['speed'].max():.2f} km/h")
-            st.metric("Min Speed", f"{moving_vehicles_historical['speed'].min():.2f} km/h")
+        if moving['rows'] > 0:
+            st.metric("Max Speed", f"{moving['max']:.2f} km/h")
+            st.metric("Min Speed", f"{moving['min']:.2f} km/h")
         else:
             st.metric("Max Speed", "0.00 km/h")
             st.metric("Min Speed", "0.00 km/h")
 
     with stats_col3:
         # Avg and Median speed from HISTORICAL moving vehicles
-        if len(moving_vehicles_historical) > 0:
-            st.metric("Avg Speed", f"{moving_vehicles_historical['speed'].mean():.2f} km/h")
-            st.metric("Median Speed", f"{moving_vehicles_historical['speed'].median():.2f} km/h")
+        if moving['rows'] > 0:
+            st.metric("Avg Speed", f"{moving['avg']:.2f} km/h")
+            st.metric("Median Speed", f"{moving['median']:.2f} km/h")
         else:
             st.metric("Avg Speed", "0.00 km/h")
             st.metric("Median Speed", "0.00 km/h")
