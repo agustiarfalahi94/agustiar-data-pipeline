@@ -395,6 +395,18 @@ def show():
     col_region, col_locate = st.columns([3, 1])
     
     with col_region:
+        # A region chosen for the user by the Locate Me below, applied here
+        # rather than there. Streamlit refuses to let a widget's own key be
+        # written after the widget has been created in the same run, and the
+        # locate handler runs after this selectbox — so the choice is parked in
+        # session state, and the rerun it triggers lands here, before the
+        # widget exists. Both keys are set: `selected_region` is what the rest
+        # of the page reads, and the widget key is what the dropdown shows.
+        _pending_region = st.session_state.pop('pending_region', None)
+        if _pending_region and _pending_region in hardcoded_regions:
+            st.session_state.selected_region = _pending_region
+            st.session_state['region_selector_live_map'] = _pending_region
+
         # Initialize selected region - preserve during auto-refresh
         auto_picked_region = None
         if st.session_state.selected_region is None or st.session_state.selected_region not in hardcoded_regions:
@@ -438,6 +450,26 @@ def show():
             auto_picked_region = None
         st.session_state['_region_for_search'] = selected_region
         st.session_state.selected_region = selected_region
+
+        # Why the dropdown is not on what the user left it on. Placed here, at
+        # the dropdown, rather than down at the map: the change happened here.
+        _switched = st.session_state.pop('region_switched_note', None)
+        if _switched:
+            # "about 0 m away" is true when the user is standing at a stop, and
+            # reads like a bug. Below the accuracy of a phone's GPS there is no
+            # honest number to quote, so say where it is instead.
+            _near = (
+                "the nearest right where you are standing"
+                if _switched['nearest_m'] < 20 else
+                f"the nearest about {_switched['nearest_m']} m away"
+            )
+            st.info(
+                f"Switched from **{_switched['frm']}** to **{_switched['to']}** — "
+                f"{_switched['frm']} has no stops within "
+                f"{NEARBY_STOP_WIDE_RADIUS_M} m of you, and {_switched['to']} has "
+                f"{_switched['count']}, {_near}. "
+                f"Change it back above if that is not what you wanted."
+            )
 
         if auto_picked_region == selected_region:
             st.caption(
@@ -486,6 +518,12 @@ def show():
                     }
                     st.success(f"📍 Location found: {coords['latitude']:.4f}, {coords['longitude']:.4f}")
                     st.session_state.getting_location = False
+                    # One-shot permission for the region to follow the user, read
+                    # once by the block that resolves nearby stops. Set only here,
+                    # so a region the user picks *afterwards* is never overridden:
+                    # following the location is part of pressing Locate Me, not a
+                    # rule that outlives it.
+                    st.session_state['region_follow_location'] = True
                     st.rerun()
     
     # Display current user location if available
@@ -882,6 +920,36 @@ def show():
                 radius_m=NEARBY_STOP_WIDE_RADIUS_M, limit=NEARBY_STOP_SCAN_LIMIT)
             if _nearby_stops:
                 _nearby_radius_used = NEARBY_STOP_WIDE_RADIUS_M
+    # The region follows the user, but only when the one they have selected
+    # cannot answer them.
+    #
+    # Reported: the app opens on KTM Berhad, and pressing Locate Me in Bukit
+    # Jalil showed no stops at all, because KTM has none there while Rapid Bus
+    # KL has fifteen within 800 m. Switching only at this dead end is
+    # deliberate on two counts. A region that *does* have stops nearby is a
+    # working choice and must not be overruled — the user may have picked it on
+    # purpose. And `find_regions_with_stops_near` reads every other agency's
+    # timetable, which on a cold deploy means downloading them; that belongs at
+    # a dead end, not on every locate.
+    if st.session_state.pop('region_follow_location', False) and _loc and not _nearby_stops:
+        with st.spinner("Finding the region with stops near you…"):
+            _elsewhere = gtfs_static.find_regions_with_stops_near(
+                _loc['lat'], _loc['lon'],
+                radius_m=NEARBY_STOP_WIDE_RADIUS_M,
+                exclude_slug=agency_slug)
+        if _elsewhere:
+            _best = _elsewhere[0]
+            st.session_state['pending_region'] = _best['region']
+            # Said on the next render, next to the dropdown that changed. A
+            # region silently swapping under the user is worse than the dead end
+            # it fixes.
+            st.session_state['region_switched_note'] = {
+                'to': _best['region'], 'frm': selected_region,
+                'count': _best['count'], 'nearest_m': int(_best['nearest_m']),
+            }
+            st.rerun()
+
+    if _loc and agency_slug:
         if _nearby_stops:
             stops_layer = pdk.Layer(
                 "ScatterplotLayer",

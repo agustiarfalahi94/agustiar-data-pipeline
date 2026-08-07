@@ -5172,3 +5172,85 @@ def test_format_table_page_names_the_columns_it_always_did(monkeypatch):
     for col in ('Region', 'Vehicle ID', 'Latitude', 'Longitude', 'Heading (°)',
                 'Speed (km/h)', 'Avg Speed (km/h)', 'Timestamp'):
         assert col in out.columns, f"{col} missing from {list(out.columns)}"
+
+
+# ---------------------------------------------------------------------------
+# Locate Me moves the region when the selected one cannot answer
+#
+# Reported: the app opens on KTM Berhad; pressing Locate Me in Bukit Jalil
+# showed nothing, because KTM has no stops there while Rapid Bus KL has fifteen
+# within 800 m. The region now follows the user — but only at that dead end,
+# and only as part of pressing the button.
+# ---------------------------------------------------------------------------
+
+
+def _live_map_after_locate(monkeypatch, stops_here, elsewhere):
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.05, 'lon': 101.67, 'accuracy': 10}
+    st_stub.session_state['region_follow_location'] = True
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near',
+                        lambda *a, **k: list(stops_here))
+    monkeypatch.setattr(live_map.gtfs_static, 'find_regions_with_stops_near',
+                        lambda *a, **k: list(elsewhere))
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+    return live_map, st_stub
+
+
+_A_STOP = [{'stop_id': 'S1', 'stop_name': 'A STOP', 'stop_lat': 3.0501,
+            'stop_lon': 101.6701, 'distance_m': 40.0}]
+_NEARBY_REGION = [{'region': 'Rapid Bus KL', 'count': 15, 'nearest_m': 120.0}]
+
+
+def test_locate_me_switches_region_when_this_one_has_no_stops(monkeypatch):
+    live_map, st_stub = _live_map_after_locate(monkeypatch, [], _NEARBY_REGION)
+
+    live_map.show()
+
+    assert st_stub.session_state.get('pending_region') == 'Rapid Bus KL'
+    assert st_stub.rerun.called, "the page must redraw for the new region to take effect"
+
+
+def test_the_switch_is_explained_not_silent(monkeypatch):
+    live_map, st_stub = _live_map_after_locate(monkeypatch, [], _NEARBY_REGION)
+
+    live_map.show()
+    note = st_stub.session_state.get('region_switched_note')
+
+    assert note, "a region that changes under the user must say why"
+    assert note['to'] == 'Rapid Bus KL'
+    assert note['count'] == 15 and note['nearest_m'] == 120
+
+
+def test_a_region_that_does_have_stops_is_left_alone(monkeypatch):
+    # The user may have chosen it deliberately, and it works. Overruling a
+    # working choice would be worse than the dead end this fixes.
+    live_map, st_stub = _live_map_after_locate(monkeypatch, _A_STOP, _NEARBY_REGION)
+
+    live_map.show()
+
+    assert 'pending_region' not in st_stub.session_state
+    assert 'region_switched_note' not in st_stub.session_state
+
+
+def test_the_region_does_not_follow_a_location_the_user_already_had(monkeypatch):
+    # Following the location is part of pressing Locate Me. Without the
+    # one-shot flag, a region picked *after* locating would be overridden on
+    # the very next render — the user could never choose a quiet region.
+    live_map, st_stub = _live_map_after_locate(monkeypatch, [], _NEARBY_REGION)
+    st_stub.session_state.pop('region_follow_location')
+
+    live_map.show()
+
+    assert 'pending_region' not in st_stub.session_state
+
+
+def test_the_permission_is_spent_even_when_no_other_region_helps(monkeypatch):
+    # Nowhere has stops nearby. The flag must still be consumed, or every later
+    # render would re-run a scan that reads every agency's timetable.
+    live_map, st_stub = _live_map_after_locate(monkeypatch, [], [])
+
+    live_map.show()
+
+    assert 'region_follow_location' not in st_stub.session_state
+    assert 'pending_region' not in st_stub.session_state

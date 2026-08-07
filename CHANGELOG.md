@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] - 2026-08-07
+
+Asked for: *"when user click locate me button, can you make the region also updated based on the
+location it got? currently the default select region is KTM berhad, when i click locate me it
+doesn't automatically show the nearest bus stop from my location because the region is still on KTM
+berhad."*
+
+### Added
+- **Locate Me moves you to a region that can answer you.** If the selected region has no stops
+  within 1500 m of where you are, the app switches to the nearest region that does. Standing in
+  Bukit Jalil with KTM Berhad selected now switches to Rapid Bus KL and lists the stops; before, it
+  showed nothing, because KTM has no stops there while Rapid Bus KL has fifteen within 800 m
+- **The switch is announced, not silent** — *"Switched from KTM Berhad to Rapid Bus KL — KTM Berhad
+  has no stops within 1500 m of you, and Rapid Bus KL has 27, the nearest right where you are
+  standing. Change it back above if that is not what you wanted."* Shown next to the dropdown that
+  changed, because that is where the change happened. Distances under 20 m are described rather than
+  quoted: "about 0 m away" is true when you are standing at a stop and reads like a bug
+
+### Notes on what it deliberately does **not** do
+- **A region that does have stops nearby is left alone.** You may have picked it on purpose, and
+  overruling a working choice would be worse than the dead end this fixes
+- **It never fires outside a Locate Me press.** Permission is a one-shot flag set by the locate
+  handler and spent by the stop scan, so a region you choose *afterwards* stays chosen — verified in
+  a browser by switching back to KTM Berhad and confirming it holds
+- **It does not scan on every locate.** `find_regions_with_stops_near` reads every other agency's
+  timetable, and on a cold deploy downloads them. It runs only at the dead end it was built for
+
 ## [2.15.1] - 2026-08-07
 
 ### Fixed
