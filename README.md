@@ -24,11 +24,14 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   to a region that can actually answer you. The app opens on whichever region is listed first, so
   locating yourself in Bukit Jalil with **KTM Berhad** selected used to show nothing at all — KTM has
   no stops there, while Rapid Bus KL has fifteen within 800 m. If the selected region has no stops
-  within 1500 m of you, the app switches to the nearest region that does and says so: *"Switched from
-  KTM Berhad to Rapid Bus KL — KTM Berhad has no stops within 1500 m of you, and Rapid Bus KL has 27,
-  the nearest right where you are standing."* A region that **does** have stops nearby is left alone —
-  you may have chosen it on purpose — and the switch happens only as part of pressing the button, so a
-  region you pick afterwards is never overridden
+  within 800 m of you, the app switches to the nearest region that does and says so: *"Switched from
+  KTM Berhad to Rapid Bus KL — KTM Berhad has no stops within 800 m of you, and Rapid Bus KL has 27,
+  the nearest right where you are standing."* 800 m is the same distance the app calls "near you"
+  everywhere else, so a region holding one stop 1.5 km away — a 20-minute walk — does not count as
+  an answer and does not stop the switch. The region it switches to must clear the same 800 m bar,
+  so a switch can never trade one far stop for another. A region that **does** have stops within
+  800 m is left alone — you may have chosen it on purpose — and the switch happens only as part of
+  pressing the button, so a region you pick afterwards is never overridden
 - **🚌 Route Viewer** — tap a bus on the map and this opens on that bus, showing its planned route
   (from GTFS Static) or its historical breadcrumb trail as a fallback. It holds exactly the bus you
   tapped and offers no others, so it cannot end up naming one bus above another bus's route. If

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.1] - 2026-08-07
+
+### Fixed
+- **One stop 1.5 km away no longer holds you in a region that cannot help you.** 2.16.0 switched
+  region only when the selected one had *zero* stops within 1500 m. Standing in Bukit Jalil with
+  **Rapid Bus MRT Feeder** selected, that region has nothing within 800 m and exactly one stop at
+  1493 m — a walk of about 20 minutes, at the outer edge of the search — while Rapid Bus KL has
+  fifteen within 800 m and one where you are standing. The single far stop counted as an answer and
+  blocked the switch. The test is now the primary 800 m radius, which is the distance the app calls
+  "near you" everywhere else; the widening to 1500 m stays what it always was, a fallback the stops
+  panel names when it uses it
+- **A switch cannot trade one far stop for another.** The scan for a better region now uses the same
+  800 m bar, so the region it moves you to has stops as near as the ones it promises. Before, a
+  candidate region could qualify on a stop 1500 m away and the switch would still be announced as an
+  improvement
+- **The announcement quotes the distance actually used** — *"…has no stops within 800 m of you"*. It
+  said 1500 m while the decision was made at a different radius
+
 ## [2.16.0] - 2026-08-07
 
 Asked for: *"when user click locate me button, can you make the region also updated based on the

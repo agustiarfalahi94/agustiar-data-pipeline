@@ -5233,6 +5233,39 @@ def test_a_region_that_does_have_stops_is_left_alone(monkeypatch):
     assert 'region_switched_note' not in st_stub.session_state
 
 
+def test_one_far_stop_does_not_block_the_switch(monkeypatch):
+    # Reported after the first version shipped. In Bukit Jalil, Rapid Bus MRT
+    # Feeder has nothing within 800 m and one stop at 1493 m -- a 23-minute
+    # walk at the very edge of the fallback search -- while Rapid Bus KL has
+    # fifteen within 800 m and one at the user's feet. Requiring *zero* stops
+    # let that single distant stop hold the user in the wrong region.
+    from app_pages import live_map as _lm
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.05, 'lon': 101.67, 'accuracy': 10}
+    st_stub.session_state['region_follow_location'] = True
+    far = [{'stop_id': 'F1', 'stop_name': 'A LONG WALK AWAY',
+            'stop_lat': 3.07, 'stop_lon': 101.69, 'distance_m': 1493.0}]
+
+    # Nothing at 800 m; the widened 1500 m search finds the one far stop.
+    def staged(slug, lat, lon, radius_m=800, **k):
+        return list(far) if radius_m == live_map.NEARBY_STOP_WIDE_RADIUS_M else []
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', staged)
+    asked = {}
+    def finder(lat, lon, radius_m=1500, **k):
+        asked['radius_m'] = radius_m
+        return list(_NEARBY_REGION)
+    monkeypatch.setattr(live_map.gtfs_static, 'find_regions_with_stops_near', finder)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    live_map.show()
+
+    assert st_stub.session_state.get('pending_region') == 'Rapid Bus KL', \
+        "one stop 1.5 km away held the user in a region that cannot help them"
+    assert asked.get('radius_m') == live_map.NEARBY_STOP_RADIUS_M, \
+        "candidates must clear the same 800 m bar, or the switch trades one far stop for another"
+
+
 def test_the_region_does_not_follow_a_location_the_user_already_had(monkeypatch):
     # Following the location is part of pressing Locate Me. Without the
     # one-shot flag, a region picked *after* locating would be overridden on
