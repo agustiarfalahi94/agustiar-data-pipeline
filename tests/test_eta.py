@@ -825,3 +825,30 @@ def test_get_route_parts_unknown_route_in_valid_feed(tmp_path, monkeypatch):
     gtfs_static._ROUTE_PARTS_INDEX.clear()
     parts = gtfs_static.get_route_parts('any', 'UNKNOWN_ROUTE')
     assert parts == {'short': '', 'long': ''}
+
+
+def test_service_day_epoch_with_start_date_spanning_midnight():
+    """
+    A trip starting 23:50 on 2026-07-31 that reports at 00:30 on 2026-08-01 local time
+    must anchor to 2026-07-31 local midnight when start_date='20260731' is provided.
+    """
+    # 2026-07-31 00:00:00 UTC+8 epoch = 1785427200
+    # 2026-08-01 00:30:00 UTC+8 = 1785427200 + 86400 + 1800 = 1785515400
+    ts_past_midnight = 1785515400
+    day = eta.service_day_epoch(ts_past_midnight, 8, start_date='20260731')
+    assert day == 1785427200, "service_day_epoch should anchor to 2026-07-31 midnight"
+
+    # Stop scheduled at 24:20:00 (87600s from 2026-07-31 midnight).
+    # Actual reporting time is 00:30:00 (88200s from 2026-07-31 midnight).
+    # Expected delay: 88200 - 87600 = +600s (10 min late).
+    stops = [{'stop_id': 'S1', 'stop_name': 'Midnight Stop', 'stop_lat': 3.1, 'stop_lon': 101.7, 'arrival_seconds': 87600}]
+    delay = eta.estimate_delay_seconds(stops, 0, ts_past_midnight, day)
+    assert delay == 600, f"Expected 600s delay, got {delay}s"
+
+
+def test_service_day_epoch_fallback_on_invalid_start_date():
+    # If start_date is invalid or malformed, fallback to timestamp-derived local midnight
+    ts = 1785459600  # 2026-07-31 09:00 UTC+8
+    day_fallback = eta.service_day_epoch(ts, 8, start_date='invalid_date')
+    assert (ts - day_fallback) == 9 * 3600
+

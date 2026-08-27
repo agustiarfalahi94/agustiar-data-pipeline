@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.0] - 2026-08-27
+
+### Added
+- **Capturing `startDate` & `startTime` in GTFS-RT Ingestion** — Vehicle ingestion now extracts `startDate` ("YYYYMMDD") and `startTime` ("HH:MM:SS") from the GTFS-RT TripDescriptor, persisting them into `live_buses` with automatic schema migration.
+- **Resilient Read Connections with Retry Policy** — DuckDB connections for all UI reader queries now specify `read_only=True` and incorporate exponential backoff retry on transient lock collisions, preventing UI hiccups during background ingestion cycles.
+- **Repository-Anchored Absolute DB Paths** — Added `resolve_db_path()` to ensure database path resolution is always anchored to the repository root, preventing accidental split-brain `.duckdb` creation across differing execution working directories.
+- **Standard Secrets Hierarchy for OpenRouteService** — Routing key resolution in Live Map now prioritizes standard environment variable `ORS_API_KEY`, followed by `config.py` and `st.secrets`.
+
+### Fixed
+- **Midnight Boundary Delay Calculations in ETA Engine** — Trips starting before midnight and reporting after midnight (e.g. 00:30 on the following day) now anchor the service day midnight to the trip's `startDate`. This fixes a bug where delay calculations corrupted from positive delays into ~-1400 min delays.
+- **Cross-Platform Static GTFS Caching** — Static GTFS zip caching now uses Python's standard `tempfile.gettempdir()` instead of POSIX-only hardcoded `/tmp/`.
+- **HTML Sanitization in Network Health** — Region names and status explanations in Network Health scorecards are escaped with `html.escape()` before being rendered in raw HTML markdown blocks.
+
 ## [2.16.1] - 2026-08-07
 
 ### Fixed

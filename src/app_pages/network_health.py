@@ -1,3 +1,4 @@
+import html
 import time
 
 import streamlit as st
@@ -198,12 +199,14 @@ def show():
         cols = st.columns(4)
         for j, row in enumerate(regions[i:i + 4]):
             with cols[j]:
+                safe_region = html.escape(str(row['region']))
                 if row.get('feed_unavailable'):
+                    safe_reason = html.escape(_unavailable_reason(row))
                     st.markdown(f"""
                     <div style="border:1px solid #666;border-radius:8px;padding:12px;margin-bottom:8px;opacity:0.75;">
-                        <div style="font-weight:bold;font-size:0.85em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{row['region']}</div>
+                        <div style="font-weight:bold;font-size:0.85em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{safe_region}</div>
                         <div style="font-size:1.1em;color:#999;font-weight:bold;line-height:1.6;">Feed unavailable</div>
-                        <div style="font-size:0.75em;color:#999;">{_unavailable_reason(row)}</div>
+                        <div style="font-size:0.75em;color:#999;">{safe_reason}</div>
                     </div>
                     """, unsafe_allow_html=True)
                     continue
@@ -223,7 +226,7 @@ def show():
 
                 st.markdown(f"""
                 <div style="border:1px solid {color};border-radius:8px;padding:12px;margin-bottom:8px;">
-                    <div style="font-weight:bold;font-size:0.85em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{row['region']}</div>
+                    <div style="font-weight:bold;font-size:0.85em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{safe_region}</div>
                     <div style="font-size:2em;color:{color};font-weight:bold;line-height:1.1;">{score}</div>
                     <div style="font-size:0.75em;color:{color};">{label}</div>
                     <div style="font-size:0.72em;margin-top:4px;color:#888;">

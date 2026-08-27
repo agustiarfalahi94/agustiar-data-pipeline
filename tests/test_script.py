@@ -5287,3 +5287,94 @@ def test_the_permission_is_spent_even_when_no_other_region_helps(monkeypatch):
 
     assert 'region_follow_location' not in st_stub.session_state
     assert 'pending_region' not in st_stub.session_state
+
+
+def test_resolve_db_path_relative_and_absolute():
+    from utils.db import resolve_db_path, _REPO_ROOT
+    assert resolve_db_path(':memory:') == ':memory:'
+    assert resolve_db_path('/custom/path/db.duckdb') == '/custom/path/db.duckdb'
+    expected = os.path.join(_REPO_ROOT, 'agustiar_analytics.duckdb')
+    assert resolve_db_path('agustiar_analytics.duckdb') == expected
+    assert resolve_db_path(None) == expected
+
+
+def test_get_connection_read_only_and_retry(tmp_path, monkeypatch):
+    from utils import db as _db
+    import duckdb as _duckdb
+    test_db = str(tmp_path / 'concurrency_test.duckdb')
+
+    # Create DB and populate table
+    con = _duckdb.connect(test_db)
+    con.execute("CREATE TABLE test_tbl (id INT)")
+    con.execute("INSERT INTO test_tbl VALUES (1), (2)")
+    con.close()
+
+    monkeypatch.setattr(_db, 'DATABASE_NAME', test_db)
+
+    # Verify read_only connection can query
+    ro_con = _db.get_connection(read_only=True)
+    res = ro_con.execute("SELECT count(*) FROM test_tbl").fetchone()[0]
+    ro_con.close()
+    assert res == 2
+
+    # Verify retry logic on simulated transient exception
+    attempts = {'count': 0}
+    real_connect = _duckdb.connect
+
+    def flaky_connect(path, **kwargs):
+        attempts['count'] += 1
+        if attempts['count'] < 3:
+            raise _duckdb.IOException("Simulated lock collision")
+        return real_connect(path, **kwargs)
+
+    monkeypatch.setattr(_duckdb, 'connect', flaky_connect)
+    retry_con = _db.get_connection(read_only=True, max_retries=4, backoff_base=0.01)
+    assert attempts['count'] == 3
+    retry_con.close()
+
+
+def test_fetch_endpoint_extracts_start_date_and_start_time():
+    from google.transit import gtfs_realtime_pb2
+    feed = gtfs_realtime_pb2.FeedMessage()
+    header = feed.header
+    header.gtfs_realtime_version = "2.0"
+    header.timestamp = 1785427200
+
+    entity = feed.entity.add()
+    entity.id = "1"
+    v = entity.vehicle
+    v.position.latitude = 3.14
+    v.position.longitude = 101.69
+    v.vehicle.id = "BUS101"
+    v.timestamp = 1785427200
+    v.trip.trip_id = "TRIP_ABC"
+    v.trip.route_id = "ROUTE_XYZ"
+    v.trip.start_date = "20260827"
+    v.trip.start_time = "06:30:00"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = feed.SerializeToString()
+
+    with patch('utils.ingestion._SESSION.get', return_value=mock_resp):
+        vehicles, duration, status = _fetch_endpoint("Rapid Bus KL", "test_ep")
+
+    assert status == 'OK'
+    assert len(vehicles) == 1
+    assert vehicles[0]['start_date'] == "20260827"
+    assert vehicles[0]['start_time'] == "06:30:00"
+
+
+def test_gtfs_static_cached_path_uses_tempfile_dir():
+    from utils import gtfs_static
+    import tempfile
+    path = gtfs_static.get_cached_path("test-agency")
+    assert path.startswith(tempfile.gettempdir())
+    assert path.endswith("gtfs_static_test_agency.zip")
+
+
+def test_live_map_ors_api_key_checks_os_environ(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setenv('ORS_API_KEY', 'test_env_key_123')
+    assert live_map._ors_api_key() == 'test_env_key_123'
+

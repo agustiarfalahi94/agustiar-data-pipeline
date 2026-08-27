@@ -294,11 +294,11 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 
 ## ⚙️ Configuration
 
-`config.py` (local dev) or Streamlit Secrets (cloud deployment):
+Environment variables, `config.py` (local dev), or Streamlit Secrets (cloud deployment):
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_NAME` | `agustiar_analytics.duckdb` | DuckDB filename |
+| `DATABASE_NAME` | `agustiar_analytics.duckdb` | DuckDB filename (anchored to repository root) |
 | `DATABASE_TABLE` | `live_buses` | Table name |
 | `TIMEZONE` | `Asia/Kuala_Lumpur` | Display timezone |
 | `UTC_OFFSET_HOURS` | `8` | UTC offset |
@@ -309,7 +309,7 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 | `LIVE_FRESH_SECONDS` | `60` | Vehicles at or under this age are drawn solid |
 | `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
 | `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
-| `ORS_API_KEY` | *(unset)* | OpenRouteService key for real walking distances. Optional — see *Streamlit Cloud Secrets* below and *Troubleshooting* for what happens without one |
+| `ORS_API_KEY` | *(unset)* | OpenRouteService key for real walking distances. Can be set via environment variable (`ORS_API_KEY`), `config.py`, or Streamlit Secrets. Optional — see *Streamlit Cloud Secrets* below and *Troubleshooting* for what happens without one |
 
 The three `LIVE_*` knobs are optional and are read one at a time: a `config.py` copied from an
 earlier release simply falls back to the default for each one it lacks, and keeps every setting it

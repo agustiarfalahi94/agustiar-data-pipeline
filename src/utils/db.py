@@ -1,8 +1,11 @@
+import os
 import time
 import duckdb
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from utils import data_processor
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config import (
@@ -31,10 +34,34 @@ LIVE_STALE_SECONDS = getattr(_config, 'LIVE_STALE_SECONDS', 300)
 LIVE_HIDDEN_SECONDS = getattr(_config, 'LIVE_HIDDEN_SECONDS', 900)
 
 
-def get_connection():
-    con = duckdb.connect(DATABASE_NAME)
-    con.execute(f"SET TimeZone='{TIMEZONE}'")
-    return con
+def resolve_db_path(db_name=None):
+    """
+    Resolve database path to an absolute path anchored to repository root,
+    preventing split-brain database files across differing working directories.
+    """
+    target = db_name if db_name is not None else DATABASE_NAME
+    if not target or target == ':memory:' or target.startswith(':'):
+        return target
+    if os.path.isabs(target):
+        return target
+    return os.path.join(_REPO_ROOT, target)
+
+
+def get_connection(read_only=False, max_retries=3, backoff_base=0.05):
+    """
+    Connect to DuckDB with retry on transient lock collisions.
+    Supports read_only=True for concurrent read access from UI threads.
+    """
+    db_path = resolve_db_path(DATABASE_NAME)
+    for attempt in range(max_retries):
+        try:
+            con = duckdb.connect(db_path, read_only=read_only)
+            con.execute(f"SET TimeZone='{TIMEZONE}'")
+            return con
+        except (duckdb.IOException, duckdb.ConnectionException, duckdb.TransactionException) as e:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(backoff_base * (2 ** attempt))
 
 
 def _format_sync_time(unix_ts):
@@ -43,7 +70,10 @@ def _format_sync_time(unix_ts):
 
 
 def table_exists():
-    con = get_connection()
+    db_path = resolve_db_path(DATABASE_NAME)
+    if db_path != ':memory:' and not os.path.exists(db_path):
+        return False
+    con = get_connection(read_only=True)
     try:
         result = con.execute(
             f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{DATABASE_TABLE}'"
@@ -66,7 +96,10 @@ def prune_old_data():
 
 
 def _quality_log_exists():
-    con = get_connection()
+    db_path = resolve_db_path(DATABASE_NAME)
+    if db_path != ':memory:' and not os.path.exists(db_path):
+        return False
+    con = get_connection(read_only=True)
     try:
         result = con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'fetch_quality_log'"
@@ -90,7 +123,7 @@ def get_network_health_summary():
     if not _quality_log_exists():
         return pd.DataFrame()
 
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         if con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_network_health'"
@@ -116,7 +149,7 @@ def get_region_health_trend(region, window_hours=24):
         return pd.DataFrame()
 
     cutoff = int(time.time()) - int(window_hours * 3600)
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         if con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_region_health_trend'"
@@ -148,7 +181,7 @@ def get_region_fetch_log(region, limit=100):
     if not _quality_log_exists():
         return pd.DataFrame()
 
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         query = f"""
         SELECT *
@@ -201,7 +234,7 @@ def get_live_data_optimized():
     if not table_exists():
         return None, {}, None
 
-    con = get_connection()
+    con = get_connection(read_only=True)
 
     try:
         now = int(time.time())
@@ -288,7 +321,7 @@ def get_vehicle_trail(vehicle_id, region, limit=50):
     if not table_exists():
         return pd.DataFrame()
 
-    con = get_connection()
+    con = get_connection(read_only=True)
 
     try:
         query = f"""
@@ -337,7 +370,7 @@ def get_historical_data():
         return None, {}, None
 
     cutoff = int(time.time()) - DATA_RETENTION_DAYS * 86400
-    con = get_connection()
+    con = get_connection(read_only=True)
 
     try:
         df = con.execute(
@@ -386,7 +419,7 @@ def get_region_vehicle_counts():
     """Unique vehicles per region from the dbt mart. Columns: Region, Count."""
     if not table_exists():
         return pd.DataFrame(columns=['Region', 'Count'])
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         if con.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mart_region_vehicle_counts'"
@@ -433,7 +466,7 @@ def get_vehicle_speed_summary():
     if not table_exists():
         return pd.DataFrame(columns=['vehicle_id', 'region', 'speed_sum', 'n_rows'])
 
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         return con.execute(f"""
             SELECT vehicle_id,
@@ -456,7 +489,7 @@ def get_moving_speed_stats():
     if not table_exists():
         return {'rows': 0, 'max': 0.0, 'min': 0.0, 'avg': 0.0, 'median': 0.0}
 
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         row = con.execute(f"""
             SELECT count(*), max(kmh), min(kmh), avg(kmh), median(kmh)
@@ -482,7 +515,7 @@ def get_table_regions():
     if not table_exists():
         return [], None
 
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         regions = [r[0] for r in con.execute(
             f"SELECT DISTINCT region FROM {DATABASE_TABLE} ORDER BY region"
@@ -515,7 +548,7 @@ def get_table_page(regions, limit=1000):
         return empty, 0
 
     placeholders = ', '.join('?' for _ in regions)
-    con = get_connection()
+    con = get_connection(read_only=True)
     try:
         total = con.execute(
             f"SELECT count(*) FROM {DATABASE_TABLE} WHERE region IN ({placeholders})",

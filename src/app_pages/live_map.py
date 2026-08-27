@@ -1,3 +1,4 @@
+import os
 import time
 import streamlit as st
 import pydeck as pdk
@@ -34,18 +35,16 @@ UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
 
 def _ors_api_key():
     """
-    The OpenRouteService key: config.py for local dev, Streamlit Secrets for
-    cloud. None when unset, in which case walk times degrade to estimates.
+    The OpenRouteService key: environment variable, config.py for local dev,
+    or Streamlit Secrets for cloud. None when unset, in which case walk times
+    degrade to estimates.
 
-    Both are needed. config.py is gitignored so it never reaches Streamlit
-    Cloud, and no other code in this repository reads st.secrets — a past
-    refactor replaced those reads with hardcoded defaults, so a key placed in
-    Secrets was silently ignored until this function existed.
-
-    The except is broad because Streamlit raises varied types when no secrets
-    file exists at all, which is the normal case for a fresh clone. A missing
-    optional key must never break a render.
+    Hierarchical resolution: os.environ -> config.py -> st.secrets.
+    A missing optional key must never break a render.
     """
+    env_key = os.environ.get('ORS_API_KEY')
+    if env_key:
+        return env_key
     key = getattr(_config, 'ORS_API_KEY', None)
     if key:
         return key

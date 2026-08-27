@@ -39,6 +39,12 @@ except ImportError:
     REQUEST_TIMEOUT = 10
 
 
+try:
+    from utils.db import resolve_db_path
+except ImportError:
+    from db import resolve_db_path
+
+
 # Ranked best-first. A region with several endpoints takes the best status any
 # of them achieved: if one endpoint returned data the region is working, even
 # if a sibling endpoint is dead.
@@ -117,6 +123,8 @@ def _fetch_endpoint(name, endpoint):
                         'timestamp': v.get('timestamp'),
                         'trip_id': trip_info.get('tripId', ''),
                         'route_id': trip_info.get('routeId', ''),
+                        'start_date': str(trip_info.get('startDate', '') or ''),
+                        'start_time': str(trip_info.get('startTime', '') or ''),
                     })
             return vehicles, duration_ms, _classify_status(200, len(vehicles))
         return [], duration_ms, _classify_status(response.status_code, 0)
@@ -170,8 +178,9 @@ def _write_quality_log(stats_list):
     """Write quality stats to fetch_quality_log using its own connection."""
     if not stats_list:
         return
+    db_path = resolve_db_path(DATABASE_NAME)
     try:
-        con = duckdb.connect(DATABASE_NAME)
+        con = duckdb.connect(db_path)
     except Exception as e:
         print(f"Quality log connection error: {e}")
         return
@@ -234,12 +243,13 @@ def fetch_and_store_transit_data():
     """
     all_vehicle_data = []
     current_unix = int(time.time())
+    db_path = resolve_db_path(DATABASE_NAME)
 
     # Fetch guard: skip if a fetch already ran within the last 3 seconds.
     # Prevents duplicate quality log entries and DuckDB write collisions when
     # multiple Streamlit sessions trigger refresh simultaneously.
     try:
-        _guard_con = duckdb.connect(DATABASE_NAME)
+        _guard_con = duckdb.connect(db_path, read_only=True)
         try:
             recent = _guard_con.execute(
                 f"SELECT COUNT(*) FROM fetch_quality_log WHERE fetch_timestamp >= {current_unix - 3}"
@@ -325,7 +335,7 @@ def fetch_and_store_transit_data():
     quality_stats = []  # collected here, written after con is closed
 
     try:
-        con = duckdb.connect(DATABASE_NAME)
+        con = duckdb.connect(db_path)
     except Exception as e:
         print(f"Database connection error: {e}")
         return
@@ -359,6 +369,14 @@ def fetch_and_store_transit_data():
             if 'route_id' not in columns:
                 con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN route_id VARCHAR")
                 con.execute(f"UPDATE {DATABASE_TABLE} SET route_id = '' WHERE route_id IS NULL")
+
+            if 'start_date' not in columns:
+                con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN start_date VARCHAR")
+                con.execute(f"UPDATE {DATABASE_TABLE} SET start_date = '' WHERE start_date IS NULL")
+
+            if 'start_time' not in columns:
+                con.execute(f"ALTER TABLE {DATABASE_TABLE} ADD COLUMN start_time VARCHAR")
+                con.execute(f"UPDATE {DATABASE_TABLE} SET start_time = '' WHERE start_time IS NULL")
 
             con.execute(f"""
                 INSERT INTO {DATABASE_TABLE}

@@ -11,6 +11,7 @@ Streamlit rerun.  All ZIP parsing is done in-memory via zipfile + io.BytesIO.
 import io
 import os
 import re
+import tempfile
 import time
 import zipfile
 import csv
@@ -71,7 +72,7 @@ def _slug_safe(agency_slug: str) -> str:
 
 def get_cached_path(agency_slug: str) -> str:
     """Return the local file path where the ZIP for *agency_slug* is cached."""
-    return f"/tmp/gtfs_static_{_slug_safe(agency_slug)}.zip"
+    return os.path.join(tempfile.gettempdir(), f"gtfs_static_{_slug_safe(agency_slug)}.zip")
 
 
 def is_cache_fresh(agency_slug: str) -> bool:
