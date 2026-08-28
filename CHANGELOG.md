@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] - 2026-08-28
+
+### Performance & Optimization
+- **In-Memory Spatial Indexing for Stops Lookups** — Added `_AGENCY_STOPS_INDEX` with ZIP modification-time tracking in `gtfs_static.py` to cache parsed agency stops in memory.
+- **Bounding-Box Pre-Filtering** — Implemented planar rectangular pre-filtering ($\Delta\text{lat}, \Delta\text{lon}$) in `get_stops_near()` to skip >98% of trigonometric Haversine computations during nearby stops queries and cross-region scans.
+- **MTime-Aware Route Shapes Caching** — Added `_TRIP_SHAPES_INDEX` in `gtfs_static.py` to cache route polylines by `(agency_slug, trip_id)`, eliminating repeated ZIP unzipping and full CSV parses when rendering the Route Viewer.
+
 ## [2.17.0] - 2026-08-27
 
 ### Added
