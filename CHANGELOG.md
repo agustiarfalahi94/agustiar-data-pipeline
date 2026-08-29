@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.0] - 2026-08-29
+
+### Refactored & Modularized
+- **Live Map Subcomponents Extraction** — Modularized `live_map.py` into dedicated component packages under `src/app_pages/live_map_components/`:
+  - `deck_layers.py`: Encapsulates PyDeck layer composition (vehicle arrows, stop rings, GPS position marker, route shape polylines).
+  - `stop_panel.py`: Encapsulates nearby stop arrival formatting and board rendering.
+  - `route_panel.py`: Encapsulates Route Viewer header and vehicle tracking details.
+- **API & Testing Invariance** — Preserved 100% backward compatibility for all module-level imports, helper function contracts, session state keys, and test monkeypatch points on `live_map.py`.
+
 ## [2.19.0] - 2026-08-29
 
 ### Added
