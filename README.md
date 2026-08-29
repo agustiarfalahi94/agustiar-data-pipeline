@@ -120,6 +120,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Header metrics** — **Active Buses** (everything drawn: fresh + stale), **Stale** (the dimmed
   share of it), **Regions Monitored** and **Busiest Region**. All four are network-wide; the caption
   under the map reports the same counts for the selected region
+- **🚨 GTFS-RT Service Disruption Alerts** — automatic ingestion of GTFS-Realtime service disruption alerts (`entity.alert`), displaying real-time cause, effect, and disruption warnings across Network Health and Live Map
+- **🚏 Multi-Agency Stop Hub Clustering** — automatically groups physical stops across different operators within 50 meters into unified transit hub clusters (`get_clustered_stops_near()`), offering integrated multi-agency transfer views
 - **Dark/Light map themes** — the toggle lives in the sidebar under **🎨 Appearance** and is
   offered only on this page, because it is the only page with a map to theme. The choice is
   remembered while you are on other pages
