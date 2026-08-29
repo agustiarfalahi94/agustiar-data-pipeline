@@ -585,3 +585,36 @@ def get_table_page(regions, limit=1000):
             df['created_at'], utc=True, errors='coerce'
         ).dt.tz_convert(TIMEZONE).dt.strftime('%-d %b %Y, %H:%M')
     return df, int(total)
+
+
+def get_active_service_alerts(region=None, route_id=None):
+    """
+    Get active service alerts from DuckDB service_alerts table.
+    Filters by region and/or route_id if provided.
+    Returns DataFrame with columns: alert_id, region, cause, effect, header_text,
+    description_text, active_period_start, active_period_end, route_id, stop_id, fetched_at.
+    """
+    db_path = resolve_db_path(DATABASE_NAME)
+    if db_path != ':memory:' and not os.path.exists(db_path):
+        return pd.DataFrame()
+
+    con = get_connection(read_only=True)
+    try:
+        if con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'service_alerts'"
+        ).fetchone()[0] == 0:
+            return pd.DataFrame()
+
+        query = "SELECT * FROM service_alerts WHERE 1=1"
+        params = []
+        if region:
+            query += " AND region = ?"
+            params.append(region)
+        if route_id:
+            query += " AND route_id = ?"
+            params.append(route_id)
+
+        query += " ORDER BY fetched_at DESC"
+        return con.execute(query, params).df()
+    finally:
+        con.close()

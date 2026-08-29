@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - 2026-08-29
+
+### Added
+- **GTFS-RT Service Disruption Alerts Ingestion** — Vehicle ingestion now extracts `entity.alert` entries from GTFS Realtime feeds, persisting cause, effect, header, description, and affected routes/stops into DuckDB table `service_alerts` with rolling retention pruning.
+- **Service Disruption Warnings Banner** — Added an interactive active service disruption expander in Network Health (`get_active_service_alerts()`), displaying real-time alert details across monitored transit feeds.
+- **Multi-Agency Stop Hub Clustering** — Introduced `get_clustered_stops_near()` in `gtfs_static.py` to group physical stops across different transit agencies (within 50 meters) into unified multi-agency hub clusters.
+
 ## [2.18.0] - 2026-08-28
 
 ### Performance & Optimization

@@ -913,3 +913,32 @@ def test_get_shapes_for_trip_caching(tmp_path, monkeypatch):
     assert shape_pts_cached == shape_pts
 
 
+def test_get_clustered_stops_near_groups_multi_agency_stops(tmp_path, monkeypatch):
+    """
+    get_clustered_stops_near must cluster stops within 50m across multiple agencies into unified hub clusters.
+    """
+    p1 = tmp_path / "agency1.zip"
+    with zipfile.ZipFile(p1, 'w') as zf:
+        zf.writestr('stops.txt', "stop_id,stop_name,stop_lat,stop_lon\nSTOP_A,Hub Alpha,3.1000,101.7000\n")
+
+    p2 = tmp_path / "agency2.zip"
+    with zipfile.ZipFile(p2, 'w') as zf:
+        zf.writestr('stops.txt', "stop_id,stop_name,stop_lat,stop_lon\nSTOP_B,Hub Alpha Stn,3.1001,101.7001\n")
+
+    def mock_load(slug):
+        if 'rapid-bus-kl' in slug:
+            return zipfile.ZipFile(p1)
+        return zipfile.ZipFile(p2)
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', mock_load)
+    _clear_indexes()
+
+    hubs = gtfs_static.get_clustered_stops_near(3.1000, 101.7000, radius_m=800, cluster_distance_m=50)
+    assert len(hubs) >= 1
+    # Check that stops within 50m were clustered together into one hub
+    hub_alpha = next(h for h in hubs if 'Hub Alpha' in h['hub_name'])
+    assert hub_alpha['total_stops'] >= 2
+    assert len(hub_alpha['agencies']) >= 2
+
+
+

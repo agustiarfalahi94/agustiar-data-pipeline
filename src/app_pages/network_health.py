@@ -187,6 +187,18 @@ def show():
         col5.metric("Last Fetch", dt.strftime('%H:%M:%S'))
         st.caption(f"Scores calculated over the last 24h · last fetch at {dt.strftime('%d %b %Y, %H:%M:%S')} (GMT+8)")
 
+    alerts_df = db.get_active_service_alerts()
+    if not alerts_df.empty:
+        st.warning(f"🚨 **{len(alerts_df)} Active Service Alert(s)** reported across network feeds.")
+        with st.expander("View Active Service Alerts Details"):
+            for _, alt in alerts_df.iterrows():
+                hdr = html.escape(str(alt.get('header_text') or 'Service Alert'))
+                desc = html.escape(str(alt.get('description_text') or 'No details provided.'))
+                reg = html.escape(str(alt.get('region') or 'Network Wide'))
+                cause = html.escape(str(alt.get('cause') or ''))
+                effect = html.escape(str(alt.get('effect') or ''))
+                st.markdown(f"**[{reg}] {hdr}** ({cause} / {effect})\n\n{desc}")
+
     st.divider()
 
     # ── Section 2: Region Scorecards ────────────────────────────────────────

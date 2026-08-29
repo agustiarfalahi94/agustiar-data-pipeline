@@ -94,8 +94,8 @@ _SESSION.mount('https://', requests.adapters.HTTPAdapter(
 
 def _fetch_endpoint(name, endpoint):
     """
-    Fetch vehicle data from a single API endpoint.
-    Returns (vehicles, duration_ms, status) — vehicles is [] on any error.
+    Fetch vehicle data and service alerts from a single API endpoint.
+    Returns (vehicles, alerts, duration_ms, status) — vehicles and alerts are [] on any error.
     status is one of OK / EMPTY / NO_FEED / THROTTLED / ERROR.
     """
     url = f'{API_BASE_URL}{endpoint}'
@@ -107,6 +107,8 @@ def _fetch_endpoint(name, endpoint):
             feed = gtfs_realtime_pb2.FeedMessage()
             feed.ParseFromString(response.content)
             vehicles = []
+            alerts = []
+            current_ts = int(time.time())
             for entity in feed.entity:
                 if entity.HasField('vehicle'):
                     v = MessageToDict(entity.vehicle)
@@ -126,11 +128,47 @@ def _fetch_endpoint(name, endpoint):
                         'start_date': str(trip_info.get('startDate', '') or ''),
                         'start_time': str(trip_info.get('startTime', '') or ''),
                     })
-            return vehicles, duration_ms, _classify_status(200, len(vehicles))
-        return [], duration_ms, _classify_status(response.status_code, 0)
+                elif entity.HasField('alert'):
+                    a = MessageToDict(entity.alert)
+                    header = ''
+                    ht = a.get('headerText', {}).get('translation', [])
+                    if ht:
+                        header = ht[0].get('text', '')
+                    desc = ''
+                    dt = a.get('descriptionText', {}).get('translation', [])
+                    if dt:
+                        desc = dt[0].get('text', '')
+                    act_start = 0
+                    act_end = 0
+                    ap = a.get('activePeriod', [])
+                    if ap:
+                        act_start = int(ap[0].get('start', 0))
+                        act_end = int(ap[0].get('end', 0))
+                    r_id = ''
+                    s_id = ''
+                    inf = a.get('informedEntity', [])
+                    if inf:
+                        r_id = inf[0].get('routeId', '')
+                        s_id = inf[0].get('stopId', '')
+
+                    alerts.append({
+                        'alert_id': str(entity.id),
+                        'region': name,
+                        'cause': str(a.get('cause', 'UNKNOWN_CAUSE')),
+                        'effect': str(a.get('effect', 'UNKNOWN_EFFECT')),
+                        'header_text': header,
+                        'description_text': desc,
+                        'active_period_start': act_start,
+                        'active_period_end': act_end,
+                        'route_id': r_id,
+                        'stop_id': s_id,
+                        'fetched_at': current_ts,
+                    })
+            return vehicles, alerts, duration_ms, _classify_status(200, len(vehicles))
+        return [], [], duration_ms, _classify_status(response.status_code, 0)
     except Exception as e:
         print(f"Error fetching {name} ({endpoint}): {e}")
-    return [], int((time.time() - t0) * 1000), 'ERROR'
+    return [], [], int((time.time() - t0) * 1000), 'ERROR'
 
 
 def _build_quality_stats(received_by_region, valid_by_region, inserted_by_region,
@@ -236,12 +274,64 @@ def _write_quality_log(stats_list):
         con.close()
 
 
+def _write_service_alerts(alerts_list):
+    """Write service alerts to service_alerts table using its own connection."""
+    if not alerts_list:
+        return
+    db_path = resolve_db_path(DATABASE_NAME)
+    try:
+        con = duckdb.connect(db_path)
+    except Exception as e:
+        print(f"Service alerts connection error: {e}")
+        return
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS service_alerts (
+                alert_id VARCHAR,
+                region VARCHAR,
+                cause VARCHAR,
+                effect VARCHAR,
+                header_text VARCHAR,
+                description_text VARCHAR,
+                active_period_start BIGINT,
+                active_period_end BIGINT,
+                route_id VARCHAR,
+                stop_id VARCHAR,
+                fetched_at BIGINT
+            )
+        """)
+
+        for alt in alerts_list:
+            con.execute(
+                "INSERT INTO service_alerts ("
+                "  alert_id, region, cause, effect, header_text, description_text,"
+                "  active_period_start, active_period_end, route_id, stop_id, fetched_at"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [alt['alert_id'], alt['region'], alt['cause'], alt['effect'],
+                 alt['header_text'], alt['description_text'],
+                 alt['active_period_start'], alt['active_period_end'],
+                 alt['route_id'], alt['stop_id'], alt['fetched_at']]
+            )
+
+        try:
+            from config import DATA_RETENTION_DAYS as _DRD
+        except ImportError:
+            _DRD = 7
+        cutoff = int(time.time()) - _DRD * 86400
+        con.execute(f"DELETE FROM service_alerts WHERE fetched_at < {cutoff}")
+    except Exception as e:
+        print(f"Service alerts write error: {e}")
+    finally:
+        con.close()
+
+
 def fetch_and_store_transit_data():
     """
     Fetch live transit data from Malaysia GTFS API and store in DuckDB.
     Prunes rows older than DATA_RETENTION_DAYS after each successful insert.
     """
     all_vehicle_data = []
+    all_alert_data = []
     current_unix = int(time.time())
     db_path = resolve_db_path(DATABASE_NAME)
 
@@ -278,8 +368,9 @@ def fetch_and_store_transit_data():
         status_by_region = {}
         for future in as_completed(future_to_task):
             name, endpoint = future_to_task[future]
-            vehicles, duration_ms, status = future.result()
+            vehicles, alerts, duration_ms, status = future.result()
             all_vehicle_data.extend(vehicles)
+            all_alert_data.extend(alerts)
             duration_by_region[name] = duration_by_region.get(name, 0) + duration_ms
             status_by_region[name] = _merge_status(status_by_region.get(name), status)
 
@@ -430,6 +521,7 @@ def fetch_and_store_transit_data():
 
     # Write quality log with a fresh connection — main con is fully closed above
     _write_quality_log(quality_stats)
+    _write_service_alerts(all_alert_data)
 
     # Create dbt mart views once the source tables exist (no-op thereafter).
     try:

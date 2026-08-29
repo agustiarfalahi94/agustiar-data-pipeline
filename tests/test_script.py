@@ -132,25 +132,28 @@ def test_get_sorted_regions_others_alphabetical():
 # ── _fetch_endpoint ───────────────────────────────────────────────────────────
 
 def test_fetch_endpoint_returns_tuple_on_network_error():
-    """_fetch_endpoint must return (list, int) even when the request fails."""
+    """_fetch_endpoint must return (vehicles, alerts, duration_ms, status) even when the request fails."""
     with patch('utils.ingestion.requests.get', side_effect=ConnectionError("timeout")):
         result = _fetch_endpoint("Test Region", "test-endpoint")
     assert isinstance(result, tuple), "should return a tuple"
-    assert isinstance(result[0], list), "first element should be a list"
-    assert isinstance(result[1], int), "second element should be duration_ms int"
+    assert isinstance(result[0], list), "first element (vehicles) should be a list"
+    assert isinstance(result[1], list), "second element (alerts) should be a list"
+    assert isinstance(result[2], int), "third element should be duration_ms int"
     assert result[0] == [], "vehicle list should be empty on error"
-    assert result[1] >= 0, "duration should be non-negative"
+    assert result[1] == [], "alert list should be empty on error"
+    assert result[2] >= 0, "duration should be non-negative"
 
 
 def test_fetch_endpoint_returns_tuple_on_non_200():
-    """_fetch_endpoint must return ([], duration_ms) for non-200 responses."""
+    """_fetch_endpoint must return ([], [], duration_ms, status) for non-200 responses."""
     mock_response = MagicMock()
     mock_response.status_code = 404
     with patch('utils.ingestion.requests.get', return_value=mock_response):
         result = _fetch_endpoint("Test Region", "test-endpoint")
     assert isinstance(result, tuple)
     assert result[0] == []
-    assert isinstance(result[1], int)
+    assert result[1] == []
+    assert isinstance(result[2], int)
 
 
 # ── _build_quality_stats ──────────────────────────────────────────────────────
@@ -583,7 +586,7 @@ def test_early_return_logs_no_feed_status(tmp_path):
 
     with patch('utils.ingestion.DATABASE_NAME', db_path), \
          patch('utils.ingestion.API_SOURCES', {'Rapid Bus Kuantan': ['dead-endpoint']}), \
-         patch('utils.ingestion._fetch_endpoint', return_value=([], 5, 'NO_FEED')), \
+         patch('utils.ingestion._fetch_endpoint', return_value=([], [], 5, 'NO_FEED')), \
          patch('utils.ingestion._write_quality_log', side_effect=captured.append):
         ingestion.fetch_and_store_transit_data()
 
@@ -5357,12 +5360,71 @@ def test_fetch_endpoint_extracts_start_date_and_start_time():
     mock_resp.content = feed.SerializeToString()
 
     with patch('utils.ingestion._SESSION.get', return_value=mock_resp):
-        vehicles, duration, status = _fetch_endpoint("Rapid Bus KL", "test_ep")
+        vehicles, alerts, duration, status = _fetch_endpoint("Rapid Bus KL", "test_ep")
 
     assert status == 'OK'
     assert len(vehicles) == 1
     assert vehicles[0]['start_date'] == "20260827"
     assert vehicles[0]['start_time'] == "06:30:00"
+
+
+def test_fetch_endpoint_extracts_gtfs_rt_alerts():
+    from google.transit import gtfs_realtime_pb2
+    feed = gtfs_realtime_pb2.FeedMessage()
+    header = feed.header
+    header.gtfs_realtime_version = "2.0"
+
+    entity = feed.entity.add()
+    entity.id = "ALERT_1"
+    alert = entity.alert
+    alert.cause = gtfs_realtime_pb2.Alert.ACCIDENT
+    alert.effect = gtfs_realtime_pb2.Alert.MODIFIED_SERVICE
+    ht = alert.header_text.translation.add()
+    ht.text = "Accident on Route R1"
+    dt = alert.description_text.translation.add()
+    dt.text = "Buses delayed by 15 mins due to accident."
+    inf = alert.informed_entity.add()
+    inf.route_id = "R1"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = feed.SerializeToString()
+
+    with patch('utils.ingestion._SESSION.get', return_value=mock_resp):
+        vehicles, alerts, duration, status = _fetch_endpoint("Rapid Bus KL", "test_ep")
+
+    assert len(alerts) == 1
+    assert alerts[0]['alert_id'] == "ALERT_1"
+    assert alerts[0]['header_text'] == "Accident on Route R1"
+    assert alerts[0]['route_id'] == "R1"
+
+
+def test_write_and_query_service_alerts(tmp_path, monkeypatch):
+    from utils import db as _db
+    from utils import ingestion as _ingest
+    test_db = str(tmp_path / 'alerts_test.duckdb')
+    monkeypatch.setattr(_db, 'DATABASE_NAME', test_db)
+    monkeypatch.setattr(_ingest, 'DATABASE_NAME', test_db)
+
+    alerts = [{
+        'alert_id': 'ALT_101',
+        'region': 'Rapid Bus KL',
+        'cause': 'TECHNICAL_PROBLEM',
+        'effect': 'DELAYS',
+        'header_text': 'Signal Failure',
+        'description_text': 'Expect delays on line.',
+        'active_period_start': 1000,
+        'active_period_end': 2000,
+        'route_id': 'R10',
+        'stop_id': 'S10',
+        'fetched_at': int(time.time()),
+    }]
+
+    _ingest._write_service_alerts(alerts)
+    res = _db.get_active_service_alerts(region='Rapid Bus KL')
+    assert len(res) == 1
+    assert res.iloc[0]['alert_id'] == 'ALT_101'
+    assert res.iloc[0]['header_text'] == 'Signal Failure'
 
 
 def test_gtfs_static_cached_path_uses_tempfile_dir():
@@ -5377,4 +5439,5 @@ def test_live_map_ors_api_key_checks_os_environ(monkeypatch):
     from app_pages import live_map
     monkeypatch.setenv('ORS_API_KEY', 'test_env_key_123')
     assert live_map._ors_api_key() == 'test_env_key_123'
+
 

@@ -964,3 +964,81 @@ def find_regions_with_stops_near(lat, lon, radius_m=1500, exclude_slug=None,
             _evict_expired_region_scans(time.time())
 
     return [dict(row) for row in found[:limit]]
+
+
+def get_clustered_stops_near(lat, lon, radius_m=800, cluster_distance_m=50, limit=10):
+    """
+    Find stops near (lat, lon) within *radius_m* across all transit regions,
+    and group stops within *cluster_distance_m* of each other into unified multi-agency hub clusters.
+
+    Returns a list of cluster dicts:
+      {
+          'cluster_id': str,
+          'hub_name': str,
+          'lat': float,
+          'lon': float,
+          'distance_m': float,
+          'agencies': list[str],
+          'stops': list[dict],
+          'total_stops': int,
+      }
+    """
+    all_raw_stops = []
+    for region, slug in STATIC_API_SOURCES.items():
+        try:
+            agency_stops = get_stops_near(slug, lat, lon, radius_m=radius_m, limit=100)
+            for s in agency_stops:
+                all_raw_stops.append({
+                    'agency': region,
+                    'slug': slug,
+                    'stop_id': s['stop_id'],
+                    'stop_name': s['stop_name'],
+                    'stop_lat': s['stop_lat'],
+                    'stop_lon': s['stop_lon'],
+                    'distance_m': s['distance_m'],
+                })
+        except Exception:
+            continue
+
+    if not all_raw_stops:
+        return []
+
+    # Sort candidates by distance from user location first
+    all_raw_stops.sort(key=lambda s: s['distance_m'])
+
+    clusters = []
+    for s in all_raw_stops:
+        matched_cluster = None
+        for cl in clusters:
+            # Check distance between stop and cluster centroid
+            cdist = haversine_m(s['stop_lat'], s['stop_lon'], cl['lat'], cl['lon'])
+            if cdist <= cluster_distance_m:
+                matched_cluster = cl
+                break
+
+        if matched_cluster:
+            matched_cluster['stops'].append(s)
+            if s['agency'] not in matched_cluster['agencies']:
+                matched_cluster['agencies'].append(s['agency'])
+            # Recalculate centroid coordinates
+            n = len(matched_cluster['stops'])
+            matched_cluster['lat'] = sum(st['stop_lat'] for st in matched_cluster['stops']) / n
+            matched_cluster['lon'] = sum(st['stop_lon'] for st in matched_cluster['stops']) / n
+            matched_cluster['distance_m'] = haversine_m(lat, lon, matched_cluster['lat'], matched_cluster['lon'])
+        else:
+            clusters.append({
+                'cluster_id': f"hub_{len(clusters) + 1}",
+                'hub_name': s['stop_name'],
+                'lat': s['stop_lat'],
+                'lon': s['stop_lon'],
+                'distance_m': s['distance_m'],
+                'agencies': [s['agency']],
+                'stops': [s],
+            })
+
+    # Sort final clusters by distance to user location
+    clusters.sort(key=lambda cl: cl['distance_m'])
+    for cl in clusters:
+        cl['total_stops'] = len(cl['stops'])
+
+    return clusters[:limit]
