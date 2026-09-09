@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the shared sidebar on Live Map, Data Table, Analytics and Network
   Health.
 
+### Fixed
+- Updated **Ask the Network** from the shut-down `gemini-2.0-flash` model to
+  Google's supported `gemini-3.6-flash` replacement.
+
 ## [2.20.0] - 2026-08-29
 
 ### Refactored & Modularized

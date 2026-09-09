@@ -9,7 +9,7 @@ import requests
 MAX_QUESTION_CHARS = 500
 MAX_CONTEXT_CHARS = 12_000
 MAX_OUTPUT_TOKENS = 350
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.6-flash"
 
 
 def build_transit_context(

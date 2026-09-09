@@ -3,6 +3,7 @@ import pandas as pd
 from utils.ai_transit import (
     MAX_QUESTION_CHARS,
     answer_from_response,
+    ask_network,
     build_transit_context,
 )
 
@@ -54,3 +55,32 @@ def test_context_includes_page_specific_retrieval_sections():
     )
     assert "ANALYTICS SNAPSHOT" in context
     assert "Rapid Bus Penang: 42 vehicles" in context
+
+
+def test_ask_network_uses_supported_gemini_flash_model():
+    request = {}
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "candidates": [{"content": {"parts": [{"text": "Service is operating."}]}}]
+            }
+
+    def post(url, **kwargs):
+        request["url"] = url
+        return Response()
+
+    answer = ask_network(
+        "How is the network?",
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        api_key="test-key",
+        http_post=post,
+    )
+
+    assert answer == "Service is operating."
+    assert request["url"].endswith("/gemini-3.6-flash:generateContent")
