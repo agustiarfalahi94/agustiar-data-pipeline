@@ -92,6 +92,11 @@ def _clear_indexes():
     # leaves one cache populated silently reads the previous test's parse.
     gtfs_static._ROUTE_PARTS_INDEX.clear()
     gtfs_static._ROUTE_PARTS_MTIME.clear()
+    # Spatial and shapes caches added in 2.18.0.
+    gtfs_static._AGENCY_STOPS_INDEX.clear()
+    gtfs_static._AGENCY_STOPS_MTIME.clear()
+    gtfs_static._TRIP_SHAPES_INDEX.clear()
+    gtfs_static._TRIP_SHAPES_MTIME.clear()
 
 
 def _use_fake_feed(monkeypatch, zip_path):
@@ -825,3 +830,115 @@ def test_get_route_parts_unknown_route_in_valid_feed(tmp_path, monkeypatch):
     gtfs_static._ROUTE_PARTS_INDEX.clear()
     parts = gtfs_static.get_route_parts('any', 'UNKNOWN_ROUTE')
     assert parts == {'short': '', 'long': ''}
+
+
+def test_service_day_epoch_with_start_date_spanning_midnight():
+    """
+    A trip starting 23:50 on 2026-07-31 that reports at 00:30 on 2026-08-01 local time
+    must anchor to 2026-07-31 local midnight when start_date='20260731' is provided.
+    """
+    # 2026-07-31 00:00:00 UTC+8 epoch = 1785427200
+    # 2026-08-01 00:30:00 UTC+8 = 1785427200 + 86400 + 1800 = 1785515400
+    ts_past_midnight = 1785515400
+    day = eta.service_day_epoch(ts_past_midnight, 8, start_date='20260731')
+    assert day == 1785427200, "service_day_epoch should anchor to 2026-07-31 midnight"
+
+    # Stop scheduled at 24:20:00 (87600s from 2026-07-31 midnight).
+    # Actual reporting time is 00:30:00 (88200s from 2026-07-31 midnight).
+    # Expected delay: 88200 - 87600 = +600s (10 min late).
+    stops = [{'stop_id': 'S1', 'stop_name': 'Midnight Stop', 'stop_lat': 3.1, 'stop_lon': 101.7, 'arrival_seconds': 87600}]
+    delay = eta.estimate_delay_seconds(stops, 0, ts_past_midnight, day)
+    assert delay == 600, f"Expected 600s delay, got {delay}s"
+
+
+def test_service_day_epoch_fallback_on_invalid_start_date():
+    # If start_date is invalid or malformed, fallback to timestamp-derived local midnight
+    ts = 1785459600  # 2026-07-31 09:00 UTC+8
+    day_fallback = eta.service_day_epoch(ts, 8, start_date='invalid_date')
+    assert (ts - day_fallback) == 9 * 3600
+
+
+def test_get_stops_near_spatial_indexing_and_bounding_box(tmp_path, monkeypatch):
+    """
+    get_stops_near must use _AGENCY_STOPS_INDEX, bounding box filtering,
+    and return correct nearest stops without re-reading the zip file.
+    """
+    p = tmp_path / "spatial_feed.zip"
+    stops = (
+        "stop_id,stop_name,stop_desc,stop_lat,stop_lon\n"
+        "NEAR_1,Near Stop 1,,3.1001,101.7001\n"
+        "FAR_1,Far Away Stop,,5.0000,105.0000\n"
+    )
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('stops.txt', stops)
+
+    _use_fake_feed(monkeypatch, str(p))
+
+    # First call: populates spatial cache
+    near_stops = gtfs_static.get_stops_near('test_slug', 3.1000, 101.7000, radius_m=800, limit=5)
+    assert len(near_stops) == 1
+    assert near_stops[0]['stop_id'] == 'NEAR_1'
+    assert 'test_slug' in gtfs_static._AGENCY_STOPS_INDEX
+
+    # Second call: uses cached index
+    near_stops_cached = gtfs_static.get_stops_near('test_slug', 3.1000, 101.7000, radius_m=800, limit=5)
+    assert len(near_stops_cached) == 1
+    assert near_stops_cached[0]['stop_id'] == 'NEAR_1'
+
+
+def test_get_shapes_for_trip_caching(tmp_path, monkeypatch):
+    """
+    get_shapes_for_trip must cache result in _TRIP_SHAPES_INDEX and return [lon, lat] pairs.
+    """
+    p = tmp_path / "shapes_feed.zip"
+    trips = "route_id,service_id,trip_id,shape_id\nR1,weekday,TRIP_SHAPE,SHAPE_1\n"
+    shapes = (
+        "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n"
+        "SHAPE_1,3.1000,101.7000,1\n"
+        "SHAPE_1,3.1010,101.7010,2\n"
+    )
+    with zipfile.ZipFile(p, 'w') as zf:
+        zf.writestr('trips.txt', trips)
+        zf.writestr('shapes.txt', shapes)
+
+    _use_fake_feed(monkeypatch, str(p))
+
+    # First call: populates cache
+    shape_pts = gtfs_static.get_shapes_for_trip('test_slug', 'TRIP_SHAPE')
+    assert shape_pts == [[101.7000, 3.1000], [101.7010, 3.1010]]
+    assert ('test_slug', 'TRIP_SHAPE') in gtfs_static._TRIP_SHAPES_INDEX
+
+    # Second call: hits cache
+    shape_pts_cached = gtfs_static.get_shapes_for_trip('test_slug', 'TRIP_SHAPE')
+    assert shape_pts_cached == shape_pts
+
+
+def test_get_clustered_stops_near_groups_multi_agency_stops(tmp_path, monkeypatch):
+    """
+    get_clustered_stops_near must cluster stops within 50m across multiple agencies into unified hub clusters.
+    """
+    p1 = tmp_path / "agency1.zip"
+    with zipfile.ZipFile(p1, 'w') as zf:
+        zf.writestr('stops.txt', "stop_id,stop_name,stop_lat,stop_lon\nSTOP_A,Hub Alpha,3.1000,101.7000\n")
+
+    p2 = tmp_path / "agency2.zip"
+    with zipfile.ZipFile(p2, 'w') as zf:
+        zf.writestr('stops.txt', "stop_id,stop_name,stop_lat,stop_lon\nSTOP_B,Hub Alpha Stn,3.1001,101.7001\n")
+
+    def mock_load(slug):
+        if 'rapid-bus-kl' in slug:
+            return zipfile.ZipFile(p1)
+        return zipfile.ZipFile(p2)
+
+    monkeypatch.setattr(gtfs_static, '_load_zip', mock_load)
+    _clear_indexes()
+
+    hubs = gtfs_static.get_clustered_stops_near(3.1000, 101.7000, radius_m=800, cluster_distance_m=50)
+    assert len(hubs) >= 1
+    # Check that stops within 50m were clustered together into one hub
+    hub_alpha = next(h for h in hubs if 'Hub Alpha' in h['hub_name'])
+    assert hub_alpha['total_stops'] >= 2
+    assert len(hub_alpha['agencies']) >= 2
+
+
+

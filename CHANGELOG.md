@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Renamed the GitHub repository to `malaysia-transit-tracker` and updated
+  public README links and repository metadata.
+- Added an Architecture & Security section documenting secrets, API
+  boundaries, rate limiting and CI/CD.
+
+## [2.20.0] - 2026-08-29
+
+### Refactored & Modularized
+- **Live Map Subcomponents Extraction** — Modularized `live_map.py` into dedicated component packages under `src/app_pages/live_map_components/`:
+  - `deck_layers.py`: Encapsulates PyDeck layer composition (vehicle arrows, stop rings, GPS position marker, route shape polylines).
+  - `stop_panel.py`: Encapsulates nearby stop arrival formatting and board rendering.
+  - `route_panel.py`: Encapsulates Route Viewer header and vehicle tracking details.
+- **API & Testing Invariance** — Preserved 100% backward compatibility for all module-level imports, helper function contracts, session state keys, and test monkeypatch points on `live_map.py`.
+
+## [2.19.0] - 2026-08-29
+
+### Added
+- **GTFS-RT Service Disruption Alerts Ingestion** — Vehicle ingestion now extracts `entity.alert` entries from GTFS Realtime feeds, persisting cause, effect, header, description, and affected routes/stops into DuckDB table `service_alerts` with rolling retention pruning.
+- **Service Disruption Warnings Banner** — Added an interactive active service disruption expander in Network Health (`get_active_service_alerts()`), displaying real-time alert details across monitored transit feeds.
+- **Multi-Agency Stop Hub Clustering** — Introduced `get_clustered_stops_near()` in `gtfs_static.py` to group physical stops across different transit agencies (within 50 meters) into unified multi-agency hub clusters.
+
+## [2.18.0] - 2026-08-28
+
+### Performance & Optimization
+- **In-Memory Spatial Indexing for Stops Lookups** — Added `_AGENCY_STOPS_INDEX` with ZIP modification-time tracking in `gtfs_static.py` to cache parsed agency stops in memory.
+- **Bounding-Box Pre-Filtering** — Implemented planar rectangular pre-filtering ($\Delta\text{lat}, \Delta\text{lon}$) in `get_stops_near()` to skip >98% of trigonometric Haversine computations during nearby stops queries and cross-region scans.
+- **MTime-Aware Route Shapes Caching** — Added `_TRIP_SHAPES_INDEX` in `gtfs_static.py` to cache route polylines by `(agency_slug, trip_id)`, eliminating repeated ZIP unzipping and full CSV parses when rendering the Route Viewer.
+
+## [2.17.0] - 2026-08-27
+
+### Added
+- **Capturing `startDate` & `startTime` in GTFS-RT Ingestion** — Vehicle ingestion now extracts `startDate` ("YYYYMMDD") and `startTime` ("HH:MM:SS") from the GTFS-RT TripDescriptor, persisting them into `live_buses` with automatic schema migration.
+- **Resilient Read Connections with Retry Policy** — DuckDB connections for all UI reader queries now specify `read_only=True` and incorporate exponential backoff retry on transient lock collisions, preventing UI hiccups during background ingestion cycles.
+- **Repository-Anchored Absolute DB Paths** — Added `resolve_db_path()` to ensure database path resolution is always anchored to the repository root, preventing accidental split-brain `.duckdb` creation across differing execution working directories.
+- **Standard Secrets Hierarchy for OpenRouteService** — Routing key resolution in Live Map now prioritizes standard environment variable `ORS_API_KEY`, followed by `config.py` and `st.secrets`.
+
+### Fixed
+- **Midnight Boundary Delay Calculations in ETA Engine** — Trips starting before midnight and reporting after midnight (e.g. 00:30 on the following day) now anchor the service day midnight to the trip's `startDate`. This fixes a bug where delay calculations corrupted from positive delays into ~-1400 min delays.
+- **Cross-Platform Static GTFS Caching** — Static GTFS zip caching now uses Python's standard `tempfile.gettempdir()` instead of POSIX-only hardcoded `/tmp/`.
+- **HTML Sanitization in Network Health** — Region names and status explanations in Network Health scorecards are escaped with `html.escape()` before being rendered in raw HTML markdown blocks.
+
+## [2.16.1] - 2026-08-07
+
+### Fixed
+- **One stop 1.5 km away no longer holds you in a region that cannot help you.** 2.16.0 switched
+  region only when the selected one had *zero* stops within 1500 m. Standing in Bukit Jalil with
+  **Rapid Bus MRT Feeder** selected, that region has nothing within 800 m and exactly one stop at
+  1493 m — a walk of about 20 minutes, at the outer edge of the search — while Rapid Bus KL has
+  fifteen within 800 m and one where you are standing. The single far stop counted as an answer and
+  blocked the switch. The test is now the primary 800 m radius, which is the distance the app calls
+  "near you" everywhere else; the widening to 1500 m stays what it always was, a fallback the stops
+  panel names when it uses it
+- **A switch cannot trade one far stop for another.** The scan for a better region now uses the same
+  800 m bar, so the region it moves you to has stops as near as the ones it promises. Before, a
+  candidate region could qualify on a stop 1500 m away and the switch would still be announced as an
+  improvement
+- **The announcement quotes the distance actually used** — *"…has no stops within 800 m of you"*. It
+  said 1500 m while the decision was made at a different radius
+
 ## [2.16.0] - 2026-08-07
 
 Asked for: *"when user click locate me button, can you make the region also updated based on the

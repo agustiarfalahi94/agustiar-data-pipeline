@@ -5,7 +5,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.41%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml)
+[![CI](https://github.com/agustiarfalahi94/malaysia-transit-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/malaysia-transit-tracker/actions/workflows/ci.yml)
 
 **🚀 [Live Demo](https://malaysia-realtime-transit-tracker.streamlit.app/)**
 
@@ -24,11 +24,14 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
   to a region that can actually answer you. The app opens on whichever region is listed first, so
   locating yourself in Bukit Jalil with **KTM Berhad** selected used to show nothing at all — KTM has
   no stops there, while Rapid Bus KL has fifteen within 800 m. If the selected region has no stops
-  within 1500 m of you, the app switches to the nearest region that does and says so: *"Switched from
-  KTM Berhad to Rapid Bus KL — KTM Berhad has no stops within 1500 m of you, and Rapid Bus KL has 27,
-  the nearest right where you are standing."* A region that **does** have stops nearby is left alone —
-  you may have chosen it on purpose — and the switch happens only as part of pressing the button, so a
-  region you pick afterwards is never overridden
+  within 800 m of you, the app switches to the nearest region that does and says so: *"Switched from
+  KTM Berhad to Rapid Bus KL — KTM Berhad has no stops within 800 m of you, and Rapid Bus KL has 27,
+  the nearest right where you are standing."* 800 m is the same distance the app calls "near you"
+  everywhere else, so a region holding one stop 1.5 km away — a 20-minute walk — does not count as
+  an answer and does not stop the switch. The region it switches to must clear the same 800 m bar,
+  so a switch can never trade one far stop for another. A region that **does** have stops within
+  800 m is left alone — you may have chosen it on purpose — and the switch happens only as part of
+  pressing the button, so a region you pick afterwards is never overridden
 - **🚌 Route Viewer** — tap a bus on the map and this opens on that bus, showing its planned route
   (from GTFS Static) or its historical breadcrumb trail as a fallback. It holds exactly the bus you
   tapped and offers no others, so it cannot end up naming one bus above another bus's route. If
@@ -117,6 +120,8 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Header metrics** — **Active Buses** (everything drawn: fresh + stale), **Stale** (the dimmed
   share of it), **Regions Monitored** and **Busiest Region**. All four are network-wide; the caption
   under the map reports the same counts for the selected region
+- **🚨 GTFS-RT Service Disruption Alerts** — automatic ingestion of GTFS-Realtime service disruption alerts (`entity.alert`), displaying real-time cause, effect, and disruption warnings across Network Health and Live Map
+- **🚏 Multi-Agency Stop Hub Clustering** — automatically groups physical stops across different operators within 50 meters into unified transit hub clusters (`get_clustered_stops_near()`), offering integrated multi-agency transfer views
 - **Dark/Light map themes** — the toggle lives in the sidebar under **🎨 Appearance** and is
   offered only on this page, because it is the only page with a map to theme. The choice is
   remembered while you are on other pages
@@ -213,7 +218,7 @@ updates it by hand.
 ## 📁 Project Structure
 
 ```
-agustiar-data-pipeline/
+malaysia-transit-tracker/
 │
 ├── src/
 │   ├── app.py                    # Entry point — Streamlit app shell, navigation, session state
@@ -266,8 +271,8 @@ agustiar-data-pipeline/
 
 ```bash
 # 1. Clone
-git clone https://github.com/agustiarfalahi94/agustiar-data-pipeline.git
-cd agustiar-data-pipeline
+git clone https://github.com/agustiarfalahi94/malaysia-transit-tracker.git
+cd malaysia-transit-tracker
 
 # 2. Create virtual environment
 python -m venv .venv
@@ -291,11 +296,54 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 
 ## ⚙️ Configuration
 
-`config.py` (local dev) or Streamlit Secrets (cloud deployment):
+Environment variables, `config.py` (local dev), or Streamlit Secrets (cloud deployment):
+
+## 🛡️ Architecture & Security
+
+The application separates ingestion, storage, transformation and presentation:
+
+```text
+GTFS-Realtime feeds → ingestion → DuckDB → dbt marts → Streamlit dashboard
+                                      ↘ grounded AI summaries (optional)
+```
+
+Live vehicle positions, fetch-quality events, service alerts and static
+timetable data are stored in DuckDB. dbt builds the analytics layer used by
+the dashboard. The optional Gemini feature will run on the Streamlit server,
+retrieve relevant structured rows from DuckDB, and send only that bounded
+context to Gemini for summarisation.
+
+### Secrets and environment variables
+
+The app currently uses `ORS_API_KEY` for optional walking-route calculations.
+It may be provided through the environment, local `config.py`, or Streamlit
+Secrets. The planned AI feature will use `GEMINI_API_KEY` through the same
+server-side secret mechanism. Neither key belongs in source control, browser
+code, screenshots, or committed configuration files.
+
+The live dashboard remains useful without either key: walking times fall back
+to labelled estimates, and the AI panel will show a clear unavailable message
+instead of failing the rest of the dashboard.
+
+### API boundaries and rate limiting
+
+External transit and routing requests use explicit timeouts, bounded fetch
+windows and graceful failure handling. The Gemini panel will be opt-in rather
+than called on every 20-second dashboard refresh. It will enforce a bounded
+question length, response size and per-session request limit so a public
+Streamlit deployment cannot accidentally spend unlimited API quota.
+
+### CI/CD
+
+GitHub Actions installs project dependencies, runs dbt seed/build/test, checks
+source freshness as an informational step, and runs the Python test suite.
+Deployment secrets are supplied by the hosting environment rather than
+committed to the repository. The CI workflow is available at
+`.github/workflows/ci.yml`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_NAME` | `agustiar_analytics.duckdb` | DuckDB filename |
+| `DATABASE_NAME` | `agustiar_analytics.duckdb` | DuckDB filename (anchored to repository root) |
 | `DATABASE_TABLE` | `live_buses` | Table name |
 | `TIMEZONE` | `Asia/Kuala_Lumpur` | Display timezone |
 | `UTC_OFFSET_HOURS` | `8` | UTC offset |
@@ -306,7 +354,7 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 | `LIVE_FRESH_SECONDS` | `60` | Vehicles at or under this age are drawn solid |
 | `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
 | `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
-| `ORS_API_KEY` | *(unset)* | OpenRouteService key for real walking distances. Optional — see *Streamlit Cloud Secrets* below and *Troubleshooting* for what happens without one |
+| `ORS_API_KEY` | *(unset)* | OpenRouteService key for real walking distances. Can be set via environment variable (`ORS_API_KEY`), `config.py`, or Streamlit Secrets. Optional — see *Streamlit Cloud Secrets* below and *Troubleshooting* for what happens without one |
 
 The three `LIVE_*` knobs are optional and are read one at a time: a `config.py` copied from an
 earlier release simply falls back to the default for each one it lacks, and keeps every setting it

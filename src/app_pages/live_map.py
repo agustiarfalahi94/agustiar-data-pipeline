@@ -1,3 +1,4 @@
+import os
 import time
 import streamlit as st
 import pydeck as pdk
@@ -10,6 +11,7 @@ from utils import gtfs_static
 from utils import route_view
 from utils import walking
 from utils import background_fetch
+from app_pages.live_map_components import deck_layers, stop_panel, route_panel
 
 try:
     from config import DEFAULT_ZOOM, ARROW_SIZE
@@ -34,18 +36,16 @@ UTC_OFFSET_HOURS = getattr(_config, 'UTC_OFFSET_HOURS', 8)
 
 def _ors_api_key():
     """
-    The OpenRouteService key: config.py for local dev, Streamlit Secrets for
-    cloud. None when unset, in which case walk times degrade to estimates.
+    The OpenRouteService key: environment variable, config.py for local dev,
+    or Streamlit Secrets for cloud. None when unset, in which case walk times
+    degrade to estimates.
 
-    Both are needed. config.py is gitignored so it never reaches Streamlit
-    Cloud, and no other code in this repository reads st.secrets — a past
-    refactor replaced those reads with hardcoded defaults, so a key placed in
-    Secrets was silently ignored until this function existed.
-
-    The except is broad because Streamlit raises varied types when no secrets
-    file exists at all, which is the normal case for a fresh clone. A missing
-    optional key must never break a render.
+    Hierarchical resolution: os.environ -> config.py -> st.secrets.
+    A missing optional key must never break a render.
     """
+    env_key = os.environ.get('ORS_API_KEY')
+    if env_key:
+        return env_key
     key = getattr(_config, 'ORS_API_KEY', None)
     if key:
         return key
@@ -466,7 +466,7 @@ def show():
             st.info(
                 f"Switched from **{_switched['frm']}** to **{_switched['to']}** — "
                 f"{_switched['frm']} has no stops within "
-                f"{NEARBY_STOP_WIDE_RADIUS_M} m of you, and {_switched['to']} has "
+                f"{NEARBY_STOP_RADIUS_M} m of you, and {_switched['to']} has "
                 f"{_switched['count']}, {_near}. "
                 f"Change it back above if that is not what you wanted."
             )
@@ -931,11 +931,22 @@ def show():
     # purpose. And `find_regions_with_stops_near` reads every other agency's
     # timetable, which on a cold deploy means downloading them; that belongs at
     # a dead end, not on every locate.
-    if st.session_state.pop('region_follow_location', False) and _loc and not _nearby_stops:
+    # Judged at the primary radius, not the widened one. Standing in Bukit
+    # Jalil with Rapid Bus MRT Feeder selected, that region has nothing within
+    # 800 m and exactly one stop at 1493 m — a 23-minute walk at the very edge
+    # of the fallback search — while Rapid Bus KL has fifteen within 800 m and
+    # one at the user's feet. Requiring *zero* stops let that single distant
+    # stop block the switch, which is the case reported after the first version
+    # of this shipped. 800 m is what the app itself calls "near you"; the
+    # 1500 m widening is a fallback it already admits to in the panel.
+    _primary_hit = bool(_nearby_stops) and _nearby_radius_used == NEARBY_STOP_RADIUS_M
+    if st.session_state.pop('region_follow_location', False) and _loc and not _primary_hit:
         with st.spinner("Finding the region with stops near you…"):
+            # Candidates must clear the same 800 m bar, or a switch could trade
+            # one distant stop for another and call it an improvement.
             _elsewhere = gtfs_static.find_regions_with_stops_near(
                 _loc['lat'], _loc['lon'],
-                radius_m=NEARBY_STOP_WIDE_RADIUS_M,
+                radius_m=NEARBY_STOP_RADIUS_M,
                 exclude_slug=agency_slug)
         if _elsewhere:
             _best = _elsewhere[0]

@@ -132,25 +132,28 @@ def test_get_sorted_regions_others_alphabetical():
 # ── _fetch_endpoint ───────────────────────────────────────────────────────────
 
 def test_fetch_endpoint_returns_tuple_on_network_error():
-    """_fetch_endpoint must return (list, int) even when the request fails."""
+    """_fetch_endpoint must return (vehicles, alerts, duration_ms, status) even when the request fails."""
     with patch('utils.ingestion.requests.get', side_effect=ConnectionError("timeout")):
         result = _fetch_endpoint("Test Region", "test-endpoint")
     assert isinstance(result, tuple), "should return a tuple"
-    assert isinstance(result[0], list), "first element should be a list"
-    assert isinstance(result[1], int), "second element should be duration_ms int"
+    assert isinstance(result[0], list), "first element (vehicles) should be a list"
+    assert isinstance(result[1], list), "second element (alerts) should be a list"
+    assert isinstance(result[2], int), "third element should be duration_ms int"
     assert result[0] == [], "vehicle list should be empty on error"
-    assert result[1] >= 0, "duration should be non-negative"
+    assert result[1] == [], "alert list should be empty on error"
+    assert result[2] >= 0, "duration should be non-negative"
 
 
 def test_fetch_endpoint_returns_tuple_on_non_200():
-    """_fetch_endpoint must return ([], duration_ms) for non-200 responses."""
+    """_fetch_endpoint must return ([], [], duration_ms, status) for non-200 responses."""
     mock_response = MagicMock()
     mock_response.status_code = 404
     with patch('utils.ingestion.requests.get', return_value=mock_response):
         result = _fetch_endpoint("Test Region", "test-endpoint")
     assert isinstance(result, tuple)
     assert result[0] == []
-    assert isinstance(result[1], int)
+    assert result[1] == []
+    assert isinstance(result[2], int)
 
 
 # ── _build_quality_stats ──────────────────────────────────────────────────────
@@ -583,7 +586,7 @@ def test_early_return_logs_no_feed_status(tmp_path):
 
     with patch('utils.ingestion.DATABASE_NAME', db_path), \
          patch('utils.ingestion.API_SOURCES', {'Rapid Bus Kuantan': ['dead-endpoint']}), \
-         patch('utils.ingestion._fetch_endpoint', return_value=([], 5, 'NO_FEED')), \
+         patch('utils.ingestion._fetch_endpoint', return_value=([], [], 5, 'NO_FEED')), \
          patch('utils.ingestion._write_quality_log', side_effect=captured.append):
         ingestion.fetch_and_store_transit_data()
 
@@ -5233,6 +5236,39 @@ def test_a_region_that_does_have_stops_is_left_alone(monkeypatch):
     assert 'region_switched_note' not in st_stub.session_state
 
 
+def test_one_far_stop_does_not_block_the_switch(monkeypatch):
+    # Reported after the first version shipped. In Bukit Jalil, Rapid Bus MRT
+    # Feeder has nothing within 800 m and one stop at 1493 m -- a 23-minute
+    # walk at the very edge of the fallback search -- while Rapid Bus KL has
+    # fifteen within 800 m and one at the user's feet. Requiring *zero* stops
+    # let that single distant stop hold the user in the wrong region.
+    from app_pages import live_map as _lm
+    empty = SimpleNamespace(selection=SimpleNamespace(objects={}))
+    live_map, st_stub, _now = _live_map_with_selection(monkeypatch, empty)
+    st_stub.session_state['user_location'] = {'lat': 3.05, 'lon': 101.67, 'accuracy': 10}
+    st_stub.session_state['region_follow_location'] = True
+    far = [{'stop_id': 'F1', 'stop_name': 'A LONG WALK AWAY',
+            'stop_lat': 3.07, 'stop_lon': 101.69, 'distance_m': 1493.0}]
+
+    # Nothing at 800 m; the widened 1500 m search finds the one far stop.
+    def staged(slug, lat, lon, radius_m=800, **k):
+        return list(far) if radius_m == live_map.NEARBY_STOP_WIDE_RADIUS_M else []
+    monkeypatch.setattr(live_map.gtfs_static, 'get_stops_near', staged)
+    asked = {}
+    def finder(lat, lon, radius_m=1500, **k):
+        asked['radius_m'] = radius_m
+        return list(_NEARBY_REGION)
+    monkeypatch.setattr(live_map.gtfs_static, 'find_regions_with_stops_near', finder)
+    monkeypatch.setattr(live_map.gtfs_static, 'get_trip_stops', lambda *a, **k: [])
+
+    live_map.show()
+
+    assert st_stub.session_state.get('pending_region') == 'Rapid Bus KL', \
+        "one stop 1.5 km away held the user in a region that cannot help them"
+    assert asked.get('radius_m') == live_map.NEARBY_STOP_RADIUS_M, \
+        "candidates must clear the same 800 m bar, or the switch trades one far stop for another"
+
+
 def test_the_region_does_not_follow_a_location_the_user_already_had(monkeypatch):
     # Following the location is part of pressing Locate Me. Without the
     # one-shot flag, a region picked *after* locating would be overridden on
@@ -5254,3 +5290,154 @@ def test_the_permission_is_spent_even_when_no_other_region_helps(monkeypatch):
 
     assert 'region_follow_location' not in st_stub.session_state
     assert 'pending_region' not in st_stub.session_state
+
+
+def test_resolve_db_path_relative_and_absolute():
+    from utils.db import resolve_db_path, _REPO_ROOT
+    assert resolve_db_path(':memory:') == ':memory:'
+    assert resolve_db_path('/custom/path/db.duckdb') == '/custom/path/db.duckdb'
+    expected = os.path.join(_REPO_ROOT, 'agustiar_analytics.duckdb')
+    assert resolve_db_path('agustiar_analytics.duckdb') == expected
+    assert resolve_db_path(None) == expected
+
+
+def test_get_connection_read_only_and_retry(tmp_path, monkeypatch):
+    from utils import db as _db
+    import duckdb as _duckdb
+    test_db = str(tmp_path / 'concurrency_test.duckdb')
+
+    # Create DB and populate table
+    con = _duckdb.connect(test_db)
+    con.execute("CREATE TABLE test_tbl (id INT)")
+    con.execute("INSERT INTO test_tbl VALUES (1), (2)")
+    con.close()
+
+    monkeypatch.setattr(_db, 'DATABASE_NAME', test_db)
+
+    # Verify read_only connection can query
+    ro_con = _db.get_connection(read_only=True)
+    res = ro_con.execute("SELECT count(*) FROM test_tbl").fetchone()[0]
+    ro_con.close()
+    assert res == 2
+
+    # Verify retry logic on simulated transient exception
+    attempts = {'count': 0}
+    real_connect = _duckdb.connect
+
+    def flaky_connect(path, **kwargs):
+        attempts['count'] += 1
+        if attempts['count'] < 3:
+            raise _duckdb.IOException("Simulated lock collision")
+        return real_connect(path, **kwargs)
+
+    monkeypatch.setattr(_duckdb, 'connect', flaky_connect)
+    retry_con = _db.get_connection(read_only=True, max_retries=4, backoff_base=0.01)
+    assert attempts['count'] == 3
+    retry_con.close()
+
+
+def test_fetch_endpoint_extracts_start_date_and_start_time():
+    from google.transit import gtfs_realtime_pb2
+    feed = gtfs_realtime_pb2.FeedMessage()
+    header = feed.header
+    header.gtfs_realtime_version = "2.0"
+    header.timestamp = 1785427200
+
+    entity = feed.entity.add()
+    entity.id = "1"
+    v = entity.vehicle
+    v.position.latitude = 3.14
+    v.position.longitude = 101.69
+    v.vehicle.id = "BUS101"
+    v.timestamp = 1785427200
+    v.trip.trip_id = "TRIP_ABC"
+    v.trip.route_id = "ROUTE_XYZ"
+    v.trip.start_date = "20260827"
+    v.trip.start_time = "06:30:00"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = feed.SerializeToString()
+
+    with patch('utils.ingestion._SESSION.get', return_value=mock_resp):
+        vehicles, alerts, duration, status = _fetch_endpoint("Rapid Bus KL", "test_ep")
+
+    assert status == 'OK'
+    assert len(vehicles) == 1
+    assert vehicles[0]['start_date'] == "20260827"
+    assert vehicles[0]['start_time'] == "06:30:00"
+
+
+def test_fetch_endpoint_extracts_gtfs_rt_alerts():
+    from google.transit import gtfs_realtime_pb2
+    feed = gtfs_realtime_pb2.FeedMessage()
+    header = feed.header
+    header.gtfs_realtime_version = "2.0"
+
+    entity = feed.entity.add()
+    entity.id = "ALERT_1"
+    alert = entity.alert
+    alert.cause = gtfs_realtime_pb2.Alert.ACCIDENT
+    alert.effect = gtfs_realtime_pb2.Alert.MODIFIED_SERVICE
+    ht = alert.header_text.translation.add()
+    ht.text = "Accident on Route R1"
+    dt = alert.description_text.translation.add()
+    dt.text = "Buses delayed by 15 mins due to accident."
+    inf = alert.informed_entity.add()
+    inf.route_id = "R1"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = feed.SerializeToString()
+
+    with patch('utils.ingestion._SESSION.get', return_value=mock_resp):
+        vehicles, alerts, duration, status = _fetch_endpoint("Rapid Bus KL", "test_ep")
+
+    assert len(alerts) == 1
+    assert alerts[0]['alert_id'] == "ALERT_1"
+    assert alerts[0]['header_text'] == "Accident on Route R1"
+    assert alerts[0]['route_id'] == "R1"
+
+
+def test_write_and_query_service_alerts(tmp_path, monkeypatch):
+    from utils import db as _db
+    from utils import ingestion as _ingest
+    test_db = str(tmp_path / 'alerts_test.duckdb')
+    monkeypatch.setattr(_db, 'DATABASE_NAME', test_db)
+    monkeypatch.setattr(_ingest, 'DATABASE_NAME', test_db)
+
+    alerts = [{
+        'alert_id': 'ALT_101',
+        'region': 'Rapid Bus KL',
+        'cause': 'TECHNICAL_PROBLEM',
+        'effect': 'DELAYS',
+        'header_text': 'Signal Failure',
+        'description_text': 'Expect delays on line.',
+        'active_period_start': 1000,
+        'active_period_end': 2000,
+        'route_id': 'R10',
+        'stop_id': 'S10',
+        'fetched_at': int(time.time()),
+    }]
+
+    _ingest._write_service_alerts(alerts)
+    res = _db.get_active_service_alerts(region='Rapid Bus KL')
+    assert len(res) == 1
+    assert res.iloc[0]['alert_id'] == 'ALT_101'
+    assert res.iloc[0]['header_text'] == 'Signal Failure'
+
+
+def test_gtfs_static_cached_path_uses_tempfile_dir():
+    from utils import gtfs_static
+    import tempfile
+    path = gtfs_static.get_cached_path("test-agency")
+    assert path.startswith(tempfile.gettempdir())
+    assert path.endswith("gtfs_static_test_agency.zip")
+
+
+def test_live_map_ors_api_key_checks_os_environ(monkeypatch):
+    from app_pages import live_map
+    monkeypatch.setenv('ORS_API_KEY', 'test_env_key_123')
+    assert live_map._ors_api_key() == 'test_env_key_123'
+
+

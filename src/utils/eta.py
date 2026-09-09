@@ -43,25 +43,31 @@ def nearest_stop_index(stops, lat, lon, start_index=0):
     return best_index, best_distance
 
 
-def service_day_epoch(vehicle_timestamp, utc_offset_hours):
+def service_day_epoch(vehicle_timestamp, utc_offset_hours, start_date=None):
     """
-    Epoch seconds of local midnight for the service day containing *vehicle_timestamp*.
+    Epoch seconds of local midnight for the service day containing *vehicle_timestamp*
+    (or derived from *start_date* 'YYYYMMDD' if provided).
 
-    Derived from the vehicle's own timestamp rather than read from the feed —
-    ingestion does not currently capture the trip descriptor's startDate. A trip
-    that began before midnight and runs past it therefore resolves against the
-    following service day.
+    When *start_date* (e.g. '20260827') is supplied from the GTFS Realtime trip descriptor,
+    the service day midnight is anchored directly to that service date. This cleanly resolves
+    trips crossing midnight (e.g. starting at 23:50 and running into 00:30 the next day)
+    without corrupting `estimate_delay_seconds`.
 
-    What that corrupts is `estimate_delay_seconds`, not the arrival. The epoch
-    cancels between the two functions -- `compute_eta_seconds` only ever sees
-    the *difference* between two stop times -- so the ETA is unaffected. The
-    delay is not: a bus at 00:30 on a trip that started at 23:50 has its
-    timestamp compared against the *following* midnight, so a true +40 min
-    reads as roughly -1,400 min. The UI's "late" threshold then suppresses it
-    and a genuinely late bus is shown as on time. Accepted for now and recorded
-    as a follow-up; ingesting startDate removes it entirely.
+    If *start_date* is omitted or unparseable, falls back to the vehicle timestamp's local day.
     """
     offset = int(utc_offset_hours) * 3600
+    if start_date:
+        s_date = str(start_date).strip()
+        if len(s_date) == 8 and s_date.isdigit():
+            try:
+                from datetime import datetime, timezone
+                year, month, day = int(s_date[:4]), int(s_date[4:6]), int(s_date[6:8])
+                dt = datetime(year, month, day, 0, 0, 0, tzinfo=timezone.utc)
+                # Local midnight converted to UTC timestamp epoch
+                return int(dt.timestamp()) - offset
+            except (ValueError, OverflowError):
+                pass
+
     local = int(vehicle_timestamp) + offset
     return (local // 86400) * 86400 - offset
 
@@ -199,7 +205,8 @@ def arrivals_for_stops(vehicles, nearby_stops, trip_stops_lookup, now_epoch,
             skipped['bad_position'] += 1
             continue
 
-        day = service_day_epoch(timestamp, utc_offset_hours)
+        start_date = v.get('start_date')
+        day = service_day_epoch(timestamp, utc_offset_hours, start_date=start_date)
         bus_index, _ = nearest_stop_index(stops, lat, lon)
         if bus_index < 0:
             continue
