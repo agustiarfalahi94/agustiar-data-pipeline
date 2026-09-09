@@ -304,21 +304,23 @@ The application separates ingestion, storage, transformation and presentation:
 
 ```text
 GTFS-Realtime feeds → ingestion → DuckDB → dbt marts → Streamlit dashboard
-                                      ↘ grounded AI summaries (optional)
+                                      ↘ Ask the Network → Gemini summary
 ```
 
 Live vehicle positions, fetch-quality events, service alerts and static
 timetable data are stored in DuckDB. dbt builds the analytics layer used by
-the dashboard. The optional Gemini feature will run on the Streamlit server,
-retrieve relevant structured rows from DuckDB, and send only that bounded
-context to Gemini for summarisation.
+the dashboard. **Ask the Network** runs on the Streamlit server, retrieves
+relevant structured rows from DuckDB, and sends only that bounded context to
+Gemini for summarisation. It is a lightweight RAG flow: deterministic
+retrieval first, language generation second.
 
 ### Secrets and environment variables
 
-The app currently uses `ORS_API_KEY` for optional walking-route calculations.
+The app uses `ORS_API_KEY` for optional walking-route calculations and
+`GEMINI_API_KEY` for Ask the Network.
 It may be provided through the environment, local `config.py`, or Streamlit
-Secrets. The planned AI feature will use `GEMINI_API_KEY` through the same
-server-side secret mechanism. Neither key belongs in source control, browser
+Secrets. `GEMINI_API_KEY` is read through the same server-side secret mechanism.
+Neither key belongs in source control, browser
 code, screenshots, or committed configuration files.
 
 The live dashboard remains useful without either key: walking times fall back
@@ -328,7 +330,7 @@ instead of failing the rest of the dashboard.
 ### API boundaries and rate limiting
 
 External transit and routing requests use explicit timeouts, bounded fetch
-windows and graceful failure handling. The Gemini panel will be opt-in rather
+windows and graceful failure handling. The Gemini panel is opt-in rather
 than called on every 20-second dashboard refresh. It will enforce a bounded
 question length, response size and per-session request limit so a public
 Streamlit deployment cannot accidentally spend unlimited API quota.
@@ -355,6 +357,7 @@ committed to the repository. The CI workflow is available at
 | `LIVE_STALE_SECONDS` | `300` | Vehicles up to this age are drawn dimmed |
 | `LIVE_HIDDEN_SECONDS` | `900` | Vehicles up to this age are counted as hidden; older are not fetched |
 | `ORS_API_KEY` | *(unset)* | OpenRouteService key for real walking distances. Can be set via environment variable (`ORS_API_KEY`), `config.py`, or Streamlit Secrets. Optional — see *Streamlit Cloud Secrets* below and *Troubleshooting* for what happens without one |
+| `GEMINI_API_KEY` | *(unset)* | Server-side Gemini key for the Ask the Network panel. Configure through an environment variable or Streamlit Secrets; never commit it |
 
 The three `LIVE_*` knobs are optional and are read one at a time: a `config.py` copied from an
 earlier release simply falls back to the default for each one it lacks, and keeps every setting it
@@ -366,6 +369,8 @@ does define. Copy them in from `config.example.py` only if you want to tune the 
 [database]
 name = "agustiar_analytics.duckdb"
 table = "live_buses"
+
+GEMINI_API_KEY = "your-gemini-api-key"
 
 [timezone]
 name = "Asia/Kuala_Lumpur"
