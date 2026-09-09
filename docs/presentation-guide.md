@@ -111,6 +111,26 @@ Score bands: ≥ 80 reliable · 50–79 degraded · < 50 unreliable.
 
 ---
 
+### 🤖 Ask the Network
+
+**What it does:**
+Lets a user ask a natural-language question from any dashboard page. The app
+retrieves a bounded snapshot of current vehicle counts, selected page data,
+network-health metrics and active service alerts from DuckDB, then asks Gemini
+to summarize only those facts. This is a lightweight RAG flow, not a general
+chatbot or a vector-database claim.
+
+**Expected questions:**
+
+| Question | Answer |
+|---|---|
+| Why is this considered RAG? | Retrieval happens first and is deterministic: the app selects structured facts from DuckDB and computes exact current unique-vehicle counts by region. Gemini receives that bounded context and generates the explanation second. |
+| Can Gemini invent transit facts? | The prompt explicitly restricts it to retrieved data, and the UI labels the snapshot time. If no live data has been fetched, the request stops before Gemini instead of inviting a guess. |
+| What happens during auto-refresh? | The question is saved before the Streamlit rerun, pending AI work completes before the next 20-second timer is armed, and the saved answer is rendered from session state on later reruns. A timer cannot duplicate or erase the request. |
+| How do you control cost and security? | The API key stays server-side in an environment variable or Streamlit Secrets. Calls require an Enter submission and are limited to 500 characters, five questions per session, bounded context and bounded output. |
+
+---
+
 ## Architecture in 30 Seconds
 
 ```
@@ -133,10 +153,10 @@ GTFS Realtime API (14 regions × 1–2 endpoints)
 
 DuckDB on disk
        │
-  ┌────┼──────────────┬────────────────┐
-  ▼    ▼              ▼                ▼
-Live  Data Table   Analytics     Network Health
-Map   (7-day)      (7-day)       (fetch_quality_log)
+  ┌────┼──────────────┬────────────────┬─────────────────────────┐
+  ▼    ▼              ▼                ▼                         ▼
+Live  Data Table   Analytics     Network Health          Ask the Network
+Map   (7-day)      (7-day)       (fetch_quality_log)     bounded context → Gemini
 ```
 
 **Why DuckDB?** Zero-cost, no server, columnar queries, runs entirely on the Streamlit Cloud instance. Perfect for analytical workloads on a single-user or low-concurrency app.
@@ -154,6 +174,7 @@ Map   (7-day)      (7-day)       (fetch_quality_log)
 | Network Health scores are all 0 or missing | Not enough fetch history yet. Scores need at least 10 fetch cycles (~3 minutes of auto-refresh) to be meaningful. |
 | Data Table shows much less data than expected | The 7-day rolling window prunes older rows on each fetch cycle. If the app was offline, the history is shorter. |
 | Network Health page is slow to load initially | On first load it queries 14 regions for sparkline data. After the first render, `@st.cache_data(ttl=60)` caches the results for 60 seconds. |
+| Ask the Network says no data has been fetched | Click **Refresh Data**, or enable auto-refresh and wait for the first live snapshot. The AI request is intentionally blocked until it has current data to ground the answer. |
 
 ---
 
@@ -168,4 +189,5 @@ Map   (7-day)      (7-day)       (fetch_quality_log)
 | Data | GTFS Realtime + Static (api.data.gov.my) | Official Malaysia open data portal |
 | Geolocation | streamlit-js-eval | Two-way JS bridge for browser GPS coords |
 | Parallelism | ThreadPoolExecutor | Cuts fetch time from ~15s to ~2–3s |
-| Testing | pytest | 22 unit tests covering data processing and DB functions |
+| AI summary | Gemini `generateContent` API | Converts bounded retrieved transit facts into concise, page-aware explanations |
+| Testing | pytest | Automated coverage for ingestion, analytics, UI behavior, AI grounding and refresh persistence |

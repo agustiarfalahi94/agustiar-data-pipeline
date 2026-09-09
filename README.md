@@ -158,8 +158,12 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 
 ### 🤖 Ask the Network
 - **Global, page-aware Gemini assistant** — available from the sidebar on Live Map, Data Table, Analytics and Network Health
-- **Grounded retrieval** — answers use bounded DuckDB context from the current page, including vehicles, alerts, reliability, analytics and selected table rows
+- **Enter-to-send chat** — type a question and press Enter; no separate Ask button is required
+- **Grounded retrieval** — answers use bounded DuckDB context from the current page, including current unique vehicle counts by region, alerts, reliability, analytics and selected table rows
+- **Refresh-safe conversation** — the submitted question and completed answer stay in session state across the dashboard's 20-second auto-refresh reruns
+- **Data-aware guard** — Gemini is not called until at least one live vehicle row has been fetched; the panel explains how to start fetching when the database is empty
 - **Honest answers** — the prompt forbids invented routes, causes and times, and the UI labels the vehicle snapshot time
+- **Complete, readable output** — the service ignores Gemini thinking parts, rejects token-truncated candidates, and requests concise Markdown with complete sentences
 - **Safe by default** — server-side `GEMINI_API_KEY`, explicit user action, 500-character question limit and five questions per session
 
 ### ⚙️ Settings & Controls
@@ -317,9 +321,11 @@ Live vehicle positions, fetch-quality events, service alerts and static
 timetable data are stored in DuckDB. dbt builds the analytics layer used by
 the dashboard. **Ask the Network** runs in the shared sidebar on every page,
 retrieves
-relevant structured rows from DuckDB, and sends only that bounded context to
-Gemini for summarisation. It is a lightweight RAG flow: deterministic
-retrieval first, language generation second.
+relevant structured rows from DuckDB, computes exact current unique-vehicle
+counts by region, and sends only that bounded context to Gemini for
+summarisation. It is a lightweight RAG flow: deterministic retrieval first,
+language generation second. Questions and completed answers are held in the
+user's Streamlit session so ordinary and timed reruns render the same result.
 
 ### Secrets and environment variables
 
@@ -338,9 +344,14 @@ instead of failing the rest of the dashboard.
 
 External transit and routing requests use explicit timeouts, bounded fetch
 windows and graceful failure handling. The Gemini panel is opt-in rather
-than called on every 20-second dashboard refresh. It will enforce a bounded
-question length, response size and per-session request limit so a public
-Streamlit deployment cannot accidentally spend unlimited API quota.
+than called on every 20-second dashboard refresh. A submitted question is
+saved before the rerun, processed before the next refresh timer is armed, and
+then removed from the pending queue, so timed reruns neither duplicate nor
+erase Gemini requests. The service enforces a bounded question length,
+response size and per-session request limit so a public Streamlit deployment
+cannot accidentally spend unlimited API quota. Gemini uses low thinking and a
+1,024-token output allowance; only completed, non-thinking response parts are
+shown to users.
 
 ### CI/CD
 
@@ -636,6 +647,8 @@ dbt-duckdb>=1.7.0,<2.0.0       # Analytics transformation layer (transform/)
 | Problem | Fix |
 |---|---|
 | No data showing | Click "Refresh Data", check internet connection |
+| Ask the Network says "No data fetched yet" | Click **Refresh Data**, or enable **Auto (20s)** and wait for the first live-vehicle fetch to complete. Gemini is deliberately not called with an empty snapshot |
+| Ask the Network cannot produce a complete answer | Confirm `GEMINI_API_KEY` is set in Streamlit Secrets, then retry. The app rejects incomplete/token-truncated Gemini candidates instead of displaying a broken fragment |
 | Map not loading | Toggle map theme (light↔dark), check browser console |
 | Locate Me does nothing | Allow location permission in browser when prompted |
 | Route Viewer shows "No route data" | That vehicle's region may not have `shapes.txt` in its GTFS Static feed — historical trail is shown as fallback |
