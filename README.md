@@ -5,7 +5,7 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.41%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![CI](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml)
+[![CI](https://github.com/agustiarfalahi94/malaysia-transit-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/malaysia-transit-tracker/actions/workflows/ci.yml)
 
 **🚀 [Live Demo](https://malaysia-realtime-transit-tracker.streamlit.app/)**
 
@@ -218,7 +218,7 @@ updates it by hand.
 ## 📁 Project Structure
 
 ```
-agustiar-data-pipeline/
+malaysia-transit-tracker/
 │
 ├── src/
 │   ├── app.py                    # Entry point — Streamlit app shell, navigation, session state
@@ -271,8 +271,8 @@ agustiar-data-pipeline/
 
 ```bash
 # 1. Clone
-git clone https://github.com/agustiarfalahi94/agustiar-data-pipeline.git
-cd agustiar-data-pipeline
+git clone https://github.com/agustiarfalahi94/malaysia-transit-tracker.git
+cd malaysia-transit-tracker
 
 # 2. Create virtual environment
 python -m venv .venv
@@ -297,6 +297,49 @@ Open `http://localhost:8501`, then click **Refresh Data** to fetch live transit 
 ## ⚙️ Configuration
 
 Environment variables, `config.py` (local dev), or Streamlit Secrets (cloud deployment):
+
+## 🛡️ Architecture & Security
+
+The application separates ingestion, storage, transformation and presentation:
+
+```text
+GTFS-Realtime feeds → ingestion → DuckDB → dbt marts → Streamlit dashboard
+                                      ↘ grounded AI summaries (optional)
+```
+
+Live vehicle positions, fetch-quality events, service alerts and static
+timetable data are stored in DuckDB. dbt builds the analytics layer used by
+the dashboard. The optional Gemini feature will run on the Streamlit server,
+retrieve relevant structured rows from DuckDB, and send only that bounded
+context to Gemini for summarisation.
+
+### Secrets and environment variables
+
+The app currently uses `ORS_API_KEY` for optional walking-route calculations.
+It may be provided through the environment, local `config.py`, or Streamlit
+Secrets. The planned AI feature will use `GEMINI_API_KEY` through the same
+server-side secret mechanism. Neither key belongs in source control, browser
+code, screenshots, or committed configuration files.
+
+The live dashboard remains useful without either key: walking times fall back
+to labelled estimates, and the AI panel will show a clear unavailable message
+instead of failing the rest of the dashboard.
+
+### API boundaries and rate limiting
+
+External transit and routing requests use explicit timeouts, bounded fetch
+windows and graceful failure handling. The Gemini panel will be opt-in rather
+than called on every 20-second dashboard refresh. It will enforce a bounded
+question length, response size and per-session request limit so a public
+Streamlit deployment cannot accidentally spend unlimited API quota.
+
+### CI/CD
+
+GitHub Actions installs project dependencies, runs dbt seed/build/test, checks
+source freshness as an informational step, and runs the Python test suite.
+Deployment secrets are supplied by the hosting environment rather than
+committed to the repository. The CI workflow is available at
+`.github/workflows/ci.yml`.
 
 | Variable | Default | Description |
 |---|---|---|

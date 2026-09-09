@@ -26,4 +26,4 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/agustiarfalahi94/"
-Repository = "https://github.com/agustiarfalahi94/agustiar-data-pipeline"
+Repository = "https://github.com/agustiarfalahi94/malaysia-transit-tracker"

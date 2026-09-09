@@ -909,7 +909,7 @@ committed (already gitignored).
 
 CI badge (add beneath the License badge near the top):
 ```markdown
-[![CI](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/agustiar-data-pipeline/actions/workflows/ci.yml)
+[![CI](https://github.com/agustiarfalahi94/malaysia-transit-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/agustiarfalahi94/malaysia-transit-tracker/actions/workflows/ci.yml)
 ```
 
 Section body:
