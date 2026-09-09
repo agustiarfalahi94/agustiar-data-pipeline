@@ -1,15 +1,62 @@
 """Grounded Gemini summaries for the Malaysia transit dashboard."""
 
 import os
-from typing import Any, Callable, Optional
+from typing import Any, Callable, MutableMapping, Optional
 
 import pandas as pd
 import requests
 
 MAX_QUESTION_CHARS = 500
 MAX_CONTEXT_CHARS = 12_000
-MAX_OUTPUT_TOKENS = 350
+MAX_OUTPUT_TOKENS = 1_024
 DEFAULT_MODEL = "gemini-3.6-flash"
+NO_DATA_MESSAGE = "No data fetched yet. Start fetching data first!"
+
+_CONVERSATION_DEFAULTS = {
+    "ai_last_question": None,
+    "ai_last_answer": None,
+    "ai_last_error": None,
+    "ai_last_sync_time": None,
+}
+
+
+def initialise_conversation(state: MutableMapping[str, Any]) -> None:
+    """Add missing AI conversation keys without replacing saved results."""
+    for key, value in _CONVERSATION_DEFAULTS.items():
+        state.setdefault(key, value)
+
+
+def queue_question(state: MutableMapping[str, Any], question: str) -> None:
+    """Persist submitted work before Streamlit begins the next rerun."""
+    initialise_conversation(state)
+    question = str(question or "").strip()
+    if not question:
+        return
+    state["ai_pending_question"] = question
+    state["ai_last_question"] = question
+    state["ai_last_answer"] = None
+    state["ai_last_error"] = None
+    state["ai_last_sync_time"] = None
+
+
+def complete_question(
+    state: MutableMapping[str, Any],
+    *,
+    answer: Optional[str] = None,
+    error: Optional[str] = None,
+    sync_time: Optional[str] = None,
+) -> None:
+    """Store the visible result so ordinary and timed reruns can render it."""
+    initialise_conversation(state)
+    state["ai_last_answer"] = answer
+    state["ai_last_error"] = error
+    state["ai_last_sync_time"] = sync_time
+    state.pop("ai_pending_question", None)
+
+
+def live_data_available(live: Optional[pd.DataFrame]) -> bool:
+    """Return whether a fetched live-vehicle snapshot can ground an answer."""
+    return live is not None and not live.empty
 
 
 def build_transit_context(
@@ -25,6 +72,20 @@ def build_transit_context(
     if alerts is not None and not alerts.empty:
         sections.append("ACTIVE SERVICE ALERTS:\n" + alerts.head(30).to_json(orient="records", date_format="iso"))
     if live is not None and not live.empty:
+        if {"region", "vehicle_id"}.issubset(live.columns):
+            counts = (
+                live.dropna(subset=["region", "vehicle_id"])
+                .groupby("region")["vehicle_id"]
+                .nunique()
+                .sort_values(ascending=False)
+                .rename("vehicle_count")
+                .reset_index()
+            )
+            if not counts.empty:
+                sections.append(
+                    "CURRENT LIVE VEHICLE COUNTS BY REGION:\n"
+                    + counts.to_json(orient="records")
+                )
         sections.append("LIVE VEHICLE SNAPSHOT:\n" + live.head(100).to_json(orient="records", date_format="iso"))
     for title, value in (extra_sections or {}).items():
         if value:
@@ -37,13 +98,20 @@ def build_transit_context(
 def answer_from_response(payload: dict[str, Any]) -> Optional[str]:
     """Extract Gemini text without trusting arbitrary response shapes."""
     try:
-        parts = payload["candidates"][0]["content"]["parts"]
-        text = parts[0]["text"]
+        candidate = payload["candidates"][0]
+        if candidate.get("finishReason") not in (None, "STOP"):
+            return None
+        parts = candidate["content"]["parts"]
     except (KeyError, IndexError, TypeError):
         return None
-    if not isinstance(text, str):
-        return None
-    text = text.strip()
+
+    text = "".join(
+        part["text"]
+        for part in parts
+        if isinstance(part, dict)
+        and not part.get("thought", False)
+        and isinstance(part.get("text"), str)
+    ).strip()
     return text[:2_000] or None
 
 
@@ -83,8 +151,10 @@ def ask_network(
         "You are a transit operations assistant for Malaysia. Answer the user "
         "using only the retrieved data below. Do not invent routes, times, "
         "causes, or locations. Distinguish live vehicle facts, timetable facts, "
-        "and estimates. If the data does not answer the question, say so. Keep "
-        "the answer under 120 words and mention that the snapshot may change.\n\n"
+        "and estimates. If the data does not answer the question, say so. Return "
+        "clean Markdown that begins with a complete sentence; use bullets only "
+        "when comparing multiple items. Keep the answer under 120 words and "
+        "mention that the snapshot may change.\n\n"
         f"RETRIEVED DATA:\n{context}\n\nUSER QUESTION:\n{question}"
     )
     endpoint = (
@@ -97,7 +167,11 @@ def ask_network(
             params={"key": key},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": MAX_OUTPUT_TOKENS},
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": MAX_OUTPUT_TOKENS,
+                    "thinkingConfig": {"thinkingLevel": "low"},
+                },
             },
             timeout=20,
         )

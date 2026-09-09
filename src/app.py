@@ -44,35 +44,61 @@ if 'selected_regions_table' not in st.session_state:
 
 def _show_global_ai_panel():
     """Ask grounded questions from whichever dashboard page is open."""
+    ai_transit.initialise_conversation(st.session_state)
     st.subheader("🤖 Ask the Network")
-    st.caption("Ask about the current page or the wider network.")
-    question = st.text_area(
-        "Question",
-        placeholder="What is happening in the selected view?",
+    st.caption("Ask about the current page or the wider network. Press Enter to send.")
+    question = st.chat_input(
+        "Ask about the current transit data",
         max_chars=ai_transit.MAX_QUESTION_CHARS,
-        key="global_ai_question",
+        key="global_ai_input",
+        on_submit=_queue_global_ai_question,
     )
-    if not st.button("Ask Gemini", type="secondary", key="global_ask_gemini"):
-        return
+
+    # Streamlit executes callbacks before the rerun. The direct return-value
+    # path also keeps this deterministic in tests and compatible runtimes.
+    if question and not st.session_state.get("ai_pending_question"):
+        ai_transit.queue_question(st.session_state, question)
+
+    pending = st.session_state.get("ai_pending_question")
+    if pending:
+        _answer_global_ai_question(pending)
+
+    _render_global_ai_result()
+
+
+def _queue_global_ai_question():
+    """Save the submission before any timed rerun can supersede it."""
+    ai_transit.queue_question(
+        st.session_state,
+        st.session_state.get("global_ai_input", ""),
+    )
+
+
+def _answer_global_ai_question(question):
+    """Ground and answer one persisted question, then save its result."""
     used = st.session_state.get("ai_transit_queries", 0)
     if used >= 5:
-        st.warning("This session has reached the five-question limit.")
+        ai_transit.complete_question(
+            st.session_state,
+            error="This session has reached the five-question limit.",
+        )
         return
-    if not question.strip():
-        st.info("Enter a question first.")
+
+    live, _, sync_time = db.get_live_data_optimized()
+    if not ai_transit.live_data_available(live):
+        ai_transit.complete_question(
+            st.session_state,
+            error=ai_transit.NO_DATA_MESSAGE,
+        )
         return
 
     health = db.get_network_health_summary()
     alerts = db.get_active_service_alerts()
-    live, _, sync_time = db.get_live_data_optimized()
     page = st.session_state.current_page
     extra = {"CURRENT VIEW": page}
 
     if page == "📈 Analytics":
-        extra["ANALYTICS SNAPSHOT"] = (
-            f"Regional vehicle counts: {db.get_region_vehicle_counts().to_json(orient='records')}\n"
-            f"Speed statistics: {db.get_moving_speed_stats()}"
-        )
+        extra["ANALYTICS SNAPSHOT"] = f"Speed statistics: {db.get_moving_speed_stats()}"
     elif page == "📊 Data Table":
         regions, table_sync = db.get_table_regions()
         selected = st.session_state.selected_regions_table or regions
@@ -90,16 +116,36 @@ def _show_global_ai_panel():
         )
     st.session_state.ai_transit_queries = used + 1
     if answer is None:
-        st.warning("The AI summary is unavailable. Check GEMINI_API_KEY and try again.")
+        ai_transit.complete_question(
+            st.session_state,
+            error=(
+                "Gemini could not produce a complete answer. "
+                "Check GEMINI_API_KEY or try again."
+            ),
+        )
     else:
-        st.markdown(answer)
-        if sync_time:
-            st.caption(f"Grounded in stored vehicle data from {sync_time}.")
+        ai_transit.complete_question(
+            st.session_state,
+            answer=answer,
+            sync_time=sync_time,
+        )
 
-# Auto refresh MUST be at the top before any other widgets
-if st.session_state.auto_refresh:
-    # Trigger a rerun every 20s when auto refresh is enabled
-    st_autorefresh(interval=20_000, key="auto_refresh_counter")
+
+def _render_global_ai_result():
+    """Render the saved conversation on every Streamlit rerun."""
+    question = st.session_state.get("ai_last_question")
+    if question:
+        st.caption("Your question")
+        st.write(question)
+    if st.session_state.get("ai_last_error"):
+        st.error(st.session_state.ai_last_error)
+    if st.session_state.get("ai_last_answer"):
+        st.markdown(st.session_state.ai_last_answer)
+        if st.session_state.get("ai_last_sync_time"):
+            st.caption(
+                "Grounded in stored vehicle data from "
+                f"{st.session_state.ai_last_sync_time}."
+            )
 
 # Frozen header CSS
 st.markdown("""
@@ -188,6 +234,13 @@ with st.sidebar:
 
     st.divider()
     _show_global_ai_panel()
+
+
+# Arm the timer only after pending AI work is complete. This prevents a timer
+# rerun from taking precedence over a newly submitted question and starts a
+# fresh 20-second window after the saved answer has rendered.
+if st.session_state.auto_refresh:
+    st_autorefresh(interval=20_000, key="auto_refresh_counter")
 
 
 # Route to pages

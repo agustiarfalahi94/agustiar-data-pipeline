@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.1] - 2026-09-10
+
 ### Changed
 - Renamed the GitHub repository to `malaysia-transit-tracker` and updated
   public README links and repository metadata.
@@ -15,10 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added **Ask the Network**, a global page-aware Gemini assistant available
   from the shared sidebar on Live Map, Data Table, Analytics and Network
   Health.
+- Replaced the AI text area and separate button with an Enter-to-send chat
+  input, and added exact current unique-vehicle counts by region to its
+  retrieved context.
 
 ### Fixed
 - Updated **Ask the Network** from the shut-down `gemini-2.0-flash` model to
   Google's supported `gemini-3.6-flash` replacement.
+- Persisted the submitted question and completed answer in Streamlit session
+  state so the 20-second auto-refresh cannot discard or interrupt the AI
+  conversation.
+- Added an empty-live-data guard that stops before Gemini and tells the user to
+  start fetching data first.
+- Prevented malformed AI fragments from being displayed by ignoring Gemini
+  thinking parts, joining all final text parts, rejecting token-truncated
+  candidates, requesting clean Markdown, and increasing the answer allowance
+  to 1,024 tokens with low thinking.
+- Removed the older Network Health-only AI panel so every page uses the same
+  persistent, guarded implementation.
 
 ## [2.20.0] - 2026-08-29
 
