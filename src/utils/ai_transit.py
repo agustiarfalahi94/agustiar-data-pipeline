@@ -16,6 +16,7 @@ def build_transit_context(
     health: pd.DataFrame,
     alerts: pd.DataFrame,
     live: Optional[pd.DataFrame],
+    extra_sections: Optional[dict[str, str]] = None,
 ) -> str:
     """Serialize a bounded snapshot of retrieved transit facts."""
     sections = []
@@ -25,6 +26,9 @@ def build_transit_context(
         sections.append("ACTIVE SERVICE ALERTS:\n" + alerts.head(30).to_json(orient="records", date_format="iso"))
     if live is not None and not live.empty:
         sections.append("LIVE VEHICLE SNAPSHOT:\n" + live.head(100).to_json(orient="records", date_format="iso"))
+    for title, value in (extra_sections or {}).items():
+        if value:
+            sections.append(f"{title}:\n{value}")
     if not sections:
         return "NO RETRIEVED DATA IS AVAILABLE."
     return "\n\n".join(sections)[:MAX_CONTEXT_CHARS]
@@ -64,6 +68,7 @@ def ask_network(
     api_key: Optional[str] = None,
     http_post: Callable[..., Any] = requests.post,
     model: Optional[str] = None,
+    extra_sections: Optional[dict[str, str]] = None,
 ) -> Optional[str]:
     """Ask Gemini to summarize only the retrieved transit snapshot."""
     question = question.strip()
@@ -73,7 +78,7 @@ def ask_network(
     if not key:
         return None
 
-    context = build_transit_context(health, alerts, live)
+    context = build_transit_context(health, alerts, live, extra_sections=extra_sections)
     prompt = (
         "You are a transit operations assistant for Malaysia. Answer the user "
         "using only the retrieved data below. Do not invent routes, times, "

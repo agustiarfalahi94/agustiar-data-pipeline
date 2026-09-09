@@ -43,3 +43,14 @@ def test_answer_from_response_rejects_empty_or_malformed_response():
 
 def test_question_limit_is_explicit():
     assert MAX_QUESTION_CHARS == 500
+
+
+def test_context_includes_page_specific_retrieval_sections():
+    context = build_transit_context(
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        extra_sections={"ANALYTICS SNAPSHOT": "Rapid Bus Penang: 42 vehicles"},
+    )
+    assert "ANALYTICS SNAPSHOT" in context
+    assert "Rapid Bus Penang: 42 vehicles" in context
