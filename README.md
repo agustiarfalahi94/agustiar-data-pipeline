@@ -156,6 +156,12 @@ A web dashboard for tracking live bus and rail positions across Malaysia with re
 - **Raw Fetch Log** — every API fetch event with full quality metadata **including its `fetch_status`**, CSV export
 - **Honest scoring** — feeds withdrawn upstream (HTTP 404) and self-inflicted rate limiting (HTTP 429) are excluded from reliability scores rather than blamed on the agency; a healthy feed reporting no vehicles out of service hours is not counted as an outage. Such a region's card says which of the two happened instead of asserting a cause
 
+### 🤖 Ask the Network
+- **Global, page-aware Gemini assistant** — available from the sidebar on Live Map, Data Table, Analytics and Network Health
+- **Grounded retrieval** — answers use bounded DuckDB context from the current page, including vehicles, alerts, reliability, analytics and selected table rows
+- **Honest answers** — the prompt forbids invented routes, causes and times, and the UI labels the vehicle snapshot time
+- **Safe by default** — server-side `GEMINI_API_KEY`, explicit user action, 500-character question limit and five questions per session
+
 ### ⚙️ Settings & Controls
 - **Manual or Auto refresh** (20-second interval)
 - **Independent map theme** toggle (separate from the page theme), shown only on the Live Map —
@@ -309,7 +315,8 @@ GTFS-Realtime feeds → ingestion → DuckDB → dbt marts → Streamlit dashboa
 
 Live vehicle positions, fetch-quality events, service alerts and static
 timetable data are stored in DuckDB. dbt builds the analytics layer used by
-the dashboard. **Ask the Network** runs on the Streamlit server, retrieves
+the dashboard. **Ask the Network** runs in the shared sidebar on every page,
+retrieves
 relevant structured rows from DuckDB, and sends only that bounded context to
 Gemini for summarisation. It is a lightweight RAG flow: deterministic
 retrieval first, language generation second.
@@ -324,7 +331,7 @@ Neither key belongs in source control, browser
 code, screenshots, or committed configuration files.
 
 The live dashboard remains useful without either key: walking times fall back
-to labelled estimates, and the AI panel will show a clear unavailable message
+to labelled estimates, and the AI panel shows a clear unavailable message
 instead of failing the rest of the dashboard.
 
 ### API boundaries and rate limiting

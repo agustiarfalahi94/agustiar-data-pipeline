@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public README links and repository metadata.
 - Added an Architecture & Security section documenting secrets, API
   boundaries, rate limiting and CI/CD.
+- Added **Ask the Network**, a global page-aware Gemini assistant available
+  from the shared sidebar on Live Map, Data Table, Analytics and Network
+  Health.
 
 ## [2.20.0] - 2026-08-29
 

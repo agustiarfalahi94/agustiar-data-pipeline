@@ -34,10 +34,10 @@
 - Modify: `src/app.py`
 - Modify: `src/app_pages/network_health.py`
 
-- [ ] Add an explicit Ask the Network panel to Network Health.
-- [ ] Retrieve existing DB summaries and alerts, apply a per-session request limit, and call Gemini only on submit.
-- [ ] Show source timestamp/context limitations and graceful no-key/no-data messages.
-- [ ] Run the full test suite.
+- [x] Add a global Ask the Network panel to the shared sidebar.
+- [x] Retrieve page-specific DB summaries, alerts and live data, apply a per-session request limit, and call Gemini only on submit.
+- [x] Show source timestamp/context limitations and graceful no-key/no-data messages.
+- [x] Run the full test suite.
 
 ### Task 3: Documentation and release
 
@@ -45,6 +45,6 @@
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
 
-- [ ] Document the RAG data flow, `GEMINI_API_KEY`, limits and examples.
-- [ ] Run formatting/static checks and commit the feature.
-- [ ] Push the branch, open a PR, and merge it after checks pass.
+- [x] Document the RAG data flow, `GEMINI_API_KEY`, limits and examples.
+- [x] Run formatting/static checks and commit the feature.
+- [x] Push the branch, open a PR, and merge it after checks pass.

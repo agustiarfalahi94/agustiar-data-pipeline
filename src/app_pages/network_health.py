@@ -6,7 +6,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 from utils import db
-from utils import ai_transit
 from utils.ingestion import fetch_and_store_transit_data
 from utils import background_fetch
 
@@ -113,38 +112,6 @@ def _sparkline(trend_df, color):
     return fig
 
 
-def _show_ai_panel(health_df, alerts_df):
-    """Render an explicit, bounded Gemini query against the current snapshot."""
-    st.subheader("🤖 Ask the Network")
-    st.caption("Ask about the current network snapshot. Answers are grounded in retrieved DuckDB data and may change after the next refresh.")
-    question = st.text_area(
-        "Question",
-        placeholder="Which regions currently have the lowest reliability?",
-        max_chars=ai_transit.MAX_QUESTION_CHARS,
-        key="ai_transit_question",
-    )
-    used = st.session_state.get("ai_transit_queries", 0)
-    ask = st.button("Ask Gemini", type="secondary", key="ask_transit_ai")
-    if not ask:
-        return
-    if used >= 5:
-        st.warning("This session has reached the five-question limit. Refresh the page later to continue.")
-        return
-    if not question.strip():
-        st.info("Enter a question first.")
-        return
-    live_df, _, sync_time = db.get_live_data_optimized()
-    with st.spinner("Reading the network snapshot..."):
-        answer = ai_transit.ask_network(question, health_df, alerts_df, live_df)
-    st.session_state.ai_transit_queries = used + 1
-    if answer is None:
-        st.warning("The AI summary is unavailable right now. Check that GEMINI_API_KEY is configured and try again.")
-        return
-    st.markdown(answer)
-    if sync_time:
-        st.caption(f"Grounded in the latest stored vehicle snapshot: {sync_time}.")
-
-
 def _unavailable_reason(row):
     """Explain an unscored feed without asserting a cause we cannot support.
 
@@ -231,8 +198,6 @@ def show():
                 cause = html.escape(str(alt.get('cause') or ''))
                 effect = html.escape(str(alt.get('effect') or ''))
                 st.markdown(f"**[{reg}] {hdr}** ({cause} / {effect})\n\n{desc}")
-
-    _show_ai_panel(health_df, alerts_df)
 
     st.divider()
 

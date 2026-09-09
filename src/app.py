@@ -1,6 +1,7 @@
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta, timezone
+from utils import ai_transit, db
 
 # Import config
 try:
@@ -39,6 +40,61 @@ if 'selected_region' not in st.session_state:
     st.session_state.selected_region = None
 if 'selected_regions_table' not in st.session_state:
     st.session_state.selected_regions_table = []
+
+
+def _show_global_ai_panel():
+    """Ask grounded questions from whichever dashboard page is open."""
+    st.subheader("🤖 Ask the Network")
+    st.caption("Ask about the current page or the wider network.")
+    question = st.text_area(
+        "Question",
+        placeholder="What is happening in the selected view?",
+        max_chars=ai_transit.MAX_QUESTION_CHARS,
+        key="global_ai_question",
+    )
+    if not st.button("Ask Gemini", type="secondary", key="global_ask_gemini"):
+        return
+    used = st.session_state.get("ai_transit_queries", 0)
+    if used >= 5:
+        st.warning("This session has reached the five-question limit.")
+        return
+    if not question.strip():
+        st.info("Enter a question first.")
+        return
+
+    health = db.get_network_health_summary()
+    alerts = db.get_active_service_alerts()
+    live, _, sync_time = db.get_live_data_optimized()
+    page = st.session_state.current_page
+    extra = {"CURRENT VIEW": page}
+
+    if page == "📈 Analytics":
+        extra["ANALYTICS SNAPSHOT"] = (
+            f"Regional vehicle counts: {db.get_region_vehicle_counts().to_json(orient='records')}\n"
+            f"Speed statistics: {db.get_moving_speed_stats()}"
+        )
+    elif page == "📊 Data Table":
+        regions, table_sync = db.get_table_regions()
+        selected = st.session_state.selected_regions_table or regions
+        table_df, total = db.get_table_page(selected, limit=100)
+        extra["DATA TABLE SNAPSHOT"] = (
+            f"Selected regions: {selected}; matching rows: {total}; last seen: {table_sync}\n"
+            f"Rows shown: {table_df.to_json(orient='records')}"
+        )
+    elif page == "🗺️ Live Map":
+        extra["MAP CONTEXT"] = f"Selected region: {st.session_state.selected_region or 'not selected'}"
+
+    with st.spinner("Reading the selected data..."):
+        answer = ai_transit.ask_network(
+            question, health, alerts, live, extra_sections=extra
+        )
+    st.session_state.ai_transit_queries = used + 1
+    if answer is None:
+        st.warning("The AI summary is unavailable. Check GEMINI_API_KEY and try again.")
+    else:
+        st.markdown(answer)
+        if sync_time:
+            st.caption(f"Grounded in stored vehicle data from {sync_time}.")
 
 # Auto refresh MUST be at the top before any other widgets
 if st.session_state.auto_refresh:
@@ -129,6 +185,9 @@ with st.sidebar:
     if (refresh_mode == "Auto (20s)") != st.session_state.auto_refresh:
         st.session_state.auto_refresh = (refresh_mode == "Auto (20s)")
         st.rerun()
+
+    st.divider()
+    _show_global_ai_panel()
 
 
 # Route to pages
